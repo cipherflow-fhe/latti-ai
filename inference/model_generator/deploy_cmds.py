@@ -22,6 +22,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from inference.lattisense.frontend.custom_task import *
+from inference.model_generator.layers.par_block_col_major_poly import ParBlockColMajorPoly
+from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
+from inference.model_generator.layers.par_block_col_major_softmax import (
+    ParBlockColMajorMultipleSquare, ParBlockColMajorHeadColSum, ParBlockColMajorInverseInit,
+    ParBlockColMajorInverseIter, ParBlockColMajorCtMul,
+)
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
 from inference.model_generator.layers.avgpool1d_layer import *
@@ -706,7 +712,11 @@ def gen_custom_task(
                         consumer_type, feat, input_fid, consumer_layer_id, consumer
                     )
                     n_packed = layer.total_cts
-                elif consumer_type in {'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt'}:
+                elif consumer_type in {
+                    'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt',
+                    'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit', 'pcminviter',
+                    'pcmctmul', 'pcmpolymultct',
+                }:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n // 2, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
                 else:
@@ -740,7 +750,10 @@ def gen_custom_task(
             _register_feature_nodes(input_fid, n_packed, level)
 
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
-    _PCM_LAYER_TYPES = {'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly'}
+    _PCM_LAYER_TYPES = {
+        'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit', 'pcminviter', 'pcmctmul',
+        'pcmpolymultct', 'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly',
+    }
     _PDM_MATRIX_LAYER_TYPES = {'pdmpcmm', 'pdmccmm', 'pdmtranspose', 'pdm_add_pt'}
     _PDM_LAYER_TYPES = {
         'pdmstats',
@@ -2033,16 +2046,13 @@ def gen_custom_task(
             shape = tuple(feat_in['shape'])
             K = int(layer_config.get('K', layer_config.get('k', 1)))
             block_size = _matmul_block_size()
-            if shape[1] % (K * n_heads) != 0:
-                raise ValueError(
-                    f"pcmgamma layer '{layer_id}' expects full feature shape with cols divisible by K * n_heads"
-                )
             layer = ParBlockColMajorPolyActRNGamma(
                 shape=shape,
                 block_size=block_size,
                 n_heads=n_heads,
                 n_slot=n // 2,
                 K=K,
+                head_shape=tuple(feat_in['head_shape']) if 'head_shape' in feat_in else None,
             )
 
             if input_fid not in feature_id_to_nodes_map:
@@ -2091,6 +2101,41 @@ def gen_custom_task(
             par_feature_shapes[layer_output_feature_ids[0]] = par_feature_shapes.get(
                 input_fid, (shape[0], shape[1] // (K * n_heads))
             )
+
+        elif layer_config['type'] in {
+            'pcmpolymultct', 'pcmheadcolsum', 'pcmctmul', 'pcminvinit', 'pcmgeneralpoly', 'pcminviter', 'pcmmulsquare',
+        }:
+            layer_type = layer_config['type']
+            n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
+            input_fid = layer_input_feature_ids[0]
+            feat_in = config_info['feature'][input_fid]
+            shape = tuple(feat_in['shape'])
+            head_shape = tuple(feat_in.get(
+                'head_shape', par_feature_shapes.get(input_fid, (shape[0], _matmul_block_size()))
+            ))
+            args = (shape, head_shape, n_heads, n // 2)
+            if layer_type == 'pcmgeneralpoly':
+                layer = ParBlockColMajorPoly(*args, int(layer_config.get('order', 15)), _matmul_block_size())
+            elif layer_type == 'pcmmulsquare':
+                layer = ParBlockColMajorMultipleSquare(*args, _matmul_block_size())
+            elif layer_type == 'pcmheadcolsum':
+                layer = ParBlockColMajorHeadColSum(*args, _matmul_block_size())
+            elif layer_type == 'pcminvinit':
+                layer = ParBlockColMajorInverseInit(*args, _matmul_block_size())
+            elif layer_type == 'pcminviter':
+                layer = ParBlockColMajorInverseIter(*args, _matmul_block_size())
+            elif layer_type == 'pcmctmul':
+                layer = ParBlockColMajorCtMul(*args, _matmul_block_size())
+            elif layer_type == 'pcmpolymultct':
+                layer = ParBlockColMajorPolyMultCt(*args, _matmul_block_size())
+            for fid in layer_input_feature_ids:
+                if fid not in feature_id_to_nodes_map:
+                    _register_feature_nodes(fid, layer.total_cts, int(config_info['feature'][fid]['level']))
+            data_source = CustomDataNode(type='pcm_data_source', id=layer_id)
+            input_args.append(Argument(layer_id, [data_source]))
+            inputs = [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids]
+            feature_id_to_nodes_map[layer_output_feature_ids[0]] = layer.call_custom_compute(*inputs, data_source)
+            par_feature_shapes[layer_output_feature_ids[0]] = head_shape
 
         elif layer_config['type'] in {
             'pdmstats',

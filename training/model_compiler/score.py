@@ -30,6 +30,12 @@ from components import (
     LayerAbstractGraph,
     config,
 )
+from inference.model_generator.layers.par_block_col_major_poly import ParBlockColMajorPoly
+from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
+from inference.model_generator.layers.par_block_col_major_softmax import (
+    ParBlockColMajorMultipleSquare, ParBlockColMajorHeadColSum, ParBlockColMajorInverseInit,
+    ParBlockColMajorInverseIter, ParBlockColMajorCtMul,
+)
 from inference.model_generator.layers.activation_layer import SquareLayer
 from inference.model_generator.layers.add_pack import AddLayer
 from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer
@@ -1524,6 +1530,7 @@ class FheScoreParam:
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                     K=getattr(node, 'K', 1),
+                    head_shape=preds[0].head_shape,
                 )
                 n_cts = layer.total_cts
                 return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
@@ -1550,6 +1557,29 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError, TypeError):
                 return None
+        elif layer_type in (
+            'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit',
+            'pcminviter', 'pcmctmul', 'pcmpolymultct',
+        ):
+            feat = preds[0]
+            shape = tuple(feat.shape)
+            head_shape = tuple(feat.head_shape) if feat.head_shape is not None else (shape[0], config.matmul_block_size)
+            args = (shape, head_shape, config.n_heads, n // 2)
+            if layer_type == 'pcmgeneralpoly':
+                layer = ParBlockColMajorPoly(*args, getattr(node, 'order', 15), config.matmul_block_size)
+            elif layer_type == 'pcmmulsquare':
+                layer = ParBlockColMajorMultipleSquare(*args, config.matmul_block_size)
+            elif layer_type == 'pcmheadcolsum':
+                layer = ParBlockColMajorHeadColSum(*args, config.matmul_block_size)
+            elif layer_type == 'pcminvinit':
+                layer = ParBlockColMajorInverseInit(*args, config.matmul_block_size)
+            elif layer_type == 'pcminviter':
+                layer = ParBlockColMajorInverseIter(*args, config.matmul_block_size)
+            elif layer_type == 'pcmctmul':
+                layer = ParBlockColMajorCtMul(*args, config.matmul_block_size)
+            elif layer_type == 'pcmpolymultct':
+                layer = ParBlockColMajorPolyMultCt(*args, config.matmul_block_size)
+            return layer.get_fhe_op_count(level=self.input_mult_level)
         elif layer_type == 'pdmupperpoly':
             n_slot = n // 2
             try:

@@ -59,3 +59,7 @@
 #include "fhe_layers/reshape_layer.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
+
+#include "par_block_col_major_softmax.h"
+#include "par_block_col_major_poly.h"
+#include "par_block_col_major_poly_mult_ct.h"

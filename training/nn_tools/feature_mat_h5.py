@@ -112,7 +112,7 @@ def export_feature_mat_h5_from_onnx(
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pdmgamma':
             _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
-        elif ltype == 'pdmupperpoly':
+        elif ltype in ('pcmgeneralpoly', 'pdmupperpoly'):
             _export_pdmupperpoly(layer_key, layer, features, out)
         elif ltype == 'pcmpoly':
             _export_pcmpoly(
@@ -249,6 +249,8 @@ def _export_parcpmm(
         expected_shape = (int(fin['shape'][1]), int(fout['shape'][1]))
 
     weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
+    if layer.get('type') == 'parcpmm' and layer.get('weight_transposed', False):
+        weight = weight.T
     weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
     _put(out, weight_path, weight, layer_key)
 
@@ -394,7 +396,7 @@ def _export_pdmupperpoly(
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
     order = int(layer.get('order', 15))
-    expected_shape = (order + 1, int(fin['shape'][0]))
+    expected_shape = (order + 1, int(fin['shape'][1 if layer['type'] == 'pcmgeneralpoly' else 0]))
     if 'coefficients' not in layer:
         raise KeyError(f'{layer_key}: pdmupperpoly requires coefficients in layer JSON')
     coeffs = np.asarray(_parse_coefficients(layer['coefficients']), dtype='float64')
@@ -581,6 +583,11 @@ def _export_add_pt(
     path = layer.get('weight_path') or layer.get('bias_path')
     if not path:
         raise KeyError(f'{layer_key}: add_pt/pcm_add_pt/pdm_add_pt requires weight_path or bias_path')
+    if layer.get('value') is not None:
+        fin = _feature(features, layer['feature_input'][0], layer_key)
+        data = np.full(tuple(map(int, fin['shape'])), float(layer['value']), dtype='float64')
+        _put(out, path, data, layer_key)
+        return
     if path not in onnx_weights:
         raise KeyError(f'{layer_key}: add_pt source not found in ONNX: {path}')
     fin = _feature(features, layer['feature_input'][0], layer_key)

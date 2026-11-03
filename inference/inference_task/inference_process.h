@@ -186,6 +186,13 @@ private:
     void _init_pdm_add_pt_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmgeneralpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmmulsquare_layer(const std::string& key, const json& layer);
+    void _init_pcmheadcolsum_layer(const std::string& key, const json& layer);
+    void _init_pcminvinit_layer(const std::string& key, const json& layer);
+    void _init_pcminviter_layer(const std::string& key, const json& layer);
+    void _init_pcmctmul_layer(const std::string& key, const json& layer);
+    void _init_pcmpolymultct_layer(const std::string& key, const json& layer);
     void _init_pdmupperaddpt_layer(const std::string& key, const json& layer);
     void _init_pdmupperpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmmulsquare_layer(const std::string& key, const json& layer);

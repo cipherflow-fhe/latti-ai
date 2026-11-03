@@ -34,7 +34,8 @@ public:
                                    uint32_t n_heads,
                                    uint32_t K,
                                    uint32_t init_level,
-                                   Array<double, 1>&& gamma);
+                                   Array<double, 1>&& gamma,
+                                   Duo head_shape = {0, 0});
     void prepare_weight();
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);

@@ -42,6 +42,9 @@ add_library(fhe_layers
   par_upper_diagonal_polyact.cpp
   par_upper_diagonal_poly_mult_ct.cpp
   par_upper_diagonal_poly.cpp
+  par_block_col_major_softmax.cpp
+  par_block_col_major_poly.cpp
+  par_block_col_major_poly_mult_ct.cpp
   par_upper_diagonal_softmax.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp

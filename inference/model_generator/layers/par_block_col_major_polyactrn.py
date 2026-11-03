@@ -39,14 +39,17 @@ def _next_pow2(n: int) -> int:
 class ParBlockColMajorPolyActRNGamma:
     """Python model-generator counterpart of C++ ParBlockColMajorPolyActRNGamma."""
 
-    def __init__(self, shape: tuple, block_size: int, n_heads: int, n_slot: int, K: int = 1):
+    def __init__(self, shape: tuple, block_size: int, n_heads: int, n_slot: int, K: int = 1, head_shape: tuple | None = None):
         assert K > 0
-        assert shape[1] % (K * n_heads) == 0
+        self.row_scalar = shape[1] == 1
+        if head_shape is None and not self.row_scalar:
+            assert shape[1] % (K * n_heads) == 0
 
         self.m = shape[0]
         self.total_dim = shape[1]
         self.K = K
-        self.cols_per_head = shape[1] // (K * n_heads)
+        self.cols_per_head = int(head_shape[1]) if head_shape else max(1, shape[1] // (K * n_heads))
+        self.K = math.ceil(shape[1] / (n_heads * self.cols_per_head))
         self.d = block_size
         self.n_heads = n_heads
         self.n_slot = n_slot
@@ -63,6 +66,9 @@ class ParBlockColMajorPolyActRNGamma:
                 self.n_h_padded = self.n_heads
             self.G = self.n_h_padded // self.S
 
+        if self.row_scalar:
+            self.G = 1
+            self.cols_per_head = self.d
         assert n_slot % self.chunk_size == 0
         self.num_chunks = n_slot // self.chunk_size
         self.num_block_rows = math.ceil(self.m / self.d)

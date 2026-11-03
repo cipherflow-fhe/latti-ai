@@ -58,6 +58,8 @@ class MatMulComputeNode(ComputeNode):
             info['weight_shape'] = self.weight_shape
         if self.layer_type in ('parcpmm', 'pdmpcmm') and self.bias_path:
             info['bias_path'] = self.bias_path
+        if getattr(self, 'weight_transposed', False):
+            info['weight_transposed'] = True
         if self.layer_type in ('parcpmm', 'pdmpcmm') and self.to_expand:
             info['to_expand'] = True
         return info
@@ -98,7 +100,10 @@ class MatMulComputeNode(ComputeNode):
             if has_bias_input:
                 bias_path = x.input[2]
 
-        return MatMulComputeNode(
+        weight_transposed = layer_type == 'parcpmm' and model_type == 'bert' and x.op_type == 'Linear'
+        if weight_transposed and len(weight_shape) == 2:
+            weight_shape = [weight_shape[1], weight_shape[0]]
+        node = MatMulComputeNode(
             layer_id,
             layer_type,
             feature_input,
@@ -108,3 +113,5 @@ class MatMulComputeNode(ComputeNode):
             bias_path=bias_path,
             to_expand=to_expand,
         )
+        node.weight_transposed = weight_transposed
+        return node

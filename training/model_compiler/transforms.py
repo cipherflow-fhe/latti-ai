@@ -32,6 +32,14 @@ class Direction(Enum):
 
 
 PCM_TO_PDM_TYPES = {
+    'pcmgeneralpoly': 'pdmupperpoly',
+    'pcmmulsquare': 'pdmmulsquare',
+    'pcmheadcolsum': 'pdmheadcolsum',
+    'pcminvinit': 'pdminvinit',
+    'pcminviter': 'pdminviter',
+    'pcmctmul': 'pdmctmul',
+    'pcmpolymultct': 'pdmupperpolymultct',
+
     'pcm_add_pt': 'pdm_add_pt',
     'pcmgamma': 'pdmgamma',
     'pcmpoly': 'pdmpoly',
@@ -699,7 +707,10 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     )
 
             else:
-                if compute_node.layer_type == 'parcpmm':
+                if compute_node.layer_type == 'pcmstats':
+                    succ.shape = [preds[0].shape[0], 1]
+                    succ.head_shape = [preds[0].shape[0], 1]
+                elif compute_node.layer_type == 'parcpmm':
                     succ.shape[0] = preds[0].shape[0]
                     weight_shape = getattr(compute_node, 'weight_shape', [])
                     if len(weight_shape) >= 2:
@@ -754,6 +765,10 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
                         graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
+                if not _is_diagonal_mat_pack() and compute_node.layer_type not in (
+                    'pcmstats', 'parcpmm', 'parccmm', 'partranspose'
+                ) and preds[0].head_shape is not None:
+                    succ.head_shape = list(preds[0].head_shape)
                 # Propagate head_shape for feature_mat pass-through layers
                 if succ.head_shape is None and preds[0].head_shape is not None:
                     succ.head_shape = list(preds[0].head_shape)
@@ -935,17 +950,17 @@ def set_level_costs(graph: LayerAbstractGraph):
             graph.dag.nodes[compute_node]['level_cost'] = 1
         elif compute_node.layer_type == 'pdmupperaddpt':
             graph.dag.nodes[compute_node]['level_cost'] = 0
-        elif compute_node.layer_type == 'pdmupperpoly':
+        elif compute_node.layer_type in ('pcmgeneralpoly', 'pdmupperpoly'):
             graph.dag.nodes[compute_node]['level_cost'] = MatPolyBase.compute_stockmeyer_level_cost(compute_node.order)
-        elif compute_node.layer_type == 'pdmmulsquare':
+        elif compute_node.layer_type in ('pcmmulsquare', 'pdmmulsquare'):
             graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type == 'pdmheadcolsum':
-            graph.dag.nodes[compute_node]['level_cost'] = 1
-        elif compute_node.layer_type == 'pdminvinit':
+        elif compute_node.layer_type in ('pcmheadcolsum', 'pdmheadcolsum'):
+            graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.layer_type == 'pcmheadcolsum' else 1
+        elif compute_node.layer_type in ('pcminvinit', 'pdminvinit'):
             graph.dag.nodes[compute_node]['level_cost'] = 0
-        elif compute_node.layer_type == 'pdminviter':
+        elif compute_node.layer_type in ('pcminviter', 'pdminviter'):
             graph.dag.nodes[compute_node]['level_cost'] = 2
-        elif compute_node.layer_type in ('pdmctmul', 'pdmupperpolymultct'):
+        elif compute_node.layer_type in ('pcmctmul', 'pcmpolymultct', 'pdmctmul', 'pdmupperpolymultct'):
             graph.dag.nodes[compute_node]['level_cost'] = 2
         elif compute_node.layer_type in ('pcmpoly', 'pdmpoly'):
             graph.dag.nodes[compute_node]['level_cost'] = 2 if compute_node.order == 2 else 3
@@ -1222,12 +1237,19 @@ def process_polyact(graph: LayerAbstractGraph) -> list:
 
 PDM_UPPER_PASS_THROUGH_TYPES = {
     'pdmupperaddpt',
+    'pcmgeneralpoly',
     'pdmupperpoly',
+    'pcmmulsquare',
     'pdmmulsquare',
+    'pcmheadcolsum',
     'pdmheadcolsum',
+    'pcminvinit',
     'pdminvinit',
+    'pcminviter',
     'pdminviter',
+    'pcmctmul',
     'pdmctmul',
+    'pcmpolymultct',
     'pdmupperpolymultct',
 }
 
@@ -1409,7 +1431,7 @@ def _make_scalar_gamma(layer_id: str, scalar: float) -> ComputeNode:
 
 
 def _make_upper_poly(layer_id: str, coefficients: list[float]) -> ComputeNode:
-    node = ComputeNode(layer_id, 'pdmupperpoly', 1, 1)
+    node = ComputeNode(layer_id, _pack_pcm_type('pcmgeneralpoly'), 1, 1)
     node.path = f'{layer_id}.weight'
     node.coeffs_path = node.path
     node.coefficients = list(coefficients)
@@ -1428,13 +1450,14 @@ def _append_softmax_normalize(
     denom = _append_unary_compute(
         graph,
         values,
-        ComputeNode(f'{base_id}_head_col_sum', 'pdmheadcolsum', 1, 1),
+        ComputeNode(f'{base_id}_head_col_sum', _pack_pcm_type('pcmheadcolsum'), 1, 1),
         f'{base_id}_denominator',
-        1,
+        1 if _is_diagonal_mat_pack() else 2,
     )
     if denominator_epsilon != 0.0:
-        add_epsilon = ComputeNode(f'{base_id}_denominator_epsilon', 'pdmupperaddpt', 1, 1)
+        add_epsilon = ComputeNode(f'{base_id}_denominator_epsilon', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
         add_epsilon.value = denominator_epsilon
+        add_epsilon.path = f'{add_epsilon.layer_id}.weight'
         denom = _append_unary_compute(
             graph,
             denom,
@@ -1454,7 +1477,7 @@ def _append_softmax_normalize(
     inv = _append_unary_compute(
         graph,
         denom,
-        ComputeNode(f'{base_id}_inverse_init', 'pdminvinit', 1, 1),
+        ComputeNode(f'{base_id}_inverse_init', _pack_pcm_type('pcminvinit'), 1, 1),
         f'{base_id}_inverse_init_out',
         0,
     )
@@ -1463,7 +1486,7 @@ def _append_softmax_normalize(
             graph,
             inv,
             denom,
-            ComputeNode(f'{base_id}_inverse_iter_{idx}', 'pdminviter', 1, 1),
+            ComputeNode(f'{base_id}_inverse_iter_{idx}', _pack_pcm_type('pcminviter'), 1, 1),
             f'{base_id}_inverse_iter_{idx}_out',
             2,
         )
@@ -1475,7 +1498,7 @@ def _append_softmax_normalize(
         graph,
         values,
         inv,
-        ComputeNode(f'{base_id}_multiply', 'pdmctmul', 1, 1),
+        ComputeNode(f'{base_id}_multiply', _pack_pcm_type('pcmctmul'), 1, 1),
         probabilities_output_id,
         2,
     )
@@ -1525,8 +1548,9 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
     )
     initial_denominator_guard = _bert_softmax_denominator_guard(attn_node, 'inverse_epsilon')
 
-    add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', 'pdmupperaddpt', 1, 1)
+    add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
     add_mid_node.value = -mid
+    add_mid_node.path = f'{add_mid_node.layer_id}.weight'
     centered = _append_unary_compute(
         graph,
         scores,
@@ -1557,7 +1581,7 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         values = _append_unary_compute(
             graph,
             values,
-            ComputeNode(f'{base_id}_softmax_delta1_square_{square_idx}', 'pdmmulsquare', 1, 1),
+            ComputeNode(f'{base_id}_softmax_delta1_square_{square_idx}', _pack_pcm_type('pcmmulsquare'), 1, 1),
             f'{base_id}_softmax_delta1_square_{square_idx}_out',
             2,
         )
@@ -1584,7 +1608,7 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         squared = _append_unary_compute(
             graph,
             probabilities,
-            ComputeNode(f'{base_id}_softmax_refine_square_{refinement_idx}', 'pdmmulsquare', 1, 1),
+            ComputeNode(f'{base_id}_softmax_refine_square_{refinement_idx}', _pack_pcm_type('pcmmulsquare'), 1, 1),
             f'{base_id}_softmax_refine_square_{refinement_idx}_out',
             2,
         )
@@ -1617,8 +1641,8 @@ def _add_ccmm_inputs(graph: LayerAbstractGraph, lhs: FeatureNode, rhs: FeatureNo
 
 
 def _expand_bert_multi_head_attention(graph: LayerAbstractGraph, attn_node: ComputeNode):
-    if not _is_diagonal_mat_pack():
-        raise ValueError('BERT CustomMultiHeadAttention expansion currently supports only par_diagonal_pack')
+    if getattr(config, 'mat_pack_style', '') not in ('par_diagonal_pack', 'par_block_col_major'):
+        raise ValueError('BERT CustomMultiHeadAttention requires par_diagonal_pack or par_block_col_major')
 
     preds = list(graph.dag.predecessors(attn_node))
     succs = list(graph.dag.successors(attn_node))
@@ -1646,9 +1670,9 @@ def _expand_bert_multi_head_attention(graph: LayerAbstractGraph, attn_node: Comp
     qkt = make_feature(f'{base_id}_qkt', [m, m * n_heads])
     qktv = make_feature(f'{base_id}_qktv', list(out.shape))
 
-    pcmm_type = 'pdmpcmm'
-    transpose_type = 'pdmtranspose'
-    ccmm_type = 'pdmccmm'
+    pcmm_type = 'pdmpcmm' if _is_diagonal_mat_pack() else 'parcpmm'
+    transpose_type = 'pdmtranspose' if _is_diagonal_mat_pack() else 'partranspose'
+    ccmm_type = 'pdmccmm' if _is_diagonal_mat_pack() else 'parccmm'
 
     q_node = ComputeNode(f'{base_id}_q_layer', pcmm_type, 1, 1)
     q_node.path = getattr(attn_node, 'q_weight_path', f'{base_id}.q.weight')
@@ -1675,6 +1699,10 @@ def _expand_bert_multi_head_attention(graph: LayerAbstractGraph, attn_node: Comp
     out_node.weight_shape = [n, n]
     out_node.path = getattr(attn_node, 'proj_weight_path', f'{base_id}.proj.weight')
     out_node.bias_path = getattr(attn_node, 'proj_bias_path', '')
+
+    if not _is_diagonal_mat_pack():
+        for node in (q_node, k_node, v_node, out_node):
+            node.weight_transposed = True
 
     graph.dag.remove_node(attn_node)
 
@@ -1907,7 +1935,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         MatPolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
     )
 
-    gelu_node = ComputeNode(f'{base_id}_gelu_mult_ct', 'pdmupperpolymultct', 1, 1)
+    gelu_node = ComputeNode(f'{base_id}_gelu_mult_ct', _pack_pcm_type('pcmpolymultct'), 1, 1)
     graph.dag.add_node(gelu_node, **_compute_attrs(2, gelu_node.layer_id))
     graph.dag.add_edge(refined, gelu_node, input_index=0)
     graph.dag.add_edge(x_in, gelu_node, input_index=1, **input_edge_attrs)
@@ -2150,7 +2178,7 @@ def set_pcm_K(graph: LayerAbstractGraph):
     """Set K attribute on pcmgamma/pcmpoly nodes and their pdm aliases."""
     base_feat_dim = config.n_heads * config.matmul_block_size
     gamma_types = ('pcmgamma', 'pdmgamma')
-    poly_types = ('pcmpoly', 'pdmpoly')
+    poly_types = ('pcmpoly', 'pdmpoly', 'pcmgeneralpoly', 'pcmpolymultct', 'pcmctmul', 'pcminviter')
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
             continue
