@@ -143,6 +143,27 @@ def write_matrix_output_selections(onnx_path: Path, task_dir: Path) -> None:
         write_json_file(path, config)
 
 
+def infer_model_type(input_path: Path) -> str:
+    """Identify the custom BERT operator variant from the graph itself."""
+    if input_path.suffix.lower() == '.onnx':
+        import onnx
+
+        model = onnx.load(str(input_path), load_external_data=False)
+        is_bert = any(
+            node.op_type in ('CustomGELU', 'CustomTanh') or
+            (node.op_type == 'CustomMultiHeadAttention' and
+             any(attr.name == 'exp_coefficients' for attr in node.attribute))
+            for node in model.graph.node
+        )
+    else:
+        graph = read_json_file(input_path)
+        is_bert = any(
+            layer.get('model_type') == 'bert' or layer.get('type') in ('CustomGELU', 'CustomTanh')
+            for layer in graph.get('layer', {}).values()
+        )
+    return 'bert' if is_bert else ''
+
+
 def read_compile_config(config_path: str) -> dict[str, int | float | str | list[int]]:
     if not config_path:
         return {}
@@ -156,7 +177,6 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str | list[
         'head_dim': int(data.get('head_dim', 0)),
         'matmul_block_size': int(data.get('matmul_block_size', 0)),
         'mat_pack_style': mat_pack_style,
-        'model_type': str(data.get('model_type', '')),
         'seed_weight_subgrid_stride': data.get('seed_weight_subgrid_stride', [1, 1]),
     }
     for key in (
@@ -286,7 +306,7 @@ Examples:
     mat_pack_style = compile_config.get('mat_pack_style', '')
     if args.deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
         raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
-    model_type = compile_config.get('model_type', '')
+    model_type = infer_model_type(input_path)
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
     if set_btp_scale is None:

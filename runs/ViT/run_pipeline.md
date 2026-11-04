@@ -1,46 +1,88 @@
-# ViT GPU lazy pipeline
+# ViT GPU runtime_lazy 全流程
 
-模型：`runs/ViT/model/trained_poly.onnx`，输入：`runs/ViT/patch_input.csv`。输入加密和参数加密 task 分目录保存；PCM 使用 `par_block_col_major`，PDM 仅用于输入加密（当前仓库不支持 PDM 参数加密）。
+命令从仓库任意目录启动，在同一个 shell 中依次执行。所有 task、密钥、日志和输出位于 `runs/ViT/`；各模式顺序运行。验收比较原始 ONNX 与 CSV 的全部输出，最大绝对误差必须小于 0.2。
+
+## 环境与构建
+
+```bash
+REPO="$(git rev-parse --show-toplevel)"
+PY=/home/linghm/pytorch_venv/bin/python3
+CMAKE=/home/linghm/pytorch_venv/bin/cmake
+ROOT="$REPO/runs/ViT"
+MODEL="$ROOT/model/trained_poly.onnx"
+export PYTHONPATH="$REPO/inference/lattisense:$REPO"
+export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8
+"$CMAKE" -S "$REPO" -B "$REPO/build" -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_DEV=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_BUILD_TYPE=Release
+"$CMAKE" --build "$REPO/build" -j8
+mkdir -p "$ROOT/reference"
+cd "$ROOT"
+```
+
+CPU 数据为推理进程生命周期的最大 RSS（GNU time）；GPU 数据包括每 0.5 秒采样的进程显存峰值和 SDK 每 0.1 秒采样的池内使用峰值。GPU 进程显存含内存池预留。FHE 时间取 SDK 的 `Run GPU time`，不含编译、参数加密、密钥准备和结果解密。GiB = 2³⁰ bytes。
+
+配置中的打包格式、矩阵块大小和 bootstrap 缩放使用非默认设置，保留配置文件。BERT 自定义算子语义从 ONNX/JSON 图识别，配置无需 `model_type`。
+
+## 原始 ONNX 明文参考
+
+```bash
+"$PY" "$REPO/tools/evaluate_transformer_onnx_csv.py" --onnx "$MODEL" --input-csv "$ROOT/patch_input.csv" --output "$ROOT/reference/onnx.npz"
+```
+
+参考直接按 ONNX 自定义算子的属性、权重与多项式定义以 NumPy float64 执行。ViT 比较全部 1970 个输出。
 
 ## PCM 输入加密
 
 ```bash
-export PYTHONPATH="$PWD/inference/lattisense:$PWD"
-/home/linghm/pytorch_venv/bin/python training/run_compile.py --input ./runs/ViT/model/trained_poly.onnx --output ./runs/ViT/task_input_encrypted/pcm --style multiplexed --config ./training/config/ViT_pcm_config.json
-/home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task_input_encrypted/pcm/task
-./build/examples/inference --task-dir ./runs/ViT/task_input_encrypted/pcm/task --input ./runs/ViT/patch_input.csv --verify --gpu
+OUT="$ROOT/task_input_encrypted/pcm"
+mkdir -p "$OUT"
+cd "$OUT"
+"$PY" "$REPO/training/run_compile.py" --input "$MODEL" --output "$OUT" --style multiplexed --config "$REPO/training/config/ViT_pcm_config.json"
+"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task"
+"$PY" "$REPO/tools/measure_gpu_command.py" --output-dir "$OUT/run" -- "$REPO/build/examples/inference" --task-dir "$OUT/task" --input "$ROOT/patch_input.csv" --output-csv "$OUT/decrypted.csv" --gpu
+"$PY" "$REPO/tools/compare_inference_csv.py" --reference "$ROOT/reference/onnx.npz" --actual "$OUT/decrypted.csv" --report "$OUT/comparison.json"
 ```
 
-## PCM 参数加密 runtime_lazy
+证据：`task_input_encrypted/pcm/run/inference.metrics.json`、`task_input_encrypted/pcm/comparison.json`。
+
+## PCM 参数加密
 
 ```bash
-export PYTHONPATH="$PWD/inference/lattisense:$PWD"
-/home/linghm/pytorch_venv/bin/python training/run_compile.py --input ./runs/ViT/model/trained_poly.onnx --output ./runs/ViT/task_parameter_encrypted/pcm --style multiplexed --deployment-mode server_provisioned_runner --config ./training/config/ViT_pcm_config.json
-/home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task --deployment-mode server_provisioned_runner --parameter-loading-mode runtime_lazy
-./build/tools/provision_encrypted_runner_bundle --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task --out ./runs/ViT/task_parameter_encrypted/pcm/task/runner
-./build/examples/inference --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task/runner --deployment-mode server_provisioned_runner --input ./runs/ViT/patch_input.csv --output-cipher ./runs/ViT/task_parameter_encrypted/pcm/output.ct --gpu
-./build/tools/decrypt_runner_output --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task/provisioner --cipher ./runs/ViT/task_parameter_encrypted/pcm/output.ct --output-csv ./runs/ViT/task_parameter_encrypted/pcm/decrypted.csv
+OUT="$ROOT/task_parameter_encrypted/pcm"
+mkdir -p "$OUT"
+cd "$OUT"
+"$PY" "$REPO/training/run_compile.py" --input "$MODEL" --output "$OUT" --style multiplexed --config "$REPO/training/config/ViT_pcm_config.json" --deployment-mode server_provisioned_runner
+"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task" --deployment-mode server_provisioned_runner --parameter-loading-mode runtime_lazy
+/usr/bin/time -v -o "$OUT/provision.time" "$REPO/build/tools/provision_encrypted_runner_bundle" --task-dir "$OUT/task" --out "$OUT/task/runner"
+"$PY" "$REPO/tools/measure_gpu_command.py" --output-dir "$OUT/run2" -- "$REPO/build/examples/inference" --task-dir "$OUT/task/runner" --deployment-mode server_provisioned_runner --input "$ROOT/patch_input.csv" --output-cipher "$OUT/run2/output.ct" --gpu
+"$REPO/build/tools/decrypt_runner_output" --task-dir "$OUT/task/provisioner" --cipher "$OUT/run2/output.ct" --output-csv "$OUT/decrypted.csv"
+"$PY" "$REPO/tools/summarize_parameter_bundle.py" --task-dir "$OUT/task" --output "$OUT/bundle.json"
+"$PY" "$REPO/tools/compare_inference_csv.py" --reference "$ROOT/reference/onnx.npz" --actual "$OUT/decrypted.csv" --report "$OUT/comparison.json"
 ```
+
+证据：`task_parameter_encrypted/pcm/run2/inference.metrics.json`、`task_parameter_encrypted/pcm/comparison.json`、`task_parameter_encrypted/pcm/bundle.json`、`task_parameter_encrypted/pcm/provision.time`。
+
+加密参数目录包含密文和 manifest，共 11,947,281,530 bytes；纯密文 payload 11,944,894,485 bytes；含图和求值密钥的完整 runner 15,991,634,657 bytes。
+
+bundle provisioning 使用 `/usr/bin/time -v` 记录：wall 3:09.18，user 372.05 s，system 87.00 s，峰值 RSS 37520952 KiB。
 
 ## PDM 输入加密
 
 ```bash
-export PYTHONPATH="$PWD/inference/lattisense:$PWD"
-/home/linghm/pytorch_venv/bin/python training/run_compile.py --input ./runs/ViT/model/trained_poly.onnx --output ./runs/ViT/task_input_encrypted/pdm --style multiplexed --config ./training/config/ViT_pdm_config.json
-/home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task_input_encrypted/pdm/task
-./build/examples/inference --task-dir ./runs/ViT/task_input_encrypted/pdm/task --input ./runs/ViT/patch_input.csv --verify --gpu
+OUT="$ROOT/task_input_encrypted/pdm"
+mkdir -p "$OUT"
+cd "$OUT"
+"$PY" "$REPO/training/run_compile.py" --input "$MODEL" --output "$OUT" --style multiplexed --config "$REPO/training/config/ViT_tiny_config.json"
+"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task"
+"$PY" "$REPO/tools/measure_gpu_command.py" --output-dir "$OUT/run" -- "$REPO/build/examples/inference" --task-dir "$OUT/task" --input "$ROOT/patch_input.csv" --output-csv "$OUT/decrypted.csv" --gpu
+"$PY" "$REPO/tools/compare_inference_csv.py" --reference "$ROOT/reference/onnx.npz" --actual "$OUT/decrypted.csv" --report "$OUT/comparison.json"
 ```
+
+证据：`task_input_encrypted/pdm/run/inference.metrics.json`、`task_input_encrypted/pdm/comparison.json`。
 
 ## 实测记录
 
-| 模式 | CPU RSS 峰值 | GPU 显存峰值 | FHE 时间 | 参数 bundle | 相对 ONNX+CSV 最大绝对误差 |
-|---|---:|---:|---:|---:|---:|
-| PCM 输入加密 | 60.61 GiB | 42.94 GiB | 186.444 s | 不适用 | 0.02709967 |
-| PCM 参数加密 | 30.92 GiB | 42.94 GiB | 426.253 s | 11.94 GB payload | 0.02745730 |
-| PDM 输入加密 | 91.88 GiB | 42.94 GiB | 213.282 s | 不适用 | 0.00272374 |
-
-已完成 PCM 输入加密：CPU RSS 峰值 60.61 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 17.364 GiB，FHE 时间 186.444 s，全部 1970 个输出最大绝对误差 0.02709967。证据：`task_input_encrypted/pcm/run/inference.metrics.json`、`task_input_encrypted/pcm/comparison.json`。
-
-已完成 PDM 输入加密：CPU RSS 峰值 91.88 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 16.918 GiB，FHE 时间 213.282 s，最大绝对误差 0.00272374。证据：`task_input_encrypted/pdm/run/inference.metrics.json`、`task_input_encrypted/pdm/comparison.json`。
-
-已完成 PCM 参数加密：CPU RSS 峰值约 30.92 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 19.826 GiB，FHE 时间 426.253 s；payload 11,944,894,485 bytes，最大绝对误差 0.02745730。证据：`task_parameter_encrypted/pcm/run/inference.metrics.json`、`bundle.json`、`comparison.json`。
+| 模式 | CPU RSS GiB | GPU 进程 GiB | GPU 池内 GiB | FHE 秒 | 参数 bundle 加密 wall | 加密参数目录 bytes | 最大绝对误差 | 验收 |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| PCM 输入加密 | 60.608 | 42.941 | 17.364 | 186.444 | — | 不适用 | 0.0270996705 | 通过 |
+| PCM 参数加密 | 31.968 | 42.941 | 19.699 | 480.439 | 3:09.18 | 11,947,281,530 | 0.0274573005 | 通过 |
+| PDM 输入加密 | 91.906 | 42.941 | 16.918 | 213.282 | — | 不适用 | 0.00272373788 | 通过 |

@@ -136,8 +136,8 @@ vector<double> MultiplexedConv2DPackedLayerDepthwise::select_tensor_for_config(
     vector<double> tensor;
     for (int block_idx = 0; block_idx < div_ceil(channels_per_ct, prod(skip)); ++block_idx) {
         for (const Duo& input_pos : duo_range(input_shape_ct)) {
-            if (block_idx * stride_skip_prod + stride_skip[0] * (input_pos[0] % stride_skip[0]) +
-                    (input_pos[1] % stride_skip[0]) ==
+            if (block_idx * stride_skip_prod + stride_skip[1] * (input_pos[0] % stride_skip[0]) +
+                    (input_pos[1] % stride_skip[1]) ==
                 num) {
                 tensor.push_back(1.0);
             } else {
@@ -228,7 +228,7 @@ CkksPlaintextRingt MultiplexedConv2DPackedLayerDepthwise::generate_bias_pt_for_i
         const Duo channel_offset = output_pos % cached_bias_skip;
 
         const uint32_t channel = static_cast<uint32_t>(bpt_idx) * cached_bias_n_channel_per_ct +
-                                 block_pos[0] * bias_skip_prod + cached_bias_skip[0] * channel_offset[0] +
+                                 block_pos[0] * bias_skip_prod + cached_bias_skip[1] * channel_offset[0] +
                                  channel_offset[1];
         if (channel >= n_out_channel_) {
             continue;
@@ -260,19 +260,19 @@ vector<double> MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
     const uint32_t skip_prod = prod(skip);
     const uint32_t input_feature_size = prod(input_shape);
 
-    // Recompute step_k for the aligned channel index (matches run_core's steps[i/skip[0]]).
-    const int32_t i_aligned = (i / static_cast<int>(skip[0])) * static_cast<int>(skip[0]);
+    // Recompute step_k for the aligned channel index (matches run_core's steps[i/skip[1]]).
+    const int32_t i_aligned = (i / static_cast<int>(skip[1])) * static_cast<int>(skip[1]);
     const int32_t channel_idx = ct_idx * static_cast<int>(channels_per_ct) + i_aligned;
     const int32_t rotated_block = channel_idx / static_cast<int32_t>(stride_skip_prod);
     const int32_t rotated_residual = channel_idx % static_cast<int32_t>(stride_skip_prod);
-    const int32_t rotated_row = rotated_residual / static_cast<int32_t>(stride[0] * skip[0]);
-    const int32_t rotated_col = rotated_residual % static_cast<int32_t>(stride[0] * skip[0]);
+    const int32_t rotated_row = rotated_residual / static_cast<int32_t>(stride[1] * skip[1]);
+    const int32_t rotated_col = rotated_residual % static_cast<int32_t>(stride[1] * skip[1]);
     const int32_t base_block = channel_idx / static_cast<int32_t>(skip_prod);
     const int32_t base_residual = channel_idx % static_cast<int32_t>(skip_prod);
-    const int32_t base_row = base_residual / static_cast<int32_t>(skip[0]);
-    const int32_t base_col = base_residual % static_cast<int32_t>(skip[0]);
+    const int32_t base_row = base_residual / static_cast<int32_t>(skip[1]);
+    const int32_t base_col = base_residual % static_cast<int32_t>(skip[1]);
     const int32_t rot_step = (rotated_block - base_block) * static_cast<int32_t>(skip_prod * input_feature_size) +
-                             (rotated_row - base_row) * static_cast<int32_t>(skip[0] * input_shape[0]) +
+                             (rotated_row - base_row) * static_cast<int32_t>(skip[1] * input_shape[1]) +
                              (rotated_col - base_col);
     const int32_t step_k = -rot_step;
 
@@ -360,19 +360,19 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
             vector<int32_t> steps;
             const uint32_t stride_skip_prod = prod(skip_ * stride_);
             const uint32_t skip_prod = prod(skip_);
-            for (int i = 0; i < n_channel_per_ct; i += skip_[0]) {
+            for (int i = 0; i < n_channel_per_ct; i += skip_[1]) {
                 const int32_t channel_idx = ct_idx * n_channel_per_ct + i;
                 const int32_t rotated_block = floor(channel_idx / stride_skip_prod);
                 const int32_t rotated_residual = channel_idx % stride_skip_prod;
-                const int32_t rotated_row = floor(rotated_residual / (stride_[0] * skip_[0]));
-                const int32_t rotated_col = rotated_residual % (stride_[0] * skip_[0]);
+                const int32_t rotated_row = floor(rotated_residual / (stride_[1] * skip_[1]));
+                const int32_t rotated_col = rotated_residual % (stride_[1] * skip_[1]);
 
                 const int32_t base_block = floor(channel_idx / skip_prod);
                 const int32_t base_residual = channel_idx % skip_prod;
-                const int32_t base_row = floor(base_residual / skip_[0]);
-                const int32_t base_col = base_residual % skip_[0];
+                const int32_t base_row = floor(base_residual / skip_[1]);
+                const int32_t base_col = base_residual % skip_[1];
                 const int32_t rot_step = (rotated_block - base_block) * skip_prod * input_feature_size +
-                                         (rotated_row - base_row) * (skip_[0] * input_shape_[0]) +
+                                         (rotated_row - base_row) * (skip_[1] * input_shape_[1]) +
                                          (rotated_col - base_col);
                 steps.push_back(-rot_step);
             }
@@ -389,7 +389,7 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayerDepthwise::run_core(CkksConte
                 auto m_pt = ctx_copy.ringt_to_mul(m_pt_rt, level_ - 1);
                 auto c_m = ctx_copy.mult_plain_mul(s, m_pt);
                 c_m = ctx_copy.rescale(c_m, ctx_copy.get_parameter().get_default_scale());
-                result_ct[ct_idx * n_channel_per_ct + i] = ctx_copy.rotate(c_m, steps[i / skip_[0]]);
+                result_ct[ct_idx * n_channel_per_ct + i] = ctx_copy.rotate(c_m, steps[i / skip_[1]]);
             }
         }
     });

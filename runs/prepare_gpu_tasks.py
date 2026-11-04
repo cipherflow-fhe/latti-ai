@@ -27,7 +27,8 @@ for name, (model, config, inputs) in models.items():
         if packing:
             out = out / packing
         if packing:
-            config_name = f'{config}_{packing}_config.json'
+            config_name = (f'{config}_{packing}_config.json' if packing == 'pcm' else
+                           ('BERT_base_config.json' if name == 'BERT' else 'ViT_tiny_config.json'))
         elif mode == 'parameter' and name in ['cifar10', 'imagenet', 'retina', 'yolov5']:
             config_name = 'storage_aware_config.json'
         else:

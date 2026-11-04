@@ -13,9 +13,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'training/model_com
 import pipeline
 from inference.model_generator.layers import avgpool2d_layer as pool
 from inference.model_generator.layers import multiplexed_conv2d_pack_layer as conv
+from inference.model_generator.layers import multiplexed_conv2d_pack_layer_depthwise as depthwise
 
 
 class RectangularSpatialLayoutTest(unittest.TestCase):
+    def test_depthwise_stride_preserves_channels_with_unequal_skips(self):
+        shape, stride = [4, 8], [2, 2]
+        for skip in ([1, 2], [2, 1], [2, 4]):
+            channels_per_ct = 2 * int(np.prod(skip))
+            channels = 2 * channels_per_ct + 1
+            slots = channels_per_ct * int(np.prod(shape))
+            values = np.arange(channels * np.prod(shape)).reshape(channels, *shape) + 1
+
+            def pack(data, spatial_skip, per_ct):
+                result = [np.zeros(slots) for _ in range((channels + per_ct - 1) // per_ct)]
+                for c in range(channels):
+                    block, phase = divmod(c % per_ct, int(np.prod(spatial_skip)))
+                    for row in range(data.shape[1]):
+                        for col in range(data.shape[2]):
+                            index = (block * np.prod(shape) * np.prod(skip) +
+                                     (row * spatial_skip[0] + phase // spatial_skip[1]) * shape[1] * skip[1] +
+                                     col * spatial_skip[1] + phase % spatial_skip[1])
+                            result[c // per_ct][index] = data[c, row, col]
+                return result
+
+            x = pack(values, skip, channels_per_ct)
+            masks = []
+            for c in range(channels):
+                selected = np.zeros_like(values)
+                selected[c, ::stride[0], ::stride[1]] = 1
+                masks.append(pack(selected, skip, channels_per_ct)[c // channels_per_ct])
+            expected = pack(values[:, ::2, ::2], np.multiply(skip, stride), channels_per_ct * 4)
+            layer = depthwise.MultiplexedConv2DPackedLayerDepthwise(
+                channels, channels, shape, [1, 1], stride, skip, channels_per_ct, len(x), len(expected))
+            with patch.object(depthwise, 'rotate_cols', lambda x, steps: [np.roll(x, -int(steps[0]))]), \
+                    patch.object(depthwise, 'ct_pt_mult_accumulate', lambda xs, ws: sum(a * b for a, b in zip(xs, ws))), \
+                    patch.object(depthwise, 'rescale', lambda x: x), \
+                    patch.object(depthwise, '_multiply_mask_param', np.multiply), \
+                    patch.object(depthwise, 'add', np.add):
+                actual = layer.call(x, [[np.ones(slots)] for _ in x], [np.zeros(slots) for _ in expected], masks)
+            np.testing.assert_array_equal(actual, expected)
+
     def test_large_images_fill_slots_by_extending_width(self):
         for shape, slots, expected in [
             ([512, 512], 32768, [128, 256]),

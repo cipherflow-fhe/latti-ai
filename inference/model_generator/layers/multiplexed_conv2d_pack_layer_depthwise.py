@@ -176,7 +176,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             rotate_stride = 0
             for ct_idx in range(self.n_packed_in_channel):
                 steps = []
-                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[1]):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         r_n_block = int(
                             (ct_idx * self.n_channel_per_ct + i)
@@ -185,21 +185,21 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
                             self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
                         )
-                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
-                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[1] * self.skip[1])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[1] * self.skip[1])
                         n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
                         n_block_residue = int(
                             np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
                         )
-                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
-                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[1]))
+                        n_stride_skip_residue = n_block_residue % self.skip[1]
                         rot_step = (
                             (r_n_block - n_block)
                             * self.skip[0]
                             * self.skip[1]
                             * self.input_shape[0]
                             * self.input_shape[1]
-                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[1] * self.input_shape[1]
                             + (r_n_stride_skip_residue - n_stride_skip_residue)
                         )
                         steps.append(-rot_step)
@@ -355,7 +355,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                 res.append(s)
             else:
                 steps = []
-                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[1]):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         # Position of channel i after reordering
                         r_n_block = int(
@@ -365,22 +365,22 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
                             self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
                         )
-                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
-                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[1] * self.skip[1])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[1] * self.skip[1])
                         # Current position of channel i
                         n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
                         n_block_residue = int(
                             np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
                         )
-                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
-                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[1]))
+                        n_stride_skip_residue = n_block_residue % self.skip[1]
                         rot_step = (
                             (r_n_block - n_block)
                             * self.skip[0]
                             * self.skip[1]
                             * self.input_shape[0]
                             * self.input_shape[1]
-                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[1] * self.input_shape[1]
                             + (r_n_stride_skip_residue - n_stride_skip_residue)
                         )
                         steps.append(-rot_step)
@@ -388,7 +388,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         c_m = _multiply_mask_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
-                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[1])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
                 res[i] = add(res[i], bias_pt[i])
@@ -431,7 +431,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                 res.append(s)
             else:
                 steps = []
-                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[1]):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         r_n_block = int(
                             (ct_idx * self.n_channel_per_ct + i)
@@ -440,21 +440,21 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
                             self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
                         )
-                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
-                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[1] * self.skip[1])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[1] * self.skip[1])
                         n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
                         n_block_residue = int(
                             np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
                         )
-                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
-                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[1]))
+                        n_stride_skip_residue = n_block_residue % self.skip[1]
                         rot_step = (
                             (r_n_block - n_block)
                             * self.skip[0]
                             * self.skip[1]
                             * self.input_shape[0]
                             * self.input_shape[1]
-                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[1] * self.input_shape[1]
                             + (r_n_stride_skip_residue - n_stride_skip_residue)
                         )
                         steps.append(-rot_step)
@@ -462,7 +462,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         c_m = _multiply_mask_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
-                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[1])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
                 res[i] = add_encrypted_param_bias(res[i], bias_ct[i])
@@ -505,7 +505,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                 res.append(s)
             else:
                 steps = []
-                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[1]):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         r_n_block = int(
                             (ct_idx * self.n_channel_per_ct + i)
@@ -514,21 +514,21 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
                             self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
                         )
-                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
-                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[1] * self.skip[1])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[1] * self.skip[1])
                         n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
                         n_block_residue = int(
                             np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
                         )
-                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
-                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[1]))
+                        n_stride_skip_residue = n_block_residue % self.skip[1]
                         rot_step = (
                             (r_n_block - n_block)
                             * self.skip[0]
                             * self.skip[1]
                             * self.input_shape[0]
                             * self.input_shape[1]
-                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[1] * self.input_shape[1]
                             + (r_n_stride_skip_residue - n_stride_skip_residue)
                         )
                         steps.append(-rot_step)
@@ -536,7 +536,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         c_m = _multiply_mask_param(s, mast_pt[ct_idx * self.n_channel_per_ct + i])
                         c_m = rescale(c_m)
-                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[1])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
                 res[i] = add_encrypted_param_bias(res[i], bias_ct[i])
@@ -586,7 +586,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                 res.append(s)
             else:
                 steps = []
-                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[0]):
+                for i in range(0, min(self.n_channel_per_ct, self.n_out_channel), self.skip[1]):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
                         # Position of channel i after reordering
                         r_n_block = int(
@@ -596,22 +596,22 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         r_n_block_residue = (ct_idx * self.n_channel_per_ct + i) % int(
                             self.skip[0] * self.skip[1] * self.stride[0] * self.stride[1]
                         )
-                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[0] * self.skip[0])))
-                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[0] * self.skip[0])
+                        r_n_stride_skip = int(np.floor(r_n_block_residue / (self.stride[1] * self.skip[1])))
+                        r_n_stride_skip_residue = r_n_block_residue % int(self.stride[1] * self.skip[1])
                         # Current position of channel i
                         n_block = int(np.floor((ct_idx * self.n_channel_per_ct + i) / int(self.skip[0] * self.skip[1])))
                         n_block_residue = int(
                             np.floor((ct_idx * self.n_channel_per_ct + i)) % int(self.skip[0] * self.skip[1])
                         )
-                        n_stride_skip = int(np.floor(n_block_residue / self.skip[0]))
-                        n_stride_skip_residue = n_block_residue % self.skip[0]
+                        n_stride_skip = int(np.floor(n_block_residue / self.skip[1]))
+                        n_stride_skip_residue = n_block_residue % self.skip[1]
                         rot_step = (
                             (r_n_block - n_block)
                             * self.skip[0]
                             * self.skip[1]
                             * self.input_shape[0]
                             * self.input_shape[1]
-                            + (r_n_stride_skip - n_stride_skip) * self.skip[0] * self.input_shape[0]
+                            + (r_n_stride_skip - n_stride_skip) * self.skip[1] * self.input_shape[1]
                             + (r_n_stride_skip_residue - n_stride_skip_residue)
                         )
                         steps.append(-rot_step)
@@ -627,7 +627,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         )
                         c_m = mult(s, m_pt)
                         c_m = rescale(c_m)
-                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[0])]])[0])
+                        result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[1])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
                 b_pt = CkksPlaintextRingtNode(f'encode_pt_{i}')

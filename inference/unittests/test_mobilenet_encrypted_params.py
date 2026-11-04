@@ -124,7 +124,8 @@ class MobileNetEncryptedParamsTest(unittest.TestCase):
                     loads = [c for c in mega['compute'].values() if c['type'] == 'load_encrypted_param_ct']
                     self.assertEqual(bool(loads), mode == 'runtime_lazy')
                     for load in loads:
-                        self.assertEqual(len(load['wait_inputs']), 1)
+                        # Store and trigger must be real scheduler dependencies.
+                        self.assertEqual(len(load['inputs']), 2)
 
 
 if __name__ == '__main__':

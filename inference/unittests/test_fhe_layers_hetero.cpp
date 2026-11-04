@@ -257,14 +257,14 @@ TEST_CASE("depthwise public masks preserve source positions and rescale", "[dept
 
             // Use the channel reorder step from the compute path to check the mask's
             // source positions independently of its generation/encoding helper.
-            const int aligned = ct_idx * channels + (local / skip[0]) * skip[0];
+            const int aligned = ct_idx * channels + (local / skip[1]) * skip[1];
             const int dst_block = aligned / prod(skip * stride);
             const int dst_phase = aligned % prod(skip * stride);
             const int src_block = aligned / prod(skip), src_phase = aligned % prod(skip);
             const int step = -((dst_block - src_block) * static_cast<int>(prod(skip) * prod(shape)) +
-                (dst_phase / static_cast<int>(stride[0] * skip[0]) - src_phase / static_cast<int>(skip[0])) *
-                    static_cast<int>(skip[0] * shape[0]) +
-                dst_phase % static_cast<int>(stride[0] * skip[0]) - src_phase % static_cast<int>(skip[0]));
+                (dst_phase / static_cast<int>(stride[1] * skip[1]) - src_phase / static_cast<int>(skip[1])) *
+                    static_cast<int>(skip[1] * shape[1]) +
+                dst_phase % static_cast<int>(stride[1] * skip[1]) - src_phase % static_cast<int>(skip[1]));
             auto target = layer.select_tensor(channel % (channels * prod(stride)));
             target.resize(slots, 0.0);
             std::vector<double> values(slots);
@@ -283,6 +283,32 @@ TEST_CASE("depthwise public masks preserve source positions and rescale", "[dept
                 error = std::max(error, std::abs(actual[j] - target[j] * values[src]));
             }
             REQUIRE(error < 1e-5);
+        }
+    }
+}
+
+TEST_CASE("depthwise masks select logical channels in rectangular layouts", "[depthwise_layout]") {
+    for (Duo shape : std::vector<Duo>{{4, 8}, {8, 4}}) {
+        for (Duo skip : std::vector<Duo>{{1, 2}, {2, 1}, {2, 4}}) {
+            const Duo stride{2, 2};
+            const uint32_t channels = 2 * prod(skip), slots = channels * prod(shape);
+            const uint32_t width = shape[1] * skip[1];
+            for (uint32_t channel = 0; channel < 2 * channels + 1; ++channel) {
+                const uint32_t local = channel % channels;
+                const auto actual = MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
+                    shape, skip, stride, channels, slots, channel / channels, local);
+                std::vector<double> expected(slots, 0.0);
+                for (uint32_t row = 0; row < shape[0]; row += stride[0]) {
+                    for (uint32_t col = 0; col < shape[1]; col += stride[1]) {
+                        const uint32_t block = local / prod(skip), phase = local % prod(skip);
+                        const uint32_t index = block * prod(shape * skip) +
+                            (row * skip[0] + phase / skip[1]) * width + col * skip[1] + phase % skip[1];
+                        expected[index] = 1.0;
+                    }
+                }
+                INFO("shape=" << str(shape) << " skip=" << str(skip) << " channel=" << channel);
+                REQUIRE(actual == expected);
+            }
         }
     }
 }
