@@ -1,0 +1,40 @@
+# ViT GPU lazy pipeline
+
+模型：`runs/ViT/model/trained_poly.onnx`，输入：`runs/ViT/patch_input.csv`。输入加密和参数加密 task 分目录保存；PCM 使用 `par_block_col_major`，PDM 仅用于输入加密（当前仓库不支持 PDM 参数加密）。
+
+## PCM 输入加密
+
+```bash
+export PYTHONPATH="$PWD/inference/lattisense:$PWD"
+/home/linghm/pytorch_venv/bin/python training/run_compile.py --input ./runs/ViT/model/trained_poly.onnx --output ./runs/ViT/task_input_encrypted/pcm --style multiplexed --config ./training/config/ViT_pcm_config.json
+/home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task_input_encrypted/pcm/task
+./build/examples/inference --task-dir ./runs/ViT/task_input_encrypted/pcm/task --input ./runs/ViT/patch_input.csv --verify --gpu
+```
+
+## PCM 参数加密 runtime_lazy
+
+```bash
+export PYTHONPATH="$PWD/inference/lattisense:$PWD"
+/home/linghm/pytorch_venv/bin/python training/run_compile.py --input ./runs/ViT/model/trained_poly.onnx --output ./runs/ViT/task_parameter_encrypted/pcm --style multiplexed --deployment-mode server_provisioned_runner --config ./training/config/ViT_pcm_config.json
+/home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task --deployment-mode server_provisioned_runner --parameter-loading-mode runtime_lazy
+./build/tools/provision_encrypted_runner_bundle --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task --out ./runs/ViT/task_parameter_encrypted/pcm/task/runner
+./build/examples/inference --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task/runner --deployment-mode server_provisioned_runner --input ./runs/ViT/patch_input.csv --output-cipher ./runs/ViT/task_parameter_encrypted/pcm/output.ct --gpu
+./build/tools/decrypt_runner_output --task-dir ./runs/ViT/task_parameter_encrypted/pcm/task/provisioner --cipher ./runs/ViT/task_parameter_encrypted/pcm/output.ct --output-csv ./runs/ViT/task_parameter_encrypted/pcm/decrypted.csv
+```
+
+## PDM 输入加密
+
+```bash
+export PYTHONPATH="$PWD/inference/lattisense:$PWD"
+/home/linghm/pytorch_venv/bin/python training/run_compile.py --input ./runs/ViT/model/trained_poly.onnx --output ./runs/ViT/task_input_encrypted/pdm --style multiplexed --config ./training/config/ViT_pdm_config.json
+/home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py --task-dir ./runs/ViT/task_input_encrypted/pdm/task
+./build/examples/inference --task-dir ./runs/ViT/task_input_encrypted/pdm/task --input ./runs/ViT/patch_input.csv --verify --gpu
+```
+
+## 实测记录
+
+| 模式 | CPU RSS 峰值 | GPU 显存峰值 | FHE 时间 | 参数 bundle | 相对 ONNX+CSV 最大绝对误差 |
+|---|---:|---:|---:|---:|---:|
+| PCM 输入加密 | 待运行 | 待运行 | 待运行 | 不适用 | 待运行 |
+| PCM 参数加密 | 待运行 | 待运行 | 待运行 | 待运行 | 待运行 |
+| PDM 输入加密 | 待运行 | 待运行 | 待运行 | 不适用 | 待运行 |

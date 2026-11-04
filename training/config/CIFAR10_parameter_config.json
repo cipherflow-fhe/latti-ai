@@ -1,0 +1,11 @@
+{
+  "seed_weight_subgrid_stride": [
+    16,
+    16
+  ],
+  "btp_scale": 1.0,
+  "model_type": "cifar10",
+  "encrypted_parameter_storage_weight": 1.0,
+  "encrypted_parameter_storage_normalization_bytes": 1073741824,
+  "matmul_block_size": 32
+}
