@@ -1,6 +1,7 @@
 # yolov5 GPU lazy pipeline
 
 模型：`runs/yolov5/model/best_conv_outputs.onnx`。输入加密使用 `client_encrypted_input`；参数加密使用 `server_provisioned_runner`、`encrypted_offline`、`runtime_lazy`。两类 task 分别保存在 `task_input_encrypted/` 和 `task_parameter_encrypted/`。
+编译配置说明：输入加密使用编译器默认值；参数加密只使用共享的 `training/config/storage_aware_config.json`。
 
 ## 输入加密
 
@@ -10,7 +11,7 @@ cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_B
 cmake --build build -j$(nproc)
 /home/linghm/pytorch_venv/bin/python training/run_compile.py \
   --input ./runs/yolov5/model/best_conv_outputs.onnx --output ./runs/yolov5/task_input_encrypted \
-  --style multiplexed --config ./training/config/YOLOv5_config.json
+  --style multiplexed
 /home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py \
   --task-dir ./runs/yolov5/task_input_encrypted/task
 ./build/examples/inference --task-dir ./runs/yolov5/task_input_encrypted/task \

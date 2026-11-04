@@ -35,6 +35,8 @@ export PYTHONPATH="$PWD/inference/lattisense:$PWD"
 
 | 模式 | CPU RSS 峰值 | GPU 显存峰值 | FHE 时间 | 参数 bundle | 相对 ONNX+CSV 最大绝对误差 |
 |---|---:|---:|---:|---:|---:|
-| PCM 输入加密 | 待运行 | 待运行 | 待运行 | 不适用 | 待运行 |
+| PCM 输入加密 | 143.24 GiB | 42.94 GiB | 255.353 s | 不适用 | 0.04279189 |
 | PCM 参数加密 | 待运行 | 待运行 | 待运行 | 待运行 | 待运行 |
 | PDM 输入加密 | 待运行 | 待运行 | 待运行 | 不适用 | 待运行 |
+
+已完成的 PCM 输入加密记录：`task_input_encrypted/pcm/run/inference.metrics.json`、`task_input_encrypted/pcm/comparison.json`。CPU 为进程生命周期 RSS 峰值；GPU 为每 0.5 秒采样的进程显存峰值（含内存池预留），池内实际使用峰值为 19.875 GiB。误差比较原始 ONNX 的全部 2 个 logits，参考文件为 `reference/onnx.npz`。其余路径待完成。

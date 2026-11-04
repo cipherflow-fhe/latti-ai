@@ -22,8 +22,10 @@
 
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -42,6 +44,7 @@ int main(int argc, char* argv[]) {
     bool verify = false;
     string deployment_mode = "client_encrypted_input";
     string output_cipher;
+    string output_csv;
     constexpr double tolerance = 0.1;
 
     for (int i = 1; i < argc; i++) {
@@ -57,12 +60,15 @@ int main(int argc, char* argv[]) {
             deployment_mode = argv[++i];
         } else if (strcmp(argv[i], "--output-cipher") == 0 && i + 1 < argc) {
             output_cipher = argv[++i];
+        } else if (strcmp(argv[i], "--output-csv") == 0 && i + 1 < argc) {
+            output_csv = argv[++i];
         }
     }
 
     if (task_dir.empty() || input_args.empty()) {
         cerr << "Usage: " << argv[0] << " --task-dir <path> --input [name=]<path> [--input ...] [--gpu] [--verify]"
-             << " [--deployment-mode client_encrypted_input|server_provisioned_runner]" << " [--output-cipher <path>]"
+             << " [--deployment-mode client_encrypted_input|server_provisioned_runner]"
+             << " [--output-cipher <path>] [--output-csv <path>]"
              << endl;
         return 1;
     }
@@ -166,6 +172,27 @@ int main(int argc, char* argv[]) {
     cout << "[Step 5/5] Decrypting result..." << endl;
     auto results = client.decrypt(encrypted_outputs);
     cout << endl;
+
+    if (!output_csv.empty()) {
+        ofstream csv(output_csv);
+        if (!csv) {
+            cerr << "Cannot open output CSV: " << output_csv << endl;
+            return 2;
+        }
+        csv << "output,index,value\n" << setprecision(numeric_limits<double>::max_digits10);
+        for (const auto& [name, result] : results) {
+            string escaped_name;
+            for (char c : name) escaped_name += c == '"' ? "\"\"" : string(1, c);
+            for (size_t i = 0; i < result.output.size(); ++i) {
+                csv << '"' << escaped_name << "\"," << i << ',' << result.output[i] << '\n';
+            }
+        }
+        csv.close();
+        if (!csv) {
+            cerr << "Cannot write output CSV: " << output_csv << endl;
+            return 2;
+        }
+    }
 
     // --- Display results ---
     cout << "========== Results ==========" << endl;

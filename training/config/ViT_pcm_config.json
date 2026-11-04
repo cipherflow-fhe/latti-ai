@@ -3,6 +3,5 @@
   "head_dim": 64,
   "matmul_block_size": 64,
   "mat_pack_style": "par_block_col_major",
-  "model_type": "vit",
   "btp_scale": 1.0
 }

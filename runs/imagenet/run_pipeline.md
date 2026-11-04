@@ -1,6 +1,7 @@
 # imagenet GPU lazy pipeline
 
 模型：`runs/imagenet/model/trained_poly.onnx`。输入加密使用 `client_encrypted_input`；参数加密使用 `server_provisioned_runner`、`encrypted_offline`、`runtime_lazy`。两类 task 分别保存在 `task_input_encrypted/` 和 `task_parameter_encrypted/`。
+编译配置说明：输入加密使用编译器默认值；参数加密只使用共享的 `training/config/storage_aware_config.json`。
 
 ## 输入加密
 
@@ -10,14 +11,14 @@ cmake -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_B
 cmake --build build -j$(nproc)
 /home/linghm/pytorch_venv/bin/python training/run_compile.py \
   --input ./runs/imagenet/model/trained_poly.onnx --output ./runs/imagenet/task_input_encrypted \
-  --style multiplexed --config ./training/config/ImageNet_config.json
+  --style multiplexed
 /home/linghm/pytorch_venv/bin/python inference/interface/gen_mega_ag.py \
   --task-dir ./runs/imagenet/task_input_encrypted/task
 ./build/examples/inference --task-dir ./runs/imagenet/task_input_encrypted/task \
   --input ./runs/imagenet/img.csv --verify --gpu
 ```
 
-验收记录（参考 `tools/evaluate_onnx_csv.py` 的 ONNX+CSV 输出）：待运行后填写 CPU RSS 峰值、GPU 显存峰值、FHE 时间和最大绝对误差。
+首轮输入加密执行完成，但数值验收失败：FHE 52.4784 s，CPU RSS 峰值 51.99 GiB，GPU 进程显存峰值 42.94 GiB（池内使用峰值 14.845 GiB）。全部 1000 个输出最大绝对误差 523863.807；正在定位，不能视为通过。证据：`task_input_encrypted/run/inference.metrics.json`、`task_input_encrypted/comparison.json`。
 
 ## 参数加密
 

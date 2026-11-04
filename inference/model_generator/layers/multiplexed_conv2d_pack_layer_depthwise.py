@@ -555,7 +555,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                 res.append(sp)
         return res
 
-    def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source) -> list[CkksCiphertextNode]:
+    def call_custom_compute(self, x: list[CkksCiphertextNode], conv_data_source, level: int = 0) -> list[CkksCiphertextNode]:
         # 1. Calculate the number of input ciphertexts to process
         n_pack_in_channel = int(np.ceil(self.n_in_channel / self.n_channel_per_ct))
         # Only generate kernel rotations for needed input ciphertexts (avoid generating unused nodes)
