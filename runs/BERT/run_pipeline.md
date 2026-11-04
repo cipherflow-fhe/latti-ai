@@ -36,7 +36,11 @@ export PYTHONPATH="$PWD/inference/lattisense:$PWD"
 | 模式 | CPU RSS 峰值 | GPU 显存峰值 | FHE 时间 | 参数 bundle | 相对 ONNX+CSV 最大绝对误差 |
 |---|---:|---:|---:|---:|---:|
 | PCM 输入加密 | 143.24 GiB | 42.94 GiB | 255.353 s | 不适用 | 0.04279189 |
-| PCM 参数加密 | 待运行 | 待运行 | 待运行 | 待运行 | 待运行 |
-| PDM 输入加密 | 待运行 | 待运行 | 待运行 | 不适用 | 待运行 |
+| PCM 参数加密 | 60.61 GiB | 42.94 GiB | 1231.61 s | 约 1.4 GiB runner 参数目录 | 0.03501957 |
+| PDM 输入加密 | 154.32 GiB | 42.94 GiB | 失败 | 不适用 | 未取得输出 |
 
 已完成的 PCM 输入加密记录：`task_input_encrypted/pcm/run/inference.metrics.json`、`task_input_encrypted/pcm/comparison.json`。CPU 为进程生命周期 RSS 峰值；GPU 为每 0.5 秒采样的进程显存峰值（含内存池预留），池内实际使用峰值为 19.875 GiB。误差比较原始 ONNX 的全部 2 个 logits，参考文件为 `reference/onnx.npz`。其余路径待完成。
+
+已完成 PCM 参数加密：CPU RSS 峰值约 60.61 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 14.087 GiB，FHE 时间 1231.61 s，最大绝对误差 0.03501957。参数缓存 canonical loads=3991、seed loads=3504、cache peak=67093010 bytes；bundle 详见 `task_parameter_encrypted/pcm/bundle.json`。
+
+BERT PDM 输入加密已执行至约 49% 后因系统内存限制退出（exit 137），CPU RSS 峰值 154.32 GiB，未产生可比较输出；证据：`task_input_encrypted/pdm/run/inference.metrics.json`。
