@@ -44,4 +44,4 @@ export PYTHONPATH="$PWD/inference/lattisense:$PWD"
   --output-csv ./runs/imagenet/task_parameter_encrypted/decrypted.csv
 ```
 
-验收记录（参考 ONNX+CSV 输出）：待运行后填写 CPU RSS 峰值、GPU 显存峰值、FHE 时间、参数 bundle 字节数和最大绝对误差。
+参数加密执行完成但数值验收失败：FHE 235.792 s，CPU RSS 峰值 32.89 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 18.240 GiB；参数 payload 17,086,207,759 bytes；全部 1000 个输出最大绝对误差 523785.594。证据：`task_parameter_encrypted/run/inference.metrics.json`、`bundle.json`、`comparison.json`。
