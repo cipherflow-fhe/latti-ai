@@ -18,7 +18,7 @@ cmake --build build -j$(nproc)
   --input ./runs/yolov5/img.csv --verify --gpu
 ```
 
-验收记录（参考 `tools/evaluate_onnx_csv.py` 的 ONNX+CSV 输出）：待运行后填写 CPU RSS 峰值、GPU 显存峰值、FHE 时间和最大绝对误差。
+实测输入加密：CPU RSS 峰值 75.52 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 16.210 GiB，FHE 59.465 s，最大绝对误差 0.000320165。实测参数加密：CPU RSS 峰值 35.81 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 25.658 GiB，FHE 208.691 s，参数 payload 见 `task_parameter_encrypted/bundle.json`，最大绝对误差 0.000390492。
 
 ## 参数加密
 

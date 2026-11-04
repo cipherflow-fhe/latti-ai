@@ -18,7 +18,7 @@ cmake --build build -j$(nproc)
   --input input_0=./runs/retina/img.csv --input input_1=./runs/retina/non_inv.csv --input input_2=./runs/retina/inv.csv --verify --gpu
 ```
 
-验收记录（参考 `tools/evaluate_onnx_csv.py` 的 ONNX+CSV 输出）：待运行后填写 CPU RSS 峰值、GPU 显存峰值、FHE 时间和最大绝对误差。
+实测输入加密：CPU RSS 峰值 97.28 GiB，GPU 进程显存峰值 42.94 GiB，池内使用峰值 20.096 GiB，FHE 137.687 s，最大绝对误差 0.000178452。参数加密正在执行，完成后补充。
 
 ## 参数加密
 
