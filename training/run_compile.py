@@ -284,6 +284,8 @@ Examples:
 
     compile_config = read_compile_config(args.config)
     mat_pack_style = compile_config.get('mat_pack_style', '')
+    if args.deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
+        raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
     model_type = compile_config.get('model_type', '')
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale

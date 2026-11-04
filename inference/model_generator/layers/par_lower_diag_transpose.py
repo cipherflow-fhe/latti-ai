@@ -21,7 +21,6 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add
 
 
 op_class = 'ParLowerDiagTranspose'

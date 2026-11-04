@@ -177,6 +177,12 @@ def gen_custom_task(
     except Exception:
         block_shape = [64, 64]
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
+    if parameter_mode == 'encrypted_offline':
+        if task_config_info.get('mat_pack_style') == 'par_diagonal_pack':
+            raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
+        for layer_id, layer_config in config_info['layer'].items():
+            if layer_config['type'].startswith('pdm'):
+                raise ValueError(f"Layer '{layer_id}' ({layer_config['type']}) does not support encrypted parameters")
     input_args = list()
     offline_input_args = list()
     feature_id_to_nodes_map = {}
@@ -381,17 +387,8 @@ def gen_custom_task(
         def build(attributes, node_id, use_level, trigger=None):
             nonlocal counter
             op_class, kind = attributes['op_class'], attributes['type']
-            encrypted = (
-                (op_class == 'ParLowerDiagPCMM' and kind != 'mask_wrap_pt')
-                or op_class in {'ParLowerDiagonalAddPt', 'ParUpperDiagonalPolyActRNGamma',
-                                'ParUpperDiagonalPolyActRNPoly', 'ParUpperDiagonalPoly',
-                                'ParUpperDiagonalLNMinimaxInit', 'ParUpperDiagonalLNAffine',
-                                'ParUpperDiagonalAddPt'}
-            )
-            source = None
-            if op_class.startswith('ParBlockColMajor'):
-                source = resolve_pcm_parameter_source(config_info['layer'][matrix_layer_id], attributes)
-                encrypted = source['visibility'] == 'secret'
+            source = resolve_pcm_parameter_source(config_info['layer'][matrix_layer_id], attributes)
+            encrypted = source['visibility'] == 'secret'
             if encrypted:
                 node = CkksCiphertextNode(f'{matrix_layer_id}_{node_id}_L{use_level}', level=use_level)
                 _append_parameter_arg(f'matrix_{matrix_layer_id}_{counter}', [node])

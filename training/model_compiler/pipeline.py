@@ -807,6 +807,8 @@ def run_pipeline(
         enable_score_cache: If True, cache per-compute score in DP compilation
     """
     compile_start_time = time.perf_counter()
+    if deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
+        raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
 
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')

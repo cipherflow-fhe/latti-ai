@@ -202,7 +202,7 @@ parameter_payload_bytes = sum_over_layers(Nseed * Bct(L+1))
 4. `parcpmm` 的首次输入注册统一走 `_register_feature_nodes`，使 plaintext 输入正确加入 `InputZero`；统一处理其余 PCM 第一 consumer 的同一情形。
 5. PCM 类型的 encrypted-offline 能力检查与实现同时接通；任务 signature 的秘密参数为 CT，公开 PT 通过 Runner-local recipe 生成。每个二元输入保留原 `input_index`。
 
-编译、任务生成、Provisioner、Runner 中原先只允许 PDM 的能力检查，在对应 PCM 实现可用后加入明确的 PCM 分发；每处报错保留 layer ID、类型和缺失接口信息。新增分支沿用现有类型表和构造函数。
+编译、任务生成、Provisioner、Runner 按 PCM 接口分发；PDM 参数加密模式在入口明确拒绝。每处报错保留 layer ID、类型和缺失接口信息，分支沿用现有类型表和构造函数。
 
 ### 5.3 C++、Provisioner 与 Runner
 

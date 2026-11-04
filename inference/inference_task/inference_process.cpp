@@ -3686,71 +3686,13 @@ ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& ckks_ctx, Laye
     const string type = attrs.at("type").get<string>();
     const int i = attrs.value("i", 0), j = attrs.value("j", 0), k = attrs.value("k", 0);
     CkksPlaintextRingt pt;
-        if (op_class == "ParLowerDiagPCMM") {
-            auto* layer = static_cast<ParLowerDiagPCMM*>(layer_ptr);
-            if (type == "pt_A") {
-                pt = layer->generate_pt_A(ckks_ctx, attrs.value("mb", 0), attrs.value("i", i), attrs.value("j", j),
-                                          attrs.value("ell", 0), attrs.value("r", 0));
-            } else if (type == "mask_wrap_pt") {
-                pt = layer->generate_mask_wrap_pt(ckks_ctx, attrs.value("i_idx", i));
-            } else if (type == "bias_pt") {
-                pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("r", 0));
-            } else {
-                throw runtime_error("encode_pt: unknown ParLowerDiagPCMM pt type: " + type);
-            }
-        } else if (op_class == "ParLowerDiagCCMM") {
-            auto* layer = static_cast<ParLowerDiagCCMM*>(layer_ptr);
-            if (type == "replication_mask_pt") {
-                pt = layer->generate_replication_mask_pt(ckks_ctx, attrs.value("ell", 0));
-            } else if (type == "ordinary_route_pt") {
-                pt = layer->generate_ordinary_route_pt(ckks_ctx, attrs.value("ell", 0), attrs.value("mask_idx", 0));
-            } else if (type == "kqt_route_pt") {
-                pt = layer->generate_kqt_route_pt(ckks_ctx, attrs.value("j", j), attrs.value("ell", 0),
-                                                  attrs.value("mask_idx", 0));
-            } else {
-                throw runtime_error("encode_pt: unknown ParLowerDiagCCMM pt type: " + type);
-            }
-        } else if (op_class == "ParLowerDiagTranspose") {
-            auto* layer = static_cast<ParLowerDiagTranspose*>(layer_ptr);
-            pt =
-                layer->generate_transpose_mask_pt(ckks_ctx, attrs.value("out_diag_idx", 0), attrs.value("mask_idx", 0));
-        } else if (op_class == "ParLowerDiagonalAddPt") {
-            auto* layer = static_cast<ParLowerDiagonalAddPt*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", 0));
-        } else if (op_class == "ParUpperDiagonalPolyActRNGamma") {
-            auto* layer = static_cast<ParUpperDiagonalPolyActRNGamma*>(layer_ptr);
-            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", i),
-                                          attrs.value("g", k));
-        } else if (op_class == "ParUpperDiagonalPolyActRNPoly") {
-            auto* layer = static_cast<ParUpperDiagonalPolyActRNPoly*>(layer_ptr);
-            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
-                                          attrs.value("ct_local", j), attrs.value("g", k));
-        } else if (op_class == "ParUpperDiagonalPoly") {
-            auto* layer = static_cast<ParUpperDiagonalPoly*>(layer_ptr);
-            if (type == "stockmeyer_coeff_pt") {
-                pt = layer->generate_weight_pt_for_stockmeyer(ckks_ctx, attrs.value("coeff_idx", i),
-                                                              attrs.value("ct_idx", j));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalPoly: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorPoly") {
+        if (op_class == "ParBlockColMajorPoly") {
             auto* layer = static_cast<ParBlockColMajorPoly*>(layer_ptr);
             if (type == "stockmeyer_coeff_pt") {
                 pt = layer->generate_weight_pt_for_stockmeyer(ckks_ctx, attrs.value("coeff_idx", i),
                                                               attrs.value("ct_idx", j));
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorPoly: " + type);
-            }
-        } else if (op_class == "ParUpperDiagonalPolyMultCt") {
-            auto* layer = static_cast<ParUpperDiagonalPolyMultCt*>(layer_ptr);
-            if (type == "one_pt") {
-                pt = layer->generate_one_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
-                                            attrs.value("g", k));
-            } else if (type == "half_pt") {
-                pt = layer->generate_half_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
-                                             attrs.value("g", k));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalPolyMultCt: " + type);
             }
         } else if (op_class == "ParBlockColMajorPolyMultCt") {
             auto* layer = static_cast<ParBlockColMajorPolyMultCt*>(layer_ptr);
@@ -3763,33 +3705,12 @@ ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& ckks_ctx, Laye
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorPolyMultCt: " + type);
             }
-        } else if (op_class == "ParUpperDiagonalAddPt") {
-            auto* layer = static_cast<ParUpperDiagonalAddPt*>(layer_ptr);
-            if (type == "pt") {
-                pt = layer->generate_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalAddPt: " + type);
-            }
-        } else if (op_class == "ParUpperDiagonalMultipleSquare") {
-            auto* layer = static_cast<ParUpperDiagonalMultipleSquare*>(layer_ptr);
-            if (type == "mask_pt") {
-                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalMultipleSquare: " + type);
-            }
         } else if (op_class == "ParBlockColMajorMultipleSquare") {
             auto* layer = static_cast<ParBlockColMajorMultipleSquare*>(layer_ptr);
             if (type == "mask_pt") {
                 pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorMultipleSquare: " + type);
-            }
-        } else if (op_class == "ParUpperDiagonalHeadColSum") {
-            auto* layer = static_cast<ParUpperDiagonalHeadColSum*>(layer_ptr);
-            if (type == "mask_pt") {
-                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalHeadColSum: " + type);
             }
         } else if (op_class == "ParBlockColMajorHeadColSum") {
             auto* layer = static_cast<ParBlockColMajorHeadColSum*>(layer_ptr);
@@ -3800,28 +3721,12 @@ ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& ckks_ctx, Laye
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorHeadColSum: " + type);
             }
-        } else if (op_class == "ParUpperDiagonalInverseInit") {
-            auto* layer = static_cast<ParUpperDiagonalInverseInit*>(layer_ptr);
-            if (type == "two_pt") {
-                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseInit: " + type);
-            }
         } else if (op_class == "ParBlockColMajorInverseInit") {
             auto* layer = static_cast<ParBlockColMajorInverseInit*>(layer_ptr);
             if (type == "two_pt") {
                 pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorInverseInit: " + type);
-            }
-        } else if (op_class == "ParUpperDiagonalInverseIter") {
-            auto* layer = static_cast<ParUpperDiagonalInverseIter*>(layer_ptr);
-            if (type == "one_pt") {
-                pt = layer->generate_one_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else if (type == "two_pt") {
-                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseIter: " + type);
             }
         } else if (op_class == "ParBlockColMajorInverseIter") {
             auto* layer = static_cast<ParBlockColMajorInverseIter*>(layer_ptr);
@@ -3832,13 +3737,6 @@ ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& ckks_ctx, Laye
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorInverseIter: " + type);
             }
-        } else if (op_class == "ParUpperDiagonalGELU") {
-            auto* layer = static_cast<ParUpperDiagonalGELU*>(layer_ptr);
-            if (type == "mask_pt") {
-                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalGELU: " + type);
-            }
         } else if (op_class == "ParBlockColMajorCtMul") {
             auto* layer = static_cast<ParBlockColMajorCtMul*>(layer_ptr);
             if (type == "mask_pt") {
@@ -3846,26 +3744,6 @@ ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& ckks_ctx, Laye
             } else {
                 throw runtime_error("encode_pt: unknown type for ParBlockColMajorCtMul: " + type);
             }
-        } else if (op_class == "ParUpperDiagonalLNStats") {
-            auto* layer = static_cast<ParUpperDiagonalLNStats*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
-                                    attrs.value("ct_local", j), attrs.value("g", k));
-        } else if (op_class == "ParUpperDiagonalLNXCentered") {
-            auto* layer = static_cast<ParUpperDiagonalLNXCentered*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
-                                    attrs.value("ct_local", j), attrs.value("g", k));
-        } else if (op_class == "ParUpperDiagonalLNMinimaxInit") {
-            auto* layer = static_cast<ParUpperDiagonalLNMinimaxInit*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
-                                    attrs.value("ct_local", j), attrs.value("g", k));
-        } else if (op_class == "ParUpperDiagonalLNGoldschmidt") {
-            auto* layer = static_cast<ParUpperDiagonalLNGoldschmidt*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
-                                    attrs.value("ct_local", j), attrs.value("g", k));
-        } else if (op_class == "ParUpperDiagonalLNAffine") {
-            auto* layer = static_cast<ParUpperDiagonalLNAffine*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
-                                    attrs.value("ct_local", j), attrs.value("g", k));
         } else if (op_class == "ParBlockColMajorCPMM") {
             auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
             if (type == "mask_h0_pt")
@@ -4120,8 +3998,128 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             throw runtime_error("encode_pt: non-par matrix ops are unsupported; use par op_class");
         } else if (op_class.rfind("ParBlockColMajor", 0) == 0) {
             pt = generate_matrix_parameter(ckks_ctx, static_cast<Layer*>(layer_ptr), attrs);
-        } else if (op_class.rfind("ParLowerDiag", 0) == 0 || op_class.rfind("ParUpperDiagonal", 0) == 0) {
-            pt = generate_matrix_parameter(ckks_ctx, static_cast<Layer*>(layer_ptr), attrs);
+        } else if (op_class == "ParLowerDiagPCMM") {
+            auto* layer = static_cast<ParLowerDiagPCMM*>(layer_ptr);
+            if (type == "pt_A") {
+                pt = layer->generate_pt_A(ckks_ctx, attrs.value("mb", 0), attrs.value("i", i), attrs.value("j", j),
+                                          attrs.value("ell", 0), attrs.value("r", 0));
+            } else if (type == "mask_wrap_pt") {
+                pt = layer->generate_mask_wrap_pt(ckks_ctx, attrs.value("i_idx", i));
+            } else if (type == "bias_pt") {
+                pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("r", 0));
+            } else {
+                throw runtime_error("encode_pt: unknown ParLowerDiagPCMM pt type: " + type);
+            }
+        } else if (op_class == "ParLowerDiagCCMM") {
+            auto* layer = static_cast<ParLowerDiagCCMM*>(layer_ptr);
+            if (type == "replication_mask_pt") {
+                pt = layer->generate_replication_mask_pt(ckks_ctx, attrs.value("ell", 0));
+            } else if (type == "ordinary_route_pt") {
+                pt = layer->generate_ordinary_route_pt(ckks_ctx, attrs.value("ell", 0), attrs.value("mask_idx", 0));
+            } else if (type == "kqt_route_pt") {
+                pt = layer->generate_kqt_route_pt(ckks_ctx, attrs.value("j", j), attrs.value("ell", 0),
+                                                  attrs.value("mask_idx", 0));
+            } else {
+                throw runtime_error("encode_pt: unknown ParLowerDiagCCMM pt type: " + type);
+            }
+        } else if (op_class == "ParLowerDiagTranspose") {
+            auto* layer = static_cast<ParLowerDiagTranspose*>(layer_ptr);
+            pt =
+                layer->generate_transpose_mask_pt(ckks_ctx, attrs.value("out_diag_idx", 0), attrs.value("mask_idx", 0));
+        } else if (op_class == "ParLowerDiagonalAddPt") {
+            auto* layer = static_cast<ParLowerDiagonalAddPt*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", 0));
+        } else if (op_class == "ParUpperDiagonalPolyActRNGamma") {
+            auto* layer = static_cast<ParUpperDiagonalPolyActRNGamma*>(layer_ptr);
+            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", i),
+                                          attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalPolyActRNPoly") {
+            auto* layer = static_cast<ParUpperDiagonalPolyActRNPoly*>(layer_ptr);
+            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
+                                          attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalPoly") {
+            auto* layer = static_cast<ParUpperDiagonalPoly*>(layer_ptr);
+            if (type == "stockmeyer_coeff_pt") {
+                pt = layer->generate_weight_pt_for_stockmeyer(ckks_ctx, attrs.value("coeff_idx", i),
+                                                              attrs.value("ct_idx", j));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalPoly: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalPolyMultCt") {
+            auto* layer = static_cast<ParUpperDiagonalPolyMultCt*>(layer_ptr);
+            if (type == "one_pt") {
+                pt = layer->generate_one_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
+                                            attrs.value("g", k));
+            } else if (type == "half_pt") {
+                pt = layer->generate_half_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
+                                             attrs.value("g", k));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalPolyMultCt: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalAddPt") {
+            auto* layer = static_cast<ParUpperDiagonalAddPt*>(layer_ptr);
+            if (type == "pt") {
+                pt = layer->generate_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalAddPt: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalMultipleSquare") {
+            auto* layer = static_cast<ParUpperDiagonalMultipleSquare*>(layer_ptr);
+            if (type == "mask_pt") {
+                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalMultipleSquare: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalHeadColSum") {
+            auto* layer = static_cast<ParUpperDiagonalHeadColSum*>(layer_ptr);
+            if (type == "mask_pt") {
+                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalHeadColSum: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalInverseInit") {
+            auto* layer = static_cast<ParUpperDiagonalInverseInit*>(layer_ptr);
+            if (type == "two_pt") {
+                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseInit: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalInverseIter") {
+            auto* layer = static_cast<ParUpperDiagonalInverseIter*>(layer_ptr);
+            if (type == "one_pt") {
+                pt = layer->generate_one_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else if (type == "two_pt") {
+                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalInverseIter: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalGELU") {
+            auto* layer = static_cast<ParUpperDiagonalGELU*>(layer_ptr);
+            if (type == "mask_pt") {
+                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+            } else {
+                throw runtime_error("encode_pt: unknown type for ParUpperDiagonalGELU: " + type);
+            }
+        } else if (op_class == "ParUpperDiagonalLNStats") {
+            auto* layer = static_cast<ParUpperDiagonalLNStats*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
+                                    attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalLNXCentered") {
+            auto* layer = static_cast<ParUpperDiagonalLNXCentered*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
+                                    attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalLNMinimaxInit") {
+            auto* layer = static_cast<ParUpperDiagonalLNMinimaxInit*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
+                                    attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalLNGoldschmidt") {
+            auto* layer = static_cast<ParUpperDiagonalLNGoldschmidt*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
+                                    attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (op_class == "ParUpperDiagonalLNAffine") {
+            auto* layer = static_cast<ParUpperDiagonalLNAffine*>(layer_ptr);
+            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("mb", 0),
+                                    attrs.value("ct_local", j), attrs.value("g", k));
         } else {
             throw runtime_error("encode_pt: unknown op_class: " + op_class);
         }

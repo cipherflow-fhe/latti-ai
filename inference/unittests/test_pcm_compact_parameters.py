@@ -16,6 +16,19 @@ from inference.unittests.test_server_provisioned_runner_generator import _data_w
 
 
 class PCMCompactParametersTest(unittest.TestCase):
+    def test_pdm_encrypted_parameter_tasks_are_rejected_before_export(self):
+        for loading_mode in ['eager', 'runtime_lazy']:
+            with self.subTest(loading_mode=loading_mode), tempfile.TemporaryDirectory(dir='/tmp') as tmp:
+                root = Path(tmp)
+                (root/'task_config.json').write_text(json.dumps({'mat_pack_style': 'par_diagonal_pack'}))
+                (root/'nn_layers_ct_0.json').write_text(json.dumps({'layer': {}}))
+                with self.assertRaisesRegex(ValueError, 'PDM encrypted parameters are unsupported'):
+                    gen_custom_task(str(root), param_name='PN13QP218',
+                                    parameter_mode='encrypted_offline', input_mode='plaintext',
+                                    deployment_mode='server_provisioned_runner',
+                                    parameter_loading_mode=loading_mode, output_dir=str(root/'runner'))
+                self.assertFalse((root/'runner').exists())
+
     def test_affine_provenance_hashes_gamma_and_beta_separately(self):
         from training.nn_tools.feature_mat_h5 import _audit_pcm_parameter_sources
         gamma, beta = np.array([1.0, 2.0]), np.array([0.1, 0.2])

@@ -158,6 +158,9 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
 void InferenceProvisioner::setup_or_load_keys() {
     task_config_ = read_json((server_dir_ / "task_config.json").string());
     ckks_config_ = read_json((server_dir_ / "ckks_parameter.json").string());
+    if (task_config_.value("mat_pack_style", std::string()) == "par_diagonal_pack") {
+        throw std::runtime_error("[Provisioner] PDM encrypted parameters are unsupported; use PCM");
+    }
     const bool use_btp = task_config_.value("use_btp", false);
 
     auto secret_context_path = provisioner_dir_ / "secret_context.bin";

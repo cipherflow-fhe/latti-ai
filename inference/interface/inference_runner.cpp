@@ -113,17 +113,7 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
             if (!context) throw std::runtime_error("[Runner] matrix encode_pt cannot get CKKS context");
             const auto layer_id = attrs.at("layer_id").get<std::string>();
             fhe::CkksPlaintextRingt pt;
-            if (op_class == "ParLowerDiagPCMM" && attrs.at("type") == "mask_wrap_pt") {
-                const auto& layer = matrix_layers->json_layers.at(layer_id);
-                const auto fid = layer.at("feature_input")[0].get<std::string>();
-                const auto& feature = matrix_layers->json_features.at(fid);
-                const auto& head = feature.at("head_shape");
-                const auto sequence_length = head[0].get<uint32_t>() == matrix_layers->head_dim ?
-                    head[1].get<uint32_t>() : head[0].get<uint32_t>();
-                pt = ParLowerDiagPCMM::mask_wrap_for_config(*context,
-                    next_power_of_two(matrix_layers->n_heads), next_power_of_two(sequence_length),
-                    feature.at("level").get<uint32_t>(), attrs.at("i_idx").get<uint32_t>());
-            } else if (op_class == "ParBlockColMajorCPMM") {
+            if (op_class == "ParBlockColMajorCPMM") {
                 const auto& layer = matrix_layers->json_layers.at(layer_id);
                 const auto& feature = matrix_layers->json_features.at(layer.at("feature_input")[0].get<std::string>());
                 const auto level = feature.at("level").get<uint32_t>();
@@ -242,6 +232,9 @@ void InferenceRunner::read_configuration() {
     const auto layers_path = runner_dir_ / "nn_layers_ct_0.json";
     nn_layers_ = std::filesystem::exists(layers_path) ? read_json(layers_path.string()) : json::object();
     pack_style_ = task_config_.value("pack_style", std::string("ordinary"));
+    if (task_config_.value("mat_pack_style", std::string()) == "par_diagonal_pack") {
+        throw std::runtime_error("[Runner] PDM encrypted parameters are unsupported; use PCM");
+    }
 
     if (task_config_.value("deployment_mode", std::string("")) != "server_provisioned_runner") {
         throw std::runtime_error("[Runner] task_config.json is not marked as server_provisioned_runner");
@@ -385,8 +378,7 @@ void InferenceRunner::load() {
         eval_context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(eval_context));
     }
     n_slots_ = eval_context_->get_parameter().get_n() / 2;
-    if (task_config_.value("mat_pack_style", std::string()) == "par_diagonal_pack" ||
-        task_config_.value("mat_pack_style", std::string()) == "par_block_col_major") {
+    if (task_config_.value("mat_pack_style", std::string()) == "par_block_col_major") {
         public_matrix_layers_ = std::make_shared<InitInferenceProcess>(runner_dir_.string(), false);
         public_matrix_layers_->init_parameters(task_config_.value("use_btp", false));
         public_matrix_layers_->load_public_matrix_layers();
@@ -706,15 +698,10 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
         const InputParam& param = param_it->second;
         if (param.is_mat) {
             if (!public_matrix_layers_) throw std::runtime_error("[Runner] unsupported matrix packing style");
-            const bool pcm = task_config_.value("mat_pack_style", std::string()) == "par_block_col_major";
             auto csv = csv_to_array<2>(csv_it->second,
-                pcm ? std::array<uint64_t, 2>{(uint64_t)param.height, (uint64_t)param.width} :
-                      std::array<uint64_t, 2>{(uint64_t)param.width, (uint64_t)param.height});
+                std::array<uint64_t, 2>{(uint64_t)param.height, (uint64_t)param.width});
             FeatureMatEncrypted input(eval_context_.get(), param.level);
-            auto packed = pcm ?
-                input.par_block_col_major_slots(csv, param.matmul_block_size, param.n_heads, param.head_shape[1]) :
-                input.par_diagonal_slots(transpose_2d_array(csv), param.n_heads, param.head_shape,
-                                         true, param.is_transposed);
+            auto packed = input.par_block_col_major_slots(csv, param.matmul_block_size, param.n_heads, param.head_shape[1]);
             if (packed.size() != shape_size(sig)) throw std::runtime_error("[Runner] matrix input count mismatch");
             std::vector<fhe::CkksPlaintextRingt> encoded;
             for (const auto& slots : packed)

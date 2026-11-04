@@ -376,7 +376,6 @@ assert max_abs_error <= 0.2
 
 此前输入加密的 PDM BERT 实测记录在 `/tmp/bert-input-gpu-46xnbh7z/`，两项原始 ONNX logits 为约 `[-3.16095213, 6.08051821]`，PDM GPU 对原始 ONNX 最大绝对误差约 `0.111388695`；PCM ViT 输入加密记录在 `/tmp/vit-pcm-input-gpu-v85qd3zi/`。这些临时目录仅作为本机历史参考，不能替代本次 PCM BERT 的新产物或成为长期测试依赖。
 
-[既有 Transformer 验收报告](../report/transformer_runtime_lazy_acceptance.md) 说明了编译稳定化造成的参考偏差，但其中参数加密运行模式、性能和 `<0.2` 门槛不直接套用于本次输入加密验收。
 
 不承诺 PCM BERT 的精度、bootstrap 数量或性能一定优于 PDM；本规范以完整 PCM 路径、真实 scale/level 契约以及原始 ONNX 误差 ≤ 0.2 作为可判定结果。
 

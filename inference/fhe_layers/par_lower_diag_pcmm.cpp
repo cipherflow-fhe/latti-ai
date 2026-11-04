@@ -171,24 +171,18 @@ ParLowerDiagPCMM::generate_pt_A(CkksContext& ctx, uint32_t mb, uint32_t i, uint3
 }
 
 CkksPlaintextRingt ParLowerDiagPCMM::generate_mask_wrap_pt(CkksContext& ctx, uint32_t i_idx) const {
-    return mask_wrap_for_config(ctx, H_, n_, level_, i_idx);
-}
-
-CkksPlaintextRingt ParLowerDiagPCMM::mask_wrap_for_config(CkksContext& ctx, uint32_t H, uint32_t n,
-                                                         uint32_t level, uint32_t i_idx) {
-    const uint32_t n_slot = ctx.get_parameter().get_n() / 2, segment_len = H * n;
-    assert(i_idx < H - 1);
+    assert(i_idx < H_ - 1);
     uint32_t i = i_idx + 1;
-    vector<double> mask(n_slot, 0.0);
-    for (uint32_t segment_start = 0; segment_start < n_slot; segment_start += segment_len) {
-        for (uint32_t t = 0; t < n; t++) {
-            uint32_t group_start = segment_start + t * H;
-            for (uint32_t h = H - i; h < H; h++) {
+    vector<double> mask(n_slot_, 0.0);
+    for (uint32_t segment_start = 0; segment_start < n_slot_; segment_start += segment_len_) {
+        for (uint32_t t = 0; t < n_; t++) {
+            uint32_t group_start = segment_start + t * H_;
+            for (uint32_t h = H_ - i; h < H_; h++) {
                 mask[group_start + h] = 1.0;
             }
         }
     }
-    return ctx.encode_ringt(mask, ctx.get_parameter().get_q(level - 1));
+    return ctx.encode_ringt(mask, param_.get_q(level_ - 1));
 }
 
 CkksPlaintextRingt ParLowerDiagPCMM::generate_bias_pt(CkksContext& ctx, uint32_t mb, uint32_t r) const {
