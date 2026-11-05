@@ -1331,7 +1331,11 @@ def gen_custom_task(
             for node in feature_id_to_nodes_map[layer_input_feature_ids[0]]:
                 if node.metadata.level > 0:
                     node = drop_level(node, node.metadata.level)
-                layer_output_nodes.append(bootstrap(node))
+                refreshed = bootstrap(node)
+                if use_gpu:
+                    # The v6 GPU bootstrap circuit returns the default CKKS scale.
+                    refreshed.metadata.scale = get_fhe_param().default_scale
+                layer_output_nodes.append(refreshed)
             feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
         elif layer_config['type'] in ('add', 'add2d'):

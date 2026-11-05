@@ -53,6 +53,32 @@ def _data_with_missing_source(mega_ag):
 
 
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_gpu_bootstrap_restores_default_scale_after_natural_square(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features = {name: _feature(level) for name, level in [('input', 2), ('squared', 1), ('output', 12)]}
+            layers = {
+                'square': dict(type='square2d', feature_input=['input'], feature_output=['squared'],
+                               channel_input=1, channel_output=1),
+                'refresh': dict(type='bootstrapping', feature_input=['squared'], feature_output=['output'],
+                                channel_input=1, channel_output=1),
+            }
+            graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
+            config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[1, 1],
+                          task_input_id=['input'], task_output_id=['output'],
+                          task_input_param={'input': features['input']},
+                          task_output_param={'output': features['output']}, use_btp=True)
+            (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+            (root / 'task_config.json').write_text(json.dumps(config))
+            gen_custom_task(str(root), param_name='PN15Default', style='multiplexed', lazy=True)
+            mega = json.loads((root / 'mega_ag.json').read_text())
+            bootstrap = next(op for op in mega['compute'].values() if op['type'] == 'bootstrap')
+            source = mega['data'][bootstrap['inputs'][0]]
+            output = mega['data'][bootstrap['outputs'][0]]
+            self.assertNotEqual(source['scale'], 2.0 ** 40)
+            self.assertEqual(output['scale'], 2.0 ** 40)
+            self.assertEqual(output['level'], 12)
+
     def test_upsample_masks_are_runner_local_in_runtime_lazy(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
