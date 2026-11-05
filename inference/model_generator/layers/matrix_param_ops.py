@@ -10,6 +10,8 @@ from inference.model_generator.layers.encrypted_param_ops import (
 
 
 def custom_compute(*, inputs, output, type, attributes):
+    if type == 'encode_pt' and len(inputs) == 1 and isinstance(inputs[0], fhe.CustomDataNode):
+        output.id = f'{inputs[0].id}/{output.id}'
     if type == 'encode_pt' and len(inputs) == 1 and hasattr(inputs[0], 'matrix_parameter_builder'):
         # The original generator defines the packing; the arithmetic use-site
         # supplies the level needed to encrypt that packed plaintext.
