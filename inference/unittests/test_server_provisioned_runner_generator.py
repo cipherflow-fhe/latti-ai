@@ -53,6 +53,56 @@ def _data_with_missing_source(mega_ag):
 
 
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_adaptive_pool_normalization_is_public_and_preserves_scale(self):
+        for dim in (1, 2):
+            for parameter_mode in ('plaintext_lazy', 'encrypted_offline'):
+                if dim == 1 and parameter_mode == 'encrypted_offline':
+                    continue  # Encrypted Conv1D parameters are unsupported.
+                with self.subTest(dim=dim, parameter_mode=parameter_mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    shape = [16] if dim == 1 else [4, 8]
+                    stride = [4] if dim == 1 else [2, 4]
+                    output_shape = [s // k for s, k in zip(shape, stride)]
+                    features = {
+                        'input': dict(_feature(4), dim=dim, channel=2, shape=shape, skip=[1] * dim,
+                                      invalid_fill=[1] * dim, pack_num=512 if dim == 1 else 256),
+                        'output': dict(_feature(2), dim=dim, channel=2, shape=output_shape, skip=stride,
+                                       invalid_fill=stride, pack_num=512 if dim == 1 else 256),
+                    }
+                    features['hidden'] = dict(features['input'], level=3)
+                    layers = {'pool': dict(type=f'avgpool{dim}d', feature_input=['input'],
+                        feature_output=['output'], channel_input=2, channel_output=2,
+                        kernel_shape=stride, stride=stride, is_adaptive_avgpool=True, is_big_size=False)}
+                    layers['pool']['feature_input'] = ['hidden']
+                    layers = {'conv': dict(type=f'conv{dim}d', feature_input=['input'], feature_output=['hidden'],
+                        channel_input=2, channel_output=2, kernel_shape=[1] * dim, stride=[1] * dim,
+                        groups=1, is_big_size=False), **layers}
+                    graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
+                    config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[4, 8],
+                        task_input_id=['input'], task_output_id=['output'],
+                        task_input_param={'input': features['input']}, task_output_param={'output': features['output']},
+                        use_btp=False)
+                    (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+                    (root / 'task_config.json').write_text(json.dumps(config))
+                    kwargs = dict(parameter_mode=parameter_mode)
+                    if parameter_mode == 'encrypted_offline':
+                        kwargs.update(input_mode='plaintext', deployment_mode='server_provisioned_runner',
+                                      parameter_loading_mode='runtime_lazy')
+                    gen_custom_task(str(root), param_name='PN13Default', style='multiplexed', lazy=True, **kwargs)
+                    mega = json.loads((root / 'mega_ag.json').read_text())
+                    self.assertEqual(_data_with_missing_source(mega), [])
+                    means = [n for n in mega['compute'].values() if n['type'] == 'encode_pt' and
+                             n.get('attributes', {}).get('type') == 'normalization_pt']
+                    self.assertEqual(len(means), 1)
+                    mean = means[0]
+                    self.assertEqual(mean['inputs'], [])
+                    self.assertEqual(mean['attributes']['divisor'], 4 if dim == 1 else 8)
+                    self.assertEqual(mean['attributes']['level'], 3)
+                    self.assertEqual(mega['data'][mean['outputs'][0]]['scale'], float(PN13Default.q[3]))
+                    scales = [mega['data'][idx]['scale'] for idx in mega['outputs']]
+                    self.assertTrue(all(abs(s / (2 ** PN13Default.log_default_scale) - 1) < 1e-10 for s in scales))
+                    self.assertTrue(all(mega['data'][idx]['level'] == 2 for idx in mega['outputs']))
+
     def test_gpu_bootstrap_restores_default_scale_after_natural_square(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

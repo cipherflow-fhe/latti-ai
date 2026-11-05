@@ -795,7 +795,9 @@ def export_h5_from_onnx(
             if verbose:
                 log.info('MultScalar:               %s  <- %s', wp, absorb_paths)
 
-        # bootstrapping / drop_level / add2d / avgpool2d / reshape -> no weights
+        # Pooling generates its public 1/kernel_area plaintext internally.
+        # Do not fold it into adjacent ONNX weights or polynomial coefficients.
+        # bootstrapping / drop_level / add2d / avgpool1d / avgpool2d / reshape -> no weights
 
     # ------------------------------------------------------------------ #
     # 6. Write H5                                                         #

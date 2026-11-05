@@ -912,12 +912,12 @@ def set_level_costs(graph: LayerAbstractGraph):
                 if any(succ.shape[i] < config.block_shape[i] for i in range(succ.dim)):
                     graph.dag.nodes[compute_node]['level_cost'] = 1  # repack needed
                 else:
-                    graph.dag.nodes[compute_node]['level_cost'] = 0
+                    graph.dag.nodes[compute_node]['level_cost'] = 1  # pool normalization
             else:
                 compute_node.is_big_size = False
                 succs_sub = list(graph.dag.successors(succ))
                 if succs_sub and succs_sub[0].layer_type == 'reshape':
-                    graph.dag.nodes[compute_node]['level_cost'] = 0
+                    graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = True
                 else:
                     graph.dag.nodes[compute_node]['level_cost'] = 1
@@ -1034,7 +1034,7 @@ def handle_valid_poly_subgraph(subgraph: nx.DiGraph, use_mpc_refresh: bool = Fal
                     res_node = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
                     if res_node is not None:
                         node.up_scale_str.append(res_node.layer_id)
-                elif node.layer_type in {'avgpool1d', 'avgpool2d', 'mult_coeff'}:
+                elif node.layer_type == 'mult_coeff':
                     res_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
                     if res_node_down is not None and res_node_down.layer_type != 'polyact':
                         node.down_scale_str.append(res_node_down.layer_id)
@@ -1133,12 +1133,6 @@ def set_feature_scales(graph: LayerAbstractGraph):
         if compute.layer_type == 'relu2d' or compute.layer_type == 'mpc_refresh':
             scale = mpc_scale
 
-        elif compute.layer_type in {'avgpool1d', 'avgpool2d'}:
-            kernel_prod = math.prod(compute.kernel_shape)
-            if config.graph_type == 'mpc':
-                scale = 1.0 / kernel_prod
-            elif compute.is_adaptive_avgpool or compute.is_big_size:
-                scale = 1.0 / kernel_prod
         elif compute.layer_type == 'mult_coeff':
             scale = compute.coeff
 
@@ -1156,13 +1150,11 @@ def linear_subgraph_can_absorb_scale(subgraph: nx.DiGraph, use_mpc_refresh: bool
     if use_mpc_refresh:
         layers_to_absorb = ['bootstrapping']
     else:
-        layers_to_absorb = ['avgpool1d', 'avgpool2d', 'mult_coeff']
+        layers_to_absorb = ['mult_coeff']
 
     for node in subgraph.nodes:
         if isinstance(node, ComputeNode):
             if node.layer_type in layers_to_absorb:
-                if isinstance(node, PoolComputeNode) and (not node.is_adaptive_avgpool) and (not node.is_big_size):
-                    continue
                 target_node_down = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.DOWN)
                 target_node_up = find_absorbable_layer_in_linear_subgraph(subgraph, node, Direction.UP)
                 if target_node_down is None and target_node_up is None:

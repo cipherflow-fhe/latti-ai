@@ -27,6 +27,7 @@
 
 class Avgpool2DLayer : public Layer {
 public:
+    static ls::CkksPlaintext normalization_pt(ls::CkksContext& ctx, uint32_t divisor, uint32_t level);
     using Layer::prepare_weight;
     using Layer::prepare_weight_lazy;
 

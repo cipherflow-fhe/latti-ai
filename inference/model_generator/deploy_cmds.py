@@ -1571,7 +1571,7 @@ def gen_custom_task(
                     input_args.append(Argument(f'repack_mask_{layer_id}', [repack_mask_pt]))
             else:
                 if is_adaptive:
-                    # level_cost=0: only rotations + adds, normalization absorbed into adjacent layers
+                    # level_cost=1: pooling normalizes internally before returning
                     if style == 'ordinary':
                         layer_output_nodes = avgpool.call(feature_id_to_nodes_map[layer_input_feature_ids[0]])
                     else:

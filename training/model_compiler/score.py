@@ -1562,7 +1562,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count_interleaved(n_input_ct, n, self.input_mult_level)
             if is_adaptive:
                 if style == 'ordinary':
-                    return layer.get_fhe_op_count(n_input_ct, n, self.input_mult_level)
+                    return layer.get_fhe_op_count(n_input_ct, self.input_mult_level)
                 else:
                     return layer.get_fhe_op_count_adaptive(n_input_ct, n_in, self.input_mult_level)
             else:

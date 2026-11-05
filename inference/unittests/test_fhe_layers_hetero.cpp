@@ -757,15 +757,32 @@ public:
         auto start_time = std::chrono::high_resolution_clock::now();
         uint64_t result;
         std::string processor_type;
+        std::unordered_map<std::string, ExecutorFunc> executors;
+        executors["encode_pt"] = [](ExecutionContext& exec_ctx, std::unordered_map<NodeId, std::any>& local_data,
+                                    const ComputeNode& self) {
+            const auto& attrs = self.custom_prop->attributes;
+            auto* ctx = exec_ctx.get_arithmetic_context<CkksContext>();
+            const auto op_class = attrs.at("op_class").get<string>();
+            if (attrs.at("type") != "normalization_pt" ||
+                (op_class != "Avgpool1DLayer" && op_class != "Avgpool2DLayer"))
+                throw runtime_error("unsupported encode_pt in pooling fixture");
+            const auto divisor = attrs.at("divisor").get<uint32_t>();
+            const auto level = attrs.at("level").get<uint32_t>();
+            auto pt = op_class == "Avgpool1DLayer" ? Avgpool1DLayer::normalization_pt(*ctx, divisor, level)
+                                                   : Avgpool2DLayer::normalization_pt(*ctx, divisor, level);
+            local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
+        };
 
         if constexpr (is_same_v<T, ProcessorCpu>) {
             processor_type = "CPU";
             FheTaskCpu fhe_task(project_path.string());
+            fhe_task.bind_custom_executors(executors);
             result = fhe_task.run(&context, cxx_args);
 #ifdef INFERENCE_SDK_ENABLE_GPU
         } else if constexpr (is_same_v<T, ProcessorGpu>) {
             processor_type = "GPU";
             FheTaskGpu fhe_task(project_path.string());
+            fhe_task.bind_custom_executors(executors);
             result = fhe_task.run(&context, cxx_args);
 #endif
         }
@@ -5628,10 +5645,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
         // No prepare_weight needed for adaptive avgpool
         Avgpool2DLayer avgpool(input_shape, stride);
 
-        // Pre-allocate output — NO level consumed (no mult/rescale), same number of CTs
-        Feature2DEncrypted output_feature(&this->context, init_level);
+        // Normalization consumes one level, with the same number of CTs.
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
             output_feature.data.back().set_scale(this->param.default_scale());
         }
 
@@ -5716,7 +5733,14 @@ TEST_CASE("rectangular_adaptive_avgpool", "[spatial]") {
         Feature2DEncrypted input(&ctx, 1, skip);
         input.pack_multiplexed(values, param.default_scale());
         Avgpool2DLayer layer(shape, stride);
-        auto output = layer.run_adaptive_avgpool(ctx, input).unpack_multiplexed();
+        const auto pt = Avgpool2DLayer::normalization_pt(ctx, prod(stride), input.level);
+        REQUIRE(pt.scale() == Approx(param.q()[input.level]));
+        auto encrypted_output = layer.run_adaptive_avgpool(ctx, input);
+        REQUIRE(encrypted_output.level == input.level - 1);
+        REQUIRE(encrypted_output.data[0].scale() == Approx(input.data[0].scale()).epsilon(1e-10));
+        auto output = encrypted_output.unpack_multiplexed();
+        layer.prepare_weight(param, input.n_channel_per_ct, input.n_channel, input.level, skip, shape);
+        auto multiplexed = layer.run_multiplexed_avgpool(ctx, input).unpack_multiplexed();
         for (uint32_t channel = 0; channel < 8; ++channel) {
             for (uint32_t h = 0; h < shape[0] / stride[0]; ++h) {
                 for (uint32_t w = 0; w < shape[1] / stride[1]; ++w) {
@@ -5724,10 +5748,55 @@ TEST_CASE("rectangular_adaptive_avgpool", "[spatial]") {
                     for (uint32_t dh = 0; dh < stride[0]; ++dh)
                         for (uint32_t dw = 0; dw < stride[1]; ++dw)
                             expected += values.get(channel, h * stride[0] + dh, w * stride[1] + dw);
+                    expected /= prod(stride);
                     REQUIRE(std::abs(output.get(channel, h, w) - expected) < 1e-4);
+                    REQUIRE(std::abs(multiplexed.get(channel, h, w) - expected) < 1e-4);
                 }
             }
         }
+    }
+}
+
+TEST_CASE("adaptive_avgpool1d_normalization", "[spatial]") {
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const uint32_t shape = 16, stride = 4, channels = 8;
+    auto values = gen_random_array<2>({channels, shape}, 2.0);
+    Feature1DEncrypted input(&ctx, 2);
+    input.pack_multiplexed(values, param.default_scale());
+    Avgpool1DLayer layer(shape, stride);
+    const auto pt = Avgpool1DLayer::normalization_pt(ctx, stride, input.level);
+    REQUIRE(pt.scale() == Approx(param.q()[input.level]));
+    auto result = layer.run_adaptive_avgpool(ctx, input);
+    REQUIRE(result.level == input.level - 1);
+    REQUIRE(result.data[0].scale() == Approx(input.data[0].scale()).epsilon(1e-10));
+    auto output = result.unpack_multiplexed();
+    auto expected = layer.run_plaintext(values);
+    REQUIRE(compare(expected, output).max_error < 1e-4);
+    layer.prepare_weight(param, input.n_channel_per_ct, channels, input.level, input.skip, shape);
+    auto multiplexed = layer.run_multiplexed_avgpool(ctx, input).unpack_multiplexed();
+    REQUIRE(compare(expected, multiplexed).max_error < 1e-4);
+}
+
+TEST_CASE("split_avgpool_normalization", "[spatial]") {
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const Duo block{32, 256}, expansion{2, 2}, shape = block * expansion;
+    auto values = gen_random_array<3>({2, shape[0], shape[1]}, 1.0);
+    Feature2DEncrypted input(&ctx, 2);
+    input.pack_interleaved(values, block, expansion, param.default_scale());
+    for (const Duo stride : {Duo{2, 2}, Duo{4, 4}}) {
+        Avgpool2DLayer layer(shape, stride);
+        if (stride[0] > expansion[0])
+            layer.prepare_weight_repack(param, input.n_channel, input.level, stride / expansion, block);
+        auto result = layer.run_split_avgpool(ctx, input, expansion);
+        REQUIRE(result.level == input.level - 1);
+        REQUIRE(result.data[0].scale() == Approx(input.data[0].scale()).epsilon(1e-10));
+        auto output = layer.need_repack ? result.unpack_multiplexed()
+                                       : result.unpack_interleaved(block, expansion / stride);
+        REQUIRE(compare(layer.run_plaintext(values), output).max_error < 1e-4);
     }
 }
 
@@ -5747,11 +5816,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "",
 
         Avgpool2DLayer avgpool(block_shape, stride);
 
-        // No level consumed (only adds)
+        // Normalization consumes one level.
         uint32_t out_size = input_feature.data.size() / prod(stride);
-        Feature2DEncrypted output_feature(&this->context, init_level);
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
         for (uint32_t i = 0; i < out_size; i++) {
-            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
             output_feature.data.back().set_scale(this->param.default_scale());
         }
 
@@ -5820,9 +5889,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", He
 
         Avgpool1DLayer avgpool(s, stride);
 
-        Feature1DEncrypted output_feature(&this->context, init_level, skip * stride, stride);
+        Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride, stride);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
             output_feature.data.back().set_scale(this->param.default_scale());
         }
 

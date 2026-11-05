@@ -3826,6 +3826,16 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
         int l = attrs.value("l", 0);
         CkksPlaintext pt;
 
+        if (type == "normalization_pt" && self.input_nodes.empty() &&
+            (op_class == "Avgpool1DLayer" || op_class == "Avgpool2DLayer")) {
+            const auto divisor = attrs.at("divisor").get<uint32_t>();
+            const auto level = attrs.at("level").get<uint32_t>();
+            pt = op_class == "Avgpool1DLayer" ? Avgpool1DLayer::normalization_pt(ckks_ctx, divisor, level)
+                                             : Avgpool2DLayer::normalization_pt(ckks_ctx, divisor, level);
+            local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
+            return;
+        }
+
         if (type == "seed_mask_pt" && self.input_nodes.empty() &&
             (op_class == "MultiplexedConv2DPackedLayerDepthwise" ||
              op_class == "InverseMultiplexedConv2DLayer" ||

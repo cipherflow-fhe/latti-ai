@@ -25,6 +25,8 @@
 #include <stdexcept>
 
 #include "interface/runner_bundle_io.h"
+#include "fhe_layers/avgpool1d_layer.h"
+#include "fhe_layers/avgpool2d_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer_depthwise.h"
 #include "fhe_layers/interleaved_seed.h"
@@ -107,6 +109,18 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
         }
         const auto& attrs = self.custom_prop->attributes;
         const auto op_class = attrs.value("op_class", std::string());
+        if ((op_class == "Avgpool1DLayer" || op_class == "Avgpool2DLayer") &&
+            attrs.value("type", std::string()) == "normalization_pt") {
+            auto* context = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
+            if (!context) throw std::runtime_error("[Runner] pooling encode_pt cannot get CKKS context");
+            const auto divisor = attrs.at("divisor").get<uint32_t>();
+            const auto level = attrs.at("level").get<uint32_t>();
+            auto pt = op_class == "Avgpool1DLayer"
+                ? Avgpool1DLayer::normalization_pt(*context, divisor, level)
+                : Avgpool2DLayer::normalization_pt(*context, divisor, level);
+            local_data[self.output_nodes[0]->id] = std::make_shared<fhe::CkksPlaintext>(std::move(pt));
+            return;
+        }
         if (attrs.contains("layer_id") && matrix_layers) {
             auto* context = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
             if (!context) throw std::runtime_error("[Runner] matrix encode_pt cannot get CKKS context");
