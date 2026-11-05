@@ -1085,7 +1085,7 @@ class FheScoreParam:
         op_counts keys: 'rotate', 'mult_plain', 'mult', 'add', 'rescale'
         """
         preds: list[FeatureNode] = list(self.dag.predecessors(self.compute_node))
-        n = self.input_degree  # poly_modulus_degree = 2*N_slots
+        n = self.parameter.n_slots
         layer_type = self.compute_node.layer_type
         style = config.style
 
@@ -1179,7 +1179,7 @@ class FheScoreParam:
         if kind.startswith('pcm') or kind in {'parcpmm', 'parccmm', 'partranspose'}:
             return self._pcm_parameter_counts(preds)
         return self._build_layer_and_get_op_count(
-            preds, self.input_degree, self.compute_node.layer_type, config.style, encrypted_param_count=True
+            preds, self.parameter.n_slots, self.compute_node.layer_type, config.style, encrypted_param_count=True
         )
 
     def _pcm_parameter_counts(self, preds, level=None):
@@ -1188,7 +1188,7 @@ class FheScoreParam:
         kind = node.layer_type
         runtime_levels = level is not None
         level = self.get_parameter_use_site_level() if level is None else level
-        d, heads, slots = config.matmul_block_size, config.n_heads, self.input_degree//2
+        d, heads, slots = config.matmul_block_size, config.n_heads, self.parameter.n_slots
         rows, cols = preds[0].shape
         hp = 1 << (heads-1).bit_length()
         lanes = min(hp, slots//(d*d))
@@ -1413,7 +1413,7 @@ class FheScoreParam:
             is_depthwise = groups == n_out and groups != 1
 
             if style == 'multiplexed':
-                n_channel_per_ct = math.ceil(n // 2 / input_shape_1d)
+                n_channel_per_ct = math.ceil(n / input_shape_1d)
                 n_packed_in_ch = math.ceil(n_in / n_channel_per_ct)
                 n_packed_out_ch = math.ceil(n_out / n_channel_per_ct)
                 if is_depthwise:
@@ -1442,7 +1442,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'ordinary'
-            n_channel_per_ct = int(n // 2 // input_shape_1d // skip_1d)
+            n_channel_per_ct = int(n // input_shape_1d // skip_1d)
             n_pack_in = math.ceil(n_in / n_channel_per_ct)
             n_packed_out_ch = math.ceil(n_out / (n_channel_per_ct * stride_1d))
             layer = Conv1DPackedLayer(
@@ -1472,7 +1472,7 @@ class FheScoreParam:
                 if not (pred_com and pred.has_sp_info):
                     # call_skip_0d path
                     skip_0d = self.dag.nodes[pred]['skip'][0]
-                    n_channel_per_ct = int(n // 2 // skip_0d)
+                    n_channel_per_ct = int(n // skip_0d)
                     pack_0d = n_channel_per_ct
                     n_packed_in_feat = math.ceil(n_in / n_channel_per_ct)
                     n_packed_out_feat = math.ceil(n_out / n_channel_per_ct)
@@ -1501,7 +1501,7 @@ class FheScoreParam:
                     invalid_fill = sp_info.get('invalid_fill', [1])
                     invalid_fill_1d = int(invalid_fill[0]) if isinstance(invalid_fill, list) else int(invalid_fill)
                     block_size = shape_1d * skip_1d
-                    n_block_per_ct = int(n // 2) // block_size
+                    n_block_per_ct = int(n) // block_size
                     valid_sub = skip_1d // invalid_fill_1d
                     n_channel_per_ct_1d = n_block_per_ct * valid_sub
                     layer = DensePackedLayer(
@@ -1523,7 +1523,7 @@ class FheScoreParam:
                     special_skip = sp_info.get('skip', [1, 1])
                     invalid_fill = sp_info.get('invalid_fill', [1, 1])
                     n_ct_mult = math.ceil(
-                        n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
+                        n / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
                     )
                     layer = DensePackedLayer(
                         n_out,
@@ -1593,7 +1593,7 @@ class FheScoreParam:
             order = getattr(node, 'order', 0)
             if pred.dim == 0:
                 skip_0d = self.dag.nodes[pred]['skip'][0]
-                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                n_channel_per_ct_0d = int(n // skip_0d)
                 layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 n_input_ct = n_packed_in
                 return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
@@ -1602,11 +1602,11 @@ class FheScoreParam:
                 shape_1d = pred.shape[0]
                 skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
                 if style == 'multiplexed':
-                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    n_channel_per_ct_1d = int(n // shape_1d)
                     layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
                     return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
                     else layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level))
-                n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                n_channel_per_ct_1d = int(n // shape_1d // skip_1d)
                 layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
                 return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
                     else layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level))
@@ -1638,7 +1638,7 @@ class FheScoreParam:
             n_cts = self.dag.nodes[preds[0]]['pack_num']
             return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': n_cts, 'rescale': 0}
         elif layer_type == 'pdm_add_pt':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParLowerDiagonalAddPt(
                     shape=tuple(preds[0].shape),
@@ -1652,7 +1652,7 @@ class FheScoreParam:
         elif layer_type == 'pcmgamma':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorPolyActRNGamma(
                     shape=(m, n_cols),
@@ -1667,7 +1667,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmgamma':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyActRNGamma(
@@ -1680,7 +1680,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmupperaddpt':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalAddPt(shape, head_shape, config.n_heads, n_slot)
@@ -1694,7 +1694,7 @@ class FheScoreParam:
             feat = preds[0]
             shape = tuple(feat.shape)
             head_shape = tuple(feat.head_shape) if feat.head_shape is not None else (shape[0], config.matmul_block_size)
-            args = (shape, head_shape, config.n_heads, n // 2)
+            args = (shape, head_shape, config.n_heads, n)
             if layer_type == 'pcmgeneralpoly':
                 layer = ParBlockColMajorPoly(*args, getattr(node, 'order', 15), config.matmul_block_size)
             elif layer_type == 'pcmmulsquare':
@@ -1711,7 +1711,7 @@ class FheScoreParam:
                 layer = ParBlockColMajorPolyMultCt(*args, config.matmul_block_size)
             return layer.get_fhe_op_count(level=self.input_mult_level)
         elif layer_type == 'pdmupperpoly':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPoly(shape, head_shape, config.n_heads, n_slot, getattr(node, 'order', 15))
@@ -1719,7 +1719,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError, RuntimeError):
                 return None
         elif layer_type == 'pdmmulsquare':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalMultipleSquare(shape, head_shape, config.n_heads, n_slot)
@@ -1727,7 +1727,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmheadcolsum':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalHeadColSum(shape, head_shape, config.n_heads, n_slot)
@@ -1735,7 +1735,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdminvinit':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalInverseInit(shape, head_shape, config.n_heads, n_slot)
@@ -1743,7 +1743,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdminviter':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalInverseIter(shape, head_shape, config.n_heads, n_slot)
@@ -1751,7 +1751,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmctmul':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalGELU(shape, head_shape, config.n_heads, n_slot)
@@ -1759,7 +1759,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmupperpolymultct':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyMultCt(shape, head_shape, config.n_heads, n_slot)
@@ -1769,7 +1769,7 @@ class FheScoreParam:
         elif layer_type == 'pcmpoly':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorPolyActRNPoly(
                     shape=(m, n_cols),
@@ -1783,7 +1783,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmpoly':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyActRNPoly(
@@ -1799,7 +1799,7 @@ class FheScoreParam:
         elif layer_type == 'pcmstats':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorLNStats(
                     shape=(m, n_cols),
@@ -1811,7 +1811,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmstats':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParUpperDiagonalLNStats(
                     shape=tuple(preds[0].shape),
@@ -1825,7 +1825,7 @@ class FheScoreParam:
         elif layer_type == 'pcmcenter':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorLNXCentered(
                     shape=(m, n_cols),
@@ -1837,7 +1837,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmcenter':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParUpperDiagonalLNXCentered(
                     shape=tuple(preds[0].shape),
@@ -1851,14 +1851,14 @@ class FheScoreParam:
         elif layer_type == 'pcminit':
             m = preds[0].shape[0]
             block_size = config.matmul_block_size
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n_slot)
                 return layer.get_fhe_op_count(math.ceil(m / block_size), self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdminit':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParUpperDiagonalLNMinimaxInit(
                     shape=tuple(preds[0].shape),
@@ -1880,7 +1880,7 @@ class FheScoreParam:
             )
             m = ordered_preds[0].shape[0]
             block_size = config.matmul_block_size
-            n_slot = n // 2
+            n_slot = n
             level_y = self.dag.nodes[ordered_preds[0]]['level']
             level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
             try:
@@ -1897,7 +1897,7 @@ class FheScoreParam:
                     else 0
                 ),
             )
-            n_slot = n // 2
+            n_slot = n
             level_y = self.dag.nodes[ordered_preds[0]]['level']
             level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
             try:
@@ -1921,7 +1921,7 @@ class FheScoreParam:
             )
             m = ordered_preds[0].shape[0]
             n_cols = ordered_preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             level_x = self.dag.nodes[ordered_preds[0]]['level']
             level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
             try:
@@ -1943,7 +1943,7 @@ class FheScoreParam:
                     else 0
                 ),
             )
-            n_slot = n // 2
+            n_slot = n
             level_x = self.dag.nodes[ordered_preds[0]]['level']
             level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
             try:
@@ -1959,7 +1959,7 @@ class FheScoreParam:
         elif layer_type == 'parcpmm':
             m = preds[0].shape[0]
             n_per_head = preds[0].head_shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorCPMM(
                     shape_A=(m, n_per_head),
@@ -1974,7 +1974,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmpcmm':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParLowerDiagPCMM(
                     shape_X_T=tuple(preds[0].shape),
@@ -1990,7 +1990,7 @@ class FheScoreParam:
         elif layer_type == 'partranspose':
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorTranspose(
                     shape=(m, n_per_head),
@@ -2002,7 +2002,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmtranspose':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParLowerDiagTranspose(
                     shape=tuple(preds[0].head_shape),
@@ -2017,7 +2017,7 @@ class FheScoreParam:
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             p_per_head = preds[1].shape[1] // config.n_heads
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorCCMM(
                     shape_A=(m, n_per_head),
@@ -2030,7 +2030,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmccmm':
-            n_slot = n // 2
+            n_slot = n
             try:
                 edge_indices = {pred: self.dag.edges[pred, node].get('input_index') for pred in preds}
                 ordered_preds = (

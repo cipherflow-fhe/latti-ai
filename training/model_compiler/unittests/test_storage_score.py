@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from components import ConvComputeNode, FeatureNode, LayerAbstractGraph, N16QP1546H192H32, config
+from components import ConvComputeNode, FeatureNode, LayerAbstractGraph, PN15Default, config
 from graph_partition_dp import GraphPartitioner, generate_param_dict_for_graph, get_compute_score
 from score import FheScoreParam, encrypted_parameter_bytes, get_encrypted_parameter_storage_report
 from transforms import insert_drop_level_layers
@@ -36,7 +36,7 @@ from transforms import insert_drop_level_layers
 class StorageScoreTest(unittest.TestCase):
     def setUp(self):
         self.config_before = config.__dict__.copy()
-        config.fhe_param = N16QP1546H192H32
+        config.fhe_param = PN15Default
         config.style = 'multiplexed'
         config.use_gpu = True
         config.encrypted_parameter_storage_weight = 1.0
@@ -90,7 +90,7 @@ class StorageScoreTest(unittest.TestCase):
 
     def test_concat_0d_dense_scores_the_exported_skip_and_sparse_tiles(self):
         config.seed_weight_subgrid_stride = [16, 16]
-        slots = self.params['param0'].poly_modulus_degree // 2
+        slots = self.params['param0'].n_slots
         self.input.dim = self.output.dim = 0
         self.conv.layer_type = 'fc0'
         self.conv.channel_input, self.conv.channel_output = 96, 64
@@ -149,7 +149,7 @@ class StorageScoreTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No encrypted parameter size calibration'):
             encrypted_parameter_bytes(parameter, 3)
         with self.assertRaisesRegex(ValueError, 'Uncalibrated encrypted parameter level'):
-            encrypted_parameter_bytes(self.params['param0'], 12)
+            encrypted_parameter_bytes(self.params['param0'], self.params['param0'].max_level + 1)
 
     def test_seed_weights_use_the_configured_layout_in_both_scores(self):
         from pipeline import set_seed_weight_subgrid_stride
@@ -173,7 +173,7 @@ class StorageScoreTest(unittest.TestCase):
         self.graph.dag.nodes[self.output]['level'] = 7
         self.assertEqual(self.score_param().get_encrypted_param_count(), {11: {'weight': 36}, 8: {'bias': 1}})
         self.assertEqual(self.score_param().get_encrypted_parameter_storage()['bytes'],
-                         36 * 8224800 + 6291485)
+                         36 * encrypted_parameter_bytes(self.params['param0'], 11) + encrypted_parameter_bytes(self.params['param0'], 8))
 
     def test_seed_config_reading_and_pipeline_defaults(self):
         import pipeline

@@ -120,29 +120,29 @@ def set_fhe_param(params):
 
 
 def set_block_shape(params, raw_graph: LayerAbstractGraph):
-    """Set config.block_shape based on the input graph's leading feature node shape and N.
+    """Set config.block_shape based on the input graph's leading feature node shape and real slot capacity.
 
     Rules:
       (0) BERT/feature_mat graphs do not use block_shape-based spatial tiling.
-      (1) If leading node is not 2D, use sqrt(N/2) as a square default.
-      (2) If shape0 * shape1 <= N / 2, block_shape = [shape0, shape1]
+      (1) If leading node is not 2D, use sqrt(n_real_num_slot) as a square default.
+      (2) If shape0 * shape1 <= n_real_num_slot, block_shape = [shape0, shape1]
       (3) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...,
-          until shape0 * shape1 <= N / 2. If this leaves half the slots
+          until shape0 * shape1 <= n_real_num_slot. If this leaves half the slots
           unused, double the width (dimension 1).
     """
-    slot_num = params.poly_modulus_degree
+    slot_num = params.n_slots
     leading_nodes = raw_graph.get_leading_feature_nodes()
     if getattr(config, 'model_type', '') == 'bert' or any(node.data_type == 'feature_mat' for node in leading_nodes):
         config.block_shape = [1, 1]
         return
     if not leading_nodes or len(leading_nodes[0].shape) == 0:
-        side = 1 << (slot_num.bit_length() // 2)
+        side = 1 << ((slot_num.bit_length() - 1) // 2)
         config.block_shape = [side, side]
         return
     leading_shape = leading_nodes[0].shape
     block = list(leading_shape)
-    slot_num = params.poly_modulus_degree
-    # threshold = N / 2
+    slot_num = params.n_slots
+    # Threshold is the v6 real slot capacity.
     import math
 
     while math.prod(block) > slot_num:
