@@ -204,7 +204,6 @@ void FeatureMatEncrypted::par_block_col_major_pack(const Array<double, 2>& matri
                                                    uint32_t d,
                                                    uint32_t n_heads,
                                                    uint32_t head_dim,
-                                                   bool is_symmetric,
                                                    double scale_in) {
     shape = {matrix.get_shape()[0], matrix.get_shape()[1]};
     head_shape = {shape[0], head_dim};

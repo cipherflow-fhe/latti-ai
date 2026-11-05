@@ -306,4 +306,4 @@ private:
     std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
 };
 
-ls::CkksPlaintextRingt generate_matrix_parameter(ls::CkksContext& context, Layer* layer, const json& attributes);
+ls::CkksPlaintext generate_matrix_parameter(ls::CkksContext& context, Layer* layer, const json& attributes);

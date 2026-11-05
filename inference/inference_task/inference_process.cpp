@@ -3836,12 +3836,12 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             const auto& step = attrs.at("seed_step");
             const auto mask = interleaved_seed::mask(
                 read_duo("seed_shape"), read_duo("seed_skip"), attrs.at("seed_blocks").get<uint32_t>(),
-                ckks_ctx.parameter().n() / 2,
+                ckks_ctx.parameter().max_slots(),
                 Duo{attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>()},
                 attrs.at("subgrid").get<int>(), DuoInt{step.at(0).get<int>(), step.at(1).get<int>()},
                 attrs.value("mask_kind", string()) == "kernel");
-            pt = fhe_api::encode_ringt(ckks_ctx, mask, ckks_ctx.parameter().get_q(attrs.at("level").get<int>()));
-            output = make_shared<CkksPlaintext>(move(pt));
+            pt = fhe_api::encode_ringt(ckks_ctx, mask, ckks_ctx.parameter().q()[attrs.at("level").get<int>()]);
+            local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
             return;
         }
 
@@ -3872,7 +3872,7 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                 i * prod(skip * stride / external_upsample_factor));
             }
             pt = fhe_api::encode_ringt(ckks_ctx, mask, ckks_ctx.parameter().q()[mask_level]);
-            output = make_shared<CkksPlaintext>(move(pt));
+            local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
             return;
         }
 
