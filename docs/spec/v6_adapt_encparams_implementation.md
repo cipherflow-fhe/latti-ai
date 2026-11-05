@@ -1,8 +1,8 @@
-# v6 语义下移植 encparams 功能与 CIFAR10 GPU lazy 验收规范
+# v6 语义下移植 encparams 功能与六任务 GPU lazy 验收规范
 
 状态：设计规范
-依据：v6 侧 feat/lattisense-adapt 代码、feat/linghm-encparams 功能代码、runs/cifar10/run_pipeline.md（原研究文档已按要求删除）
-目标：在 v6 语义和接口下重新移植 feat/linghm-encparams 的参数加密功能，并用 CIFAR10 的输入加密 GPU lazy 和参数加密 GPU runtime-lazy 两条端到端链路验收。
+依据：v6 侧 feat/lattisense-adapt 代码、feat/linghm-encparams 功能代码、runs/{BERT,cifar10,imagenet,retina,ViT,yolov5}/run_pipeline.md（原研究文档已按要求删除）
+目标：在 v6 语义和接口下重新移植 feat/linghm-encparams 的参数加密功能，并用 BERT、cifar10、imagenet、retina、ViT、yolov5 六个任务的输入加密 GPU lazy 和参数加密 GPU runtime_lazy 共 12 条主链路验收；BERT、ViT 还须复测原文档已有的 PDM 输入加密链路。
 
 ## 1. 范围与不可变原则
 
@@ -19,7 +19,8 @@
 7. 删除 data_compress 和 CkksCompressedCiphertext 路径；密文直接调用 serialize()/deserialize()。
 8. Python layer 的每个 plaintext node 显式写出与 C++ 生成函数相同的 scale、level 和 ringt metadata。
 9. MegaAG node id、task signature index、layer data source 和 feature input/output id 全局唯一。
-10. 只把生成的 task、runner、manifest、性能采样和日志写入 /tmp/ 下的独立验收目录，不覆盖已有 runs/cifar10 产物。
+10. 只把生成的 task、runner、manifest、性能采样和日志写入 /tmp/ 下的独立验收目录，不覆盖 runs/ 下任何已有模型、输入和产物。
+11. 本轮 goal 固定使用现有同态参数；BERT 保持 PN15Default（共轭不变环 N=32768、默认 scale=2^40），不得以提高 N、scale 或模数精度替代算子正确性排查。
 
 本规范不要求在本阶段重写模型结构、改变 activation packing、恢复 v6 已删除的 FPGA/HEonGPU 路径，也不把理论 slot 容量优化当作验收目标。
 
@@ -241,24 +242,59 @@ compiled_mega_ag.json 必须由最终 v6 generator 重新生成；禁止手工�
 
 保留 storage-aware score 和 parameter count，但计数必须使用最终 v6 graph 的 use-site level、密文字节校准和 canonical parameter manifest；不能按旧 N/2 或旧 compressed type 计费。
 
+### 3.3 BERT 在现有同态参数下的数值语义
+
+BERT 固定使用现有 PN15Default，不提高环阶数、默认 scale 或模数精度。先以原始 ONNX 中间结果定位首次偏离，并逐槽检查有效位置与 padding；诊断程序、密钥、CSV 和日志均位于 `/tmp/`。padding mask 必须按实际 token、head 和列范围生成，CKKS 近似噪声不应被当作缺失 mask 的证据。
+
+softmax 必须保留原导出器有限次 Newton 迭代的语义。epsilon/alpha 是收敛控制量，不能作为额外常数加进分母。若分母放大 s 倍，倒数状态须同步表示为 a/s，首步为 `2/s - b_scaled/s²`，后续仍执行 `a_scaled * (2 - b_scaled * a_scaled)`；不能只缩放分母、继续使用 `2-b_scaled` 初始化。初始信号放大折入指数多项式系数，再执行原有平方，避免用 `65536` 的大常数明文直接乘微小分母。后续归一化在平方前将概率乘以 `sqrt(s)`，平方结果和分母同时带有 s 倍信号；不能在微小平方结果产生后才放大分母、最后再放大概率，否则会同步放大 rescale 的绝对误差。bootstrap 前后仅做互逆的信号缩放，并按迭代次数约束倒数状态幅值；这不改变同态参数或参考模型。
+
+须以 PCM/PDM 数值回归对比原始有限次迭代，并重新执行 BERT 三条完整 GPU 链路；中间层诊断不能替代全部 2 个 CLS logits 的正式验收。
+
+### 3.4 Pooling 类内平均与 level/scale
+
+Avgpool1DLayer/Avgpool2DLayer 的普通、adaptive 和 split 路径必须在类内部返回真正的平均值。对当前支持的非重叠窗口（kernel_shape 等于 stride），二维系数为 `1/(kernel_shape[0]*kernel_shape[1])`，一维系数为 `1/kernel_shape[0]`。旋转求和后，类内乘公开 RingT 明文并 rescale；不得把这一步移到类外，也不得把平均系数吸收到前后 Conv/FC 权重或多项式系数。ONNX 参数提取必须读取取消该吸收后的 weight_scale/coeff_scale，不再对相邻权重重复除以窗口面积。
+
+若乘法输入密文处于 level L、scale S，平均明文的 scale 必须为 `q[L]`（RingT metadata level 为 0），乘法后 scale 为 `S*q[L]`，rescale 后输出 level 为 `L-1`、scale 恢复为 S。Python graph、C++ native、compiler level_cost、bootstrap 调度及算子计分必须一致：原先只求和的路径 level_cost 由 0 改为 1。inputless encode_pt 在输入加密执行器和参数加密 Runner 中均只依赖公开 divisor/level，不能读取明文模型或变成加密模型参数。
+
+普通 multiplexed pooling 的 selection mask 已包含平均系数，保持原有一次乘法/rescale，禁止再次归一化。split repack 路径将平均系数并入类内现有 repack mask，仍只消耗一个 level；无 repack 路径在类内补乘平均明文。须验证矩形窗口、数值均值、scale 保持、level 消耗和不存在悬空 PT source。
+
+回归范围以实际图为准：已验收的 YOLOv5、BERT、ViT 图不调用这些 pooling 类；CIFAR10、ImageNet 的 GlobalAveragePool 使用 adaptive 路径，不能仅因 pack_style=multiplexed 就认定不受影响。CIFAR10、ImageNet、Retina 的两种加密模式都必须重新编译、生成图并完整验收。旧 CNN 结果仅为历史证据，不可代表本次修改后的通过状态。Retina 还需验证 GAP 输出均值在进入 bootstrap 前已恢复到原模型幅值，避免求和放大 256 倍后超出 bootstrap 数值范围。
+
 ## 4. 端到端验收目录和环境
 
 所有验收放入：
 
-    /tmp/v6_adapt_validation/
+    /tmp/v6_six_task_validation/<TASK>/
 
 建议环境变量：
 
     REPO="$(git rev-parse --show-toplevel)"
     PY=/home/linghm/pytorch_venv/bin/python3
     CMAKE=/home/linghm/pytorch_venv/bin/cmake
-    ROOT="/tmp/v6_adapt_validation"
-    MODEL="$REPO/runs/cifar10/model/trained_poly.onnx"
-    INPUT="$REPO/runs/cifar10/img.csv"
+    TASK=cifar10  # 依次取 BERT、cifar10、imagenet、retina、ViT、yolov5
+    DATA="$REPO/runs/$TASK"
+    ROOT="/tmp/v6_six_task_validation/$TASK"
+    MODEL="$DATA/model/trained_poly.onnx"
+    INPUT="$DATA/img.csv"
     export PYTHONPATH="$REPO/inference/lattisense:$REPO"
     export CUDA_VISIBLE_DEVICES=0
     export OMP_NUM_THREADS=8
     export OPENBLAS_NUM_THREADS=8
+
+各任务必须保留原 run_pipeline.md 的配置和输入语义；下文命令以 cifar10 为模板，其余任务按此表替换，并以各自 run_pipeline.md 的完整命令为准：
+
+| 任务 | 模型（相对 DATA） | 输入（相对 DATA） | 输入加密配置 | 参数加密配置 | 参考/输出规则 |
+| --- | --- | --- | --- | --- | --- |
+| BERT | model/trained_poly.onnx | input.csv | BERT_pcm_config.json | BERT_pcm_config.json | evaluate_transformer_onnx_csv.py，onnx.npz，全部 2 个 CLS logits |
+| cifar10 | model/trained_poly.onnx | img.csv | 默认 | storage_aware_config.json | evaluate_onnx_csv.py，onnx.csv，全部 10 个 logits |
+| imagenet | model/trained_poly.onnx | img.csv | 默认 | imagenet_storage_config.json | 全部输出 |
+| retina | model/epoch041.onnx | input_0=img.csv、input_1=non_inv.csv、input_2=inv.csv | 默认 | storage_aware_config.json | 明文与两种 FHE 模式均显式绑定三个输入 |
+| ViT | model/trained_poly.onnx | patch_input.csv | ViT_pcm_config.json | ViT_pcm_config.json | evaluate_transformer_onnx_csv.py，onnx.npz，全部 1970 个输出 |
+| yolov5 | model/best_conv_outputs.onnx | img.csv | 默认 | storage_aware_config.json | 使用原文档三个 --output-map，三个输出全部比较 |
+
+配置文件均位于 training/config/。BERT 和 ViT 的主验收使用 PCM，产物分别位于 task_input_encrypted/pcm 和 task_parameter_encrypted/pcm；两者附加 PDM 输入回归分别使用 BERT_base_config.json、ViT_tiny_config.json，产物位于 task_input_encrypted/pdm。BERT 自定义算子和 attention mask 语义从原图识别，不通过兼容类恢复旧 SDK 行为。
+
+每个 GPU 同时只运行一个推理进程，BERT 等大内存输入加密任务应避免同时挤占主存。测量使用原文档的 OMP_NUM_THREADS=8、OPENBLAS_NUM_THREADS=8；记录具体 GPU、提交、配置、命令和返回码。FHE 时间不含编译、密钥准备、provision 和解密；CPU RSS 为推理进程生命周期最大 RSS，GPU 进程峰值包含预留，池内峰值另列。所有中间日志和采样文件的 cwd/output 必须在 /tmp/ 下。
 
 GPU build 只执行一次：
 
@@ -277,15 +313,15 @@ GPU build 只执行一次：
       --output-csv "$ROOT/reference/onnx.csv" \
       --report "$ROOT/reference/onnx.json"
 
-参考输出保存完整 logits；top-1 只能作为附加信息，不能作为唯一正确性标准。
+参考必须从各任务原始 ONNX 和原始 CSV 重新生成，保存全部输出；top-1 只能作为附加信息，不能作为唯一正确性标准。Retina 比较全部输出，YOLOv5 比较三个输出，BERT 比较 CLS 的全部 2 个 logits，ViT 比较全部 1970 个输出。不得截断输出、只比较单个输出或修改明文参考以迁就 FHE 结果。
 
-## 5. 验收 A：CIFAR10 输入加密 GPU lazy
+## 5. 验收 A：六任务输入加密 GPU lazy
 
 该模式使用 client_encrypted_input。模型参数保持明文/已有 server 路径，客户端加密输入，GPU server 执行 v6 MegaAG graph。lazy 指 graph 的 custom compute 和按需执行路径，不把它解释为 encrypted parameter runtime_lazy。
 
 编译和生成：
 
-    OUT="$ROOT/input_encrypted"
+    OUT="$ROOT/task_input_encrypted"
     mkdir -p "$OUT"
     "$PY" "$REPO/training/run_compile.py" \
       --input "$MODEL" --output "$OUT" --style multiplexed
@@ -313,18 +349,18 @@ GPU 执行：
 
 * compile、MegaAG 生成和 GPU inference return code 都为 0；
 * 输出 CSV 包含完整 logits，输出名和样本索引正确；
-* comparison.json 的 max_abs 小于 0.2；若无历史阈值变化，目标值沿用已有 CIFAR10 流程的 0.2；
+* comparison.json 的全部输出 max_abs 小于 0.2；六个任务及 PDM 回归均不放宽该阈值；
 * task graph 中所有 plaintext node 使用 v6 metadata，node id 和 signature index 无重复；
 * n_real_num_slot、feature packing、level 和 scale 在 task JSON 与 C++ runtime 一致；
 * GPU 日志存在 FHE time 和无异常 context/thread 错误。
 
-## 6. 验收 B：CIFAR10 参数加密 GPU runtime-lazy
+## 6. 验收 B：六任务参数加密 GPU runtime_lazy
 
 该模式使用 server_provisioned_runner、encrypted_offline 和 runtime_lazy。输入保持明文；Provisioner 先加密模型参数并导出 Runner bundle；Runner GPU 按需从 encrypted parameter store 读取参数。
 
 编译：
 
-    OUT="$ROOT/parameter_encrypted"
+    OUT="$ROOT/task_parameter_encrypted"
     mkdir -p "$OUT"
     "$PY" "$REPO/training/run_compile.py" \
       --input "$MODEL" --output "$OUT" --style multiplexed \
@@ -386,14 +422,15 @@ Decrypt 和比较：
 
 ## 7. 两种模式的共同回归
 
-完成两条主验收后，执行最小单测集：
+完成全部 12 条主验收和 2 条 PDM 输入回归后，执行最小单测集：
 
     PYTHONPATH="$REPO/inference/lattisense:$REPO" "$PY" -m unittest \
       inference.unittests.test_encrypted_param_count \
       inference.unittests.test_server_provisioned_runner_generator \
       inference.unittests.test_parameter_acceptance_tools \
       inference.unittests.test_interleaved_seed_weights \
-      training.model_compiler.unittests.test_storage_score
+      training.model_compiler.unittests.test_storage_score \
+      training.model_compiler.unittests.test_pool_bootstrap_scale
 
 C++/v6 侧执行已构建的 data struct、FHE layer、heterogeneous GPU 和 runner store tests。具体 test target 以合并分支的 CMake 输出为准，不为本规范新增平行测试框架。
 
@@ -406,30 +443,52 @@ C++/v6 侧执行已构建的 data struct、FHE layer、heterogeneous GPU 和 run
 
 允许出现 polynomial degree 的明确底层适配，不允许把它用于 feature 实数容量。后两条若仍有结果，必须逐项说明为何不属于 v6 迁移残留；默认验收失败。
 
+本轮主仓库 compressed/context 检索无执行路径残留。SDK 基线中的 `fhe_ops_lib/schemes/ckks/ckks.h`、`ckks.cpp` 仅保留已注释的 compressed API 文本，`doc/doc-en/4_API_Reference/4_API_Reference.md`、`doc/doc-zh/4_API参考/4_API参考.md` 为 SDK 历史接口文档；这些命中不参与编译，不作为旧语义兼容实现保留或调用。容量检索中的 `n_rotation // 2` 为卷积核中心，`span // 2` 及 polynomial 的 `n // 2` 为算法循环边界，均不用于 feature 容量。
+
+Pooling 修改的验证证据：`/tmp/v6_six_task_validation/final_python_regressions.log`（41 个测试通过）、`pool_native_regressions.log`（3 个测试、145 个断言通过）、`pool_compile_export_audit.json`（两种模式的 level/scale 与 ONNX 权重导出审计）、`retina/probe_gap_bootstrap/comparison.json`（现有 PN15Default 下全部 512 个 GAP→bootstrap 输出，max_abs=0.000103199）。数据结构与参数 store 分别通过 1、60 个断言。额外执行整个 `[spatial]` 时，原有 `rectangular_polynomial_channel_layout` 在 PN13Default 下出现 `3.01779e-5 > 1e-5` 的严格单测失败，见 `final_spatial_regressions.log`；该多项式路径本次未修改，未调整该测试阈值或同态参数，也不宣称整个 C++ 测试集通过。
+
 ## 8. 证据文件和完成定义
 
 每次验收在本地保留以下证据文件，不纳入 Git commit：
 
-    /tmp/v6_adapt_validation/reference/onnx.csv
-    /tmp/v6_adapt_validation/reference/onnx.json
-    /tmp/v6_adapt_validation/input_encrypted/comparison.json
-    /tmp/v6_adapt_validation/input_encrypted/run/inference.metrics.json
-    /tmp/v6_adapt_validation/parameter_encrypted/comparison.json
-    /tmp/v6_adapt_validation/parameter_encrypted/run/inference.metrics.json
-    /tmp/v6_adapt_validation/parameter_encrypted/bundle.json
-    /tmp/v6_adapt_validation/parameter_encrypted/provision.time
+    /tmp/v6_six_task_validation/<TASK>/reference/onnx.csv
+    /tmp/v6_six_task_validation/<TASK>/reference/onnx.json
+    /tmp/v6_six_task_validation/<TASK>/task_input_encrypted/comparison.json
+    /tmp/v6_six_task_validation/<TASK>/task_input_encrypted/run/inference.metrics.json
+    /tmp/v6_six_task_validation/<TASK>/task_parameter_encrypted/comparison.json
+    /tmp/v6_six_task_validation/<TASK>/task_parameter_encrypted/run/inference.metrics.json
+    /tmp/v6_six_task_validation/<TASK>/task_parameter_encrypted/bundle.json
+    /tmp/v6_six_task_validation/<TASK>/task_parameter_encrypted/provision.time
 
 规范完成必须同时满足：
 
-1. 两条 GPU 端到端命令全部成功。
-2. 两种模式的完整 logits max_abs 都小于 0.2。
+1. 六任务各自的输入加密和参数加密 GPU 链路全部成功（12/12），BERT、ViT 的 PDM 输入加密回归也全部成功（2/2）。
+2. 每条链路的全部输出、全部元素 max_abs 都小于 0.2，输出名、数量和索引与各自原始 ONNX 参考完全对应。
 3. v6 API、plaintext metadata、n_real_num_slot、序列化和共享 context 检查通过。
 4. 参数加密模式确实使用 runtime-lazy，而不是 eager 参数加载。
 5. Runner 安全边界和 public mask/secret material 检查通过。
 6. 没有因 v6 适配而删除 encrypted parameter、seed、storage-aware 或 inputless encode_pt 功能。
 7. 所有修改可由独立 commit 对应到本规范的一个阶段，且没有无关重构。
+8. 六份 run_pipeline.md 的命令和性能表均对应本轮 v6 实测，包含 CPU RSS、GPU 进程/池内峰值、FHE 时间、误差，以及参数加密的 provision 时间和 bundle 字节数。历史旧 SDK 数据不得作为本轮通过证据。
 
-若任一条件失败，保留失败日志和最小复现 task，先修复对应语义层，再重新执行两条完整流程；不能仅通过放宽误差阈值或改写验收产物来“通过”。
+若任一条件失败，保留失败日志和最小复现 task，先修复对应语义层，再重新执行受影响任务的两种完整流程，并复测共享模块影响的其他任务；不能仅通过放宽误差阈值或改写验收产物来“通过”。
+
+### 8.1 六任务 v6 实测结果
+
+本轮证据根目录为 `/tmp/v6_six_task_validation/`。旧 CIFAR10 单任务验证和六份原文档中的旧 SDK 性能不作为本轮验收结果。以下状态只在读取本轮 comparison.json（pass=true）、inference.metrics.json（exit_code=0）及参数模式 bundle/cache 证据后更新。
+
+Pooling 修复源码提交为 `460fa5a60defe4c19ed9d6d4d1bb90634003ec82`，最终 SDK gitlink 为 `83e58218437eee1afb60f47f786e80a020eede63`。`pool_source_provenance.json` 保存受影响源码的 SHA256 和六条 CNN 重跑链路；最终 `acceptance_audit.json` 核对 14 条链路、完整输出数量、结果晚于本轮编译、runtime_lazy 配置、Runner 边界、manifest/signature metadata，以及 canonical_loads 与 bundle 密文数量一致。
+
+本轮 12/12 条主链路、2/2 条 PDM 回归及上述证据审计全部通过，14 条链路最大误差为 `0.04015254092489218 < 0.2`。全程保持现有同态参数；Retina 参数加密重跑的完整输出误差为 `3.262896974964846e-5`。
+
+| 任务 | 输入加密 GPU lazy | 参数加密 GPU runtime_lazy | PDM 输入回归 |
+| --- | --- | --- | --- |
+| BERT | 通过；max_abs=0.0330425，FHE=264.1700s | 通过；max_abs=0.000292991，FHE=809.6290s | 通过；max_abs=0.00418094，FHE=309.4750s |
+| cifar10 | 通过；max_abs=6.39511e-05，FHE=7.7737s | 通过；max_abs=0.000208791，FHE=19.1589s | 不适用 |
+| imagenet | 通过；max_abs=0.000548744，FHE=50.9462s | 通过；max_abs=0.000712488，FHE=77.5889s | 不适用 |
+| retina | 通过；max_abs=3.7592e-06，FHE=276.7090s | 通过；max_abs=3.2629e-05，FHE=1241.0000s | 不适用 |
+| ViT | 通过；max_abs=0.0287025，FHE=138.2260s | 通过；max_abs=0.0401525，FHE=330.0600s | 通过；max_abs=0.000584884，FHE=116.8200s |
+| yolov5 | 通过；max_abs=6.29466e-05，FHE=44.2581s | 通过；max_abs=9.06926e-05，FHE=265.6730s | 不适用 |
 
 ## 9. 非目标和风险
 
