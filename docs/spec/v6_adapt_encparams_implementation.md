@@ -19,7 +19,7 @@
 7. 删除 data_compress 和 CkksCompressedCiphertext 路径；密文直接调用 serialize()/deserialize()。
 8. Python layer 的每个 plaintext node 显式写出与 C++ 生成函数相同的 scale、level 和 ringt metadata。
 9. MegaAG node id、task signature index、layer data source 和 feature input/output id 全局唯一。
-10. 只把最终生成的 task、runner、manifest 和日志写入独立验收目录，不覆盖已有 runs/cifar10 产物。
+10. 只把生成的 task、runner、manifest、性能采样和日志写入 /tmp/ 下的独立验收目录，不覆盖已有 runs/cifar10 产物。
 
 本规范不要求在本阶段重写模型结构、改变 activation packing、恢复 v6 已删除的 FPGA/HEonGPU 路径，也不把理论 slot 容量优化当作验收目标。
 
@@ -188,7 +188,7 @@ task generator 在导出前检查 C++ 规则表、Python node metadata 和 task 
 
 runtime-lazy 只在第一次消费者需要时读取 canonical parameter。共享 seed 只加载一次；不同恢复分支不得原地修改共享 ciphertext。参数 store 必须记录 load、cache hit、eviction 和峰值字节数。
 
-server_provisioned_runner 的 bundle 不包含明文模型参数、secret key 或 secret context。Provisioner 持有明文参数并生成加密参数；Runner 只持有 eval context、task graph 和参数密文；Decryptor 在 provisioner 侧解密输出。
+server_provisioned_runner 的 bundle 不包含明文模型参数、secret key 或 secret context。Provisioner 持有明文参数并生成加密参数；Runner 只持有 eval context、task graph 和参数密文；Decryptor 在 provisioner 侧解密输出。v6 context 序列化不包含 secret key；Provisioner 分别持久化 `eval_context.bin` 和原生 `SecretKey::serialize()` 的 `secret_key.bin`，Decryptor 使用原生 `set_secret_key()` 恢复解密能力，不解析旧 secret context 格式。
 
 ### 2.7 MegaAG 唯一性
 
@@ -245,14 +245,14 @@ compiled_mega_ag.json 必须由最终 v6 generator 重新生成；禁止手工�
 
 所有验收放入：
 
-    runs/cifar10/v6_adapt_validation/
+    /tmp/v6_adapt_validation/
 
 建议环境变量：
 
     REPO="$(git rev-parse --show-toplevel)"
     PY=/home/linghm/pytorch_venv/bin/python3
     CMAKE=/home/linghm/pytorch_venv/bin/cmake
-    ROOT="$REPO/runs/cifar10/v6_adapt_validation"
+    ROOT="/tmp/v6_adapt_validation"
     MODEL="$REPO/runs/cifar10/model/trained_poly.onnx"
     INPUT="$REPO/runs/cifar10/img.csv"
     export PYTHONPATH="$REPO/inference/lattisense:$REPO"
@@ -410,14 +410,14 @@ C++/v6 侧执行已构建的 data struct、FHE layer、heterogeneous GPU 和 run
 
 每次验收在本地保留以下证据文件，不纳入 Git commit：
 
-    runs/cifar10/v6_adapt_validation/reference/onnx.csv
-    runs/cifar10/v6_adapt_validation/reference/onnx.json
-    runs/cifar10/v6_adapt_validation/input_encrypted/comparison.json
-    runs/cifar10/v6_adapt_validation/input_encrypted/run/inference.metrics.json
-    runs/cifar10/v6_adapt_validation/parameter_encrypted/comparison.json
-    runs/cifar10/v6_adapt_validation/parameter_encrypted/run/inference.metrics.json
-    runs/cifar10/v6_adapt_validation/parameter_encrypted/bundle.json
-    runs/cifar10/v6_adapt_validation/parameter_encrypted/provision.time
+    /tmp/v6_adapt_validation/reference/onnx.csv
+    /tmp/v6_adapt_validation/reference/onnx.json
+    /tmp/v6_adapt_validation/input_encrypted/comparison.json
+    /tmp/v6_adapt_validation/input_encrypted/run/inference.metrics.json
+    /tmp/v6_adapt_validation/parameter_encrypted/comparison.json
+    /tmp/v6_adapt_validation/parameter_encrypted/run/inference.metrics.json
+    /tmp/v6_adapt_validation/parameter_encrypted/bundle.json
+    /tmp/v6_adapt_validation/parameter_encrypted/provision.time
 
 规范完成必须同时满足：
 
