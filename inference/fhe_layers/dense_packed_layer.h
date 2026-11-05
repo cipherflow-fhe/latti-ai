@@ -96,7 +96,7 @@ protected:
     uint32_t input_shape_ct_mult[2] = {0, 0};
     int n_block_per_ct = 0;
     int n_block_input = 0;
-    int N_half = 0;
+    int n_real_num_slot = 0;
     Duo special_invalid_fill = {1, 1};
 
     // Cached values for prepare_weight_for_1d_multiplexed

@@ -30,7 +30,7 @@ ParBlockColMajorPolyMultCt::ParBlockColMajorPolyMultCt(const CkksParameter& para
                                                        uint32_t n_heads,
                                                        uint32_t init_level,
                                                        uint32_t block_size)
-    : Layer(param), layout_(shape, head_shape, n_heads, block_size, param.get_n() / 2) {
+    : Layer(param), layout_(shape, head_shape, n_heads, block_size, param.max_slots()) {
     level_ = init_level;
     assert(level_ >= 2);
     n_prepad_ = shape[0];
@@ -53,16 +53,16 @@ vector<double> ParBlockColMajorPolyMultCt::build_constant_vec(double value, uint
     return layout_.constant(ct_index(mb, ct_local), value);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorPolyMultCt::generate_one_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t) const {
-    double D = param_.get_default_scale();
-    double scale = static_cast<double>(param_.get_q(level_ - 1)) / D * static_cast<double>(param_.get_q(level_));
-    return ctx.encode_ringt(build_constant_vec(1.0, mb, ct_local), pcm_checked_scale(scale));
+    double D = param_.default_scale();
+    double scale = static_cast<double>(param_.q()[level_ - 1]) / D * static_cast<double>(param_.q()[level_]);
+    return fhe_api::encode_ringt(ctx, build_constant_vec(1.0, mb, ct_local), pcm_checked_scale(scale));
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorPolyMultCt::generate_half_pt(CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t) const {
-    return ctx.encode_ringt(build_constant_vec(0.5, mb, ct_local), param_.get_default_scale());
+    return fhe_api::encode_ringt(ctx, build_constant_vec(0.5, mb, ct_local), param_.default_scale());
 }
 
 void ParBlockColMajorPolyMultCt::prepare_weight() {
@@ -92,7 +92,7 @@ ParBlockColMajorPolyMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& hal
     assert(x.data.size() == total_cts());
     assert(half_tanh.data.size() == x.data.size());
 
-    double D = param_.get_default_scale();
+    double D = param_.default_scale();
     FeatureMatEncrypted result(&ctx, level_ - 2);
     result.shape = x.shape;
     result.head_shape = x.head_shape;
@@ -102,12 +102,12 @@ ParBlockColMajorPolyMultCt::run(CkksContext& ctx, const FeatureMatEncrypted& hal
     result.data.resize(total_cts());
 
     parallel_for(total_cts(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
-        auto one_mul = ctx_copy.ringt_to_mul(one_pt_[idx], level_);
-        auto x_scaled = ctx_copy.rescale(ctx_copy.mult_plain_mul(x.data[idx], one_mul), D);  // level L-1, scale q_{L-1}
+        const auto& one_mul = (one_pt_[idx]);
+        auto x_scaled = ctx_copy.rescale(ctx_copy.mult(x.data[idx], one_mul));  // level L-1, scale q_{L-1}
         auto half_tanh_drop = ctx_copy.drop_level(half_tanh.data[idx]);
-        auto half_plus = ctx_copy.add_plain_ringt(half_tanh_drop, half_pt_[idx]);  // level L-1, scale D
+        auto half_plus = ctx_copy.add(half_tanh_drop, half_pt_[idx]);  // level L-1, scale D
         auto product = ctx_copy.mult(x_scaled, half_plus);
-        result.data[idx] = ctx_copy.rescale(ctx_copy.relinearize(product), D);  // level L-2, scale D
+        result.data[idx] = ctx_copy.rescale(ctx_copy.relinearize(product));  // level L-2, scale D
     });
 
     result.level = level_ - 2;

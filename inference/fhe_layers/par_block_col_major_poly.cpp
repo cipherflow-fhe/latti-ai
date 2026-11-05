@@ -37,7 +37,7 @@ ParBlockColMajorPoly::ParBlockColMajorPoly(const CkksParameter& param,
                                            uint32_t order_in,
                                            uint32_t block_size)
     : MatPolyBase(param, move(coeffs), init_level, static_cast<int>(order_in)),
-      layout_(shape, head_shape, n_heads, block_size, param.get_n() / 2) {
+      layout_(shape, head_shape, n_heads, block_size, param.max_slots()) {
     assert(order > 0);
     assert(coeffs_.get_shape()[0] == order + 1);
 
@@ -68,7 +68,7 @@ vector<double> ParBlockColMajorPoly::build_coeff_vec(uint32_t coeff_idx, uint32_
     return vec;
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParBlockColMajorPoly::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int coeff_idx, int ct_idx) const {
     assert(coeff_idx >= 0 && coeff_idx <= order);
     assert(ct_idx >= 0 && static_cast<uint32_t>(ct_idx) < total_cts());
@@ -76,8 +76,7 @@ ParBlockColMajorPoly::generate_weight_pt_for_stockmeyer(CkksContext& ctx, int co
     uint32_t mb = static_cast<uint32_t>(ct_idx) / cts_per_mb_;
     uint32_t ct_local = static_cast<uint32_t>(ct_idx) % cts_per_mb_;
     double pack_scale = cached_stockmeyer_coeff_scale.at(coeff_idx);
-    return ctx.encode_ringt(build_coeff_vec(static_cast<uint32_t>(coeff_idx), mb, ct_local),
-                            pcm_checked_scale(pack_scale));
+    return fhe_api::encode_ringt(ctx, build_coeff_vec(static_cast<uint32_t>(coeff_idx), mb, ct_local), pcm_checked_scale(pack_scale));
 }
 
 void ParBlockColMajorPoly::prepare_weight() {
@@ -141,20 +140,19 @@ vector<CkksCiphertext> ParBlockColMajorPoly::run_core_stockmeyer(CkksContext& ct
             if (target_level < 0) {
                 throw runtime_error("ParBlockColMajorPoly Stockmeyer " + label + ": negative target level");
             }
-            while (ct.get_level() > target_level) {
+            while (ct.level() > target_level) {
                 ct = ctx_copy.drop_level(ct);
             }
-            if (ct.get_level() != target_level) {
+            if (ct.level() != target_level) {
                 throw runtime_error("ParBlockColMajorPoly Stockmeyer " + label + ": cannot raise level from " +
-                                    to_string(ct.get_level()) + " to " + to_string(target_level));
+                                    to_string(ct.level()) + " to " + to_string(target_level));
             }
             return ct;
         };
 
         auto square_power = [&](int power, int half_power) {
             auto half = x_powers.at(half_power).copy();
-            x_powers[power] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(half, half)),
-                                               ctx_copy.get_parameter().get_default_scale());
+            x_powers[power] = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(half, half)));
             if (x_powers[power].is_empty()) {
                 throw runtime_error("ParBlockColMajorPoly Stockmeyer: x^" + to_string(power) +
                                     " is empty after computation");
@@ -170,7 +168,8 @@ vector<CkksCiphertext> ParBlockColMajorPoly::run_core_stockmeyer(CkksContext& ct
             square_power(power, info.decomp_a);
         }
 
-        auto get_coeff_mul = [&](int coeff_idx, int level) {
+        CkksPlaintext generated_coeff_pt;
+        auto get_coeff_mul = [&](int coeff_idx, int level) -> const CkksPlaintext& {
             auto it = cached_stockmeyer_level_order.find(coeff_idx);
             if (it == cached_stockmeyer_level_order.end() || it->second != level) {
                 throw runtime_error("ParBlockColMajorPoly Stockmeyer: coeff " + to_string(coeff_idx) +
@@ -180,25 +179,25 @@ vector<CkksCiphertext> ParBlockColMajorPoly::run_core_stockmeyer(CkksContext& ct
             }
 
             if (stockmeyer_weight_pt_.empty()) {
-                auto coeff_pt_rt = generate_weight_pt_for_stockmeyer(ctx_copy, coeff_idx, x_idx);
-                return ctx_copy.ringt_to_mul(coeff_pt_rt, level);
+                generated_coeff_pt = generate_weight_pt_for_stockmeyer(ctx_copy, coeff_idx, x_idx);
+                return generated_coeff_pt;
             }
-            return ctx_copy.ringt_to_mul(stockmeyer_weight_pt_[coeff_idx][x_idx], level);
+            return (stockmeyer_weight_pt_[coeff_idx][x_idx]);
         };
 
         auto add_const_coeff = [&](const CkksCiphertext& acc, int coeff_idx) -> CkksCiphertext {
             if (stockmeyer_weight_pt_.empty()) {
                 auto coeff_pt = generate_weight_pt_for_stockmeyer(ctx_copy, coeff_idx, x_idx);
-                return ctx_copy.add_plain_ringt(acc, coeff_pt);
+                return ctx_copy.add(acc, coeff_pt);
             }
-            return ctx_copy.add_plain_ringt(acc, stockmeyer_weight_pt_[coeff_idx][x_idx]);
+            return ctx_copy.add(acc, stockmeyer_weight_pt_[coeff_idx][x_idx]);
         };
 
         auto multiply_plain_term = [&](const CkksCiphertext& power_ct, int coeff_idx, int mult_level,
                                        double target_scale, const string& label) -> CkksCiphertext {
             auto power_copy = drop_to_level(power_ct.copy(), mult_level, label + "_power");
-            auto coeff_pt = get_coeff_mul(coeff_idx, power_copy.get_level());
-            auto term = ctx_copy.rescale(ctx_copy.mult_plain_mul(power_copy, coeff_pt), target_scale);
+            const auto& coeff_pt = get_coeff_mul(coeff_idx, power_copy.level());
+            auto term = ctx_copy.rescale(ctx_copy.mult(power_copy, coeff_pt));
             if (term.is_empty()) {
                 throw runtime_error("ParBlockColMajorPoly Stockmeyer: empty term in " + label);
             }
@@ -261,12 +260,12 @@ vector<CkksCiphertext> ParBlockColMajorPoly::run_core_stockmeyer(CkksContext& ct
 
             if (base + 3 <= order) {
                 double c3x_scale =
-                    (target_scale / stockmeyer_powers.at(2).scale) * ctx_copy.get_parameter().get_q(target_level + 1);
+                    (target_scale / stockmeyer_powers.at(2).scale) * ctx_copy.parameter().q()[target_level + 1];
                 auto c3x = multiply_plain_term(x_powers.at(1), base + 3, target_level + 2, c3x_scale,
                                                "P" + to_string(baby_idx) + "_c3x");
                 auto x2_for_c3 =
                     drop_to_level(x_powers.at(2).copy(), target_level + 1, "P" + to_string(baby_idx) + "_x2_for_c3");
-                auto c3x3 = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(c3x, x2_for_c3)), target_scale);
+                auto c3x3 = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(c3x, x2_for_c3)));
                 if (c3x3.is_empty()) {
                     throw runtime_error("ParBlockColMajorPoly Stockmeyer: empty cubic term in P" + to_string(baby_idx));
                 }
@@ -308,10 +307,10 @@ vector<CkksCiphertext> ParBlockColMajorPoly::run_core_stockmeyer(CkksContext& ct
             CkksCiphertext term;
             if (right.has_ct) {
                 auto right_copy = drop_to_level(right.ct.copy(), mult_level, label + "_right");
-                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(right_copy, power_copy)), left.target_scale);
+                term = ctx_copy.rescale(ctx_copy.relinearize(ctx_copy.mult(right_copy, power_copy)));
             } else if (right.const_only) {
-                auto coeff_pt = get_coeff_mul(right.const_coeff_idx, power_copy.get_level());
-                term = ctx_copy.rescale(ctx_copy.mult_plain_mul(power_copy, coeff_pt), left.target_scale);
+                const auto& coeff_pt = get_coeff_mul(right.const_coeff_idx, power_copy.level());
+                term = ctx_copy.rescale(ctx_copy.mult(power_copy, coeff_pt));
             } else {
                 throw runtime_error("ParBlockColMajorPoly Stockmeyer: empty right node in " + label);
             }
@@ -389,7 +388,7 @@ FeatureMatEncrypted ParBlockColMajorPoly::run_stockmeyer(CkksContext& ctx, const
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.data = run_core_stockmeyer(ctx, x.data);
-    result.level = result.data[0].get_level();
+    result.level = result.data[0].level();
     return result;
 }
 

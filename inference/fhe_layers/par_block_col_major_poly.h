@@ -40,7 +40,7 @@ public:
     void prepare_weight() override;
     void prepare_weight_lazy() override;
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_stockmeyer(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
+    ls::CkksPlaintext generate_weight_pt_for_stockmeyer(ls::CkksContext& ctx, int coeff_idx, int ct_idx) const;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     FeatureMatEncrypted run_stockmeyer(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
@@ -53,7 +53,7 @@ public:
 private:
     ParBlockColMajorLayout layout_;
     uint32_t n_prepad_, total_cols_, m_prepad_, m_, cts_per_mb_, n_mb_;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> stockmeyer_weight_pt_;
+    std::vector<std::vector<ls::CkksPlaintext>> stockmeyer_weight_pt_;
 
     uint32_t ct_index(uint32_t mb, uint32_t ct_local) const;
     uint32_t total_cts() const;

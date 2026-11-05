@@ -63,7 +63,7 @@ private:
 
     uint32_t m_, n_, p_;
     uint32_t d_;           // block size (matrix dimension within block)
-    uint32_t n_slot_;      // N
+    uint32_t n_slot_;      // n_real_num_slot
     uint32_t chunk_size_;  // k*k
     uint32_t num_chunks_;  // n_slot_ / chunk_size_
     uint32_t num_block_rows_A_, num_block_cols_A_;

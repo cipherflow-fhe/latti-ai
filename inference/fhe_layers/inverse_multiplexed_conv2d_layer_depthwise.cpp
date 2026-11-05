@@ -75,7 +75,7 @@ InverseMultiplexedConv2DLayerDepthwise::InverseMultiplexedConv2DLayerDepthwise(c
     seed_weight_subgrid_stride_ = seed_weight_subgrid_stride_in;
     canonical_seed_kernels_ = canonical_seed_kernels;
     use_seed_weight_pack_ = interleaved_seed::valid_stride(seed_weight_subgrid_stride_, block_shape);
-    N = param_in.n();
+    n_real_num_slot = param_in.max_slots();
 }
 
 void InverseMultiplexedConv2DLayerDepthwise::prepare_weight() {
@@ -110,7 +110,7 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
     cached_total_block_size = prod(block_shape);
     if (need_repack) {
         Duo out_skip = block_shape / (input_shape_ / stride_);
-        vector<double> mask_vec(N, 0.0);
+        vector<double> mask_vec(n_real_num_slot, 0.0);
         for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
             for (uint32_t col = 0; col < block_shape[1]; col += out_skip[1]) {
                 mask_vec[row * block_shape[1] + col] = 1.0;
@@ -124,8 +124,8 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
 vector<double> InverseMultiplexedConv2DLayerDepthwise::generate_weight_values_for_indices(int ct_idx, int kernel_index, bool boundary) const {
     const auto position = interleaved_seed::inverse_kernel_position(
         kernel_shape_, ct_stride_, output_step, pad_, kernel_index);
-    vector<double> values(N / 2, 0.0);
-    const auto valid = interleaved_seed::mask(block_shape, {1, 1}, 1, N / 2,
+    vector<double> values(n_real_num_slot, 0.0);
+    const auto valid = interleaved_seed::mask(block_shape, {1, 1}, 1, n_real_num_slot,
                                               {1, 1}, 0, position.step, true);
     const double value = weight_.get(ct_idx, 0, position.kernel[0], position.kernel[1]);
     for (uint32_t i = 0; i < prod(block_shape); ++i) {
@@ -143,9 +143,9 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_see
         throw std::out_of_range("inverse seed index");
     const int count = canonical_seed_kernels_ ? prod(kernel_shape_) : cached_kernel_total_count;
     auto seed = interleaved_seed::pack_kernels(count, seed_kernel, seed_weight_subgrid_stride_,
-        block_shape, {1, 1}, 1, N / 2, [&](int kernel_index) {
+        block_shape, {1, 1}, 1, n_real_num_slot, [&](int kernel_index) {
             if (canonical_seed_kernels_) {
-                vector<double> values(N / 2, 0.0);
+                vector<double> values(n_real_num_slot, 0.0);
                 std::fill_n(values.begin(), prod(block_shape), weight_.get(ct_idx, 0,
                     kernel_index / kernel_shape_[1], kernel_index % kernel_shape_[1]));
                 return values;
@@ -157,7 +157,7 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_see
 
 vector<double> InverseMultiplexedConv2DLayerDepthwise::seed_mask_values(int subgrid, int kernel_index, bool boundary) const {
     const auto step = interleaved_seed::inverse_kernel_position(kernel_shape_, ct_stride_, output_step, pad_, kernel_index).step;
-    return interleaved_seed::mask(block_shape, {1, 1}, 1, N / 2,
+    return interleaved_seed::mask(block_shape, {1, 1}, 1, n_real_num_slot,
                                    seed_weight_subgrid_stride_, subgrid, step, boundary);
 }
 
@@ -169,7 +169,7 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_mask_pt_for_seed_
 
 CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
                                                                                       int out_channel_idx) const {
-    vector<double> bias_vec(N, 0.0);
+    vector<double> bias_vec(n_real_num_slot, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         bias_vec[linear_idx] = bias_.get(out_channel_idx);
     }
@@ -178,7 +178,7 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index
 
 CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_repack_mask_pt(CkksContext& ctx) const {
     Duo out_skip = block_shape / (input_shape_ / stride_);
-    vector<double> mask_vec(N, 0.0);
+    vector<double> mask_vec(n_real_num_slot, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += out_skip[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += out_skip[1]) {
             mask_vec[row * block_shape[1] + col] = 1.0;
@@ -235,8 +235,8 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
     });
 
     int n_channel_per_ct_out;
-    if (2 * prod(input_shape_ / ct_stride_) < N) {
-        n_channel_per_ct_out = N / (2 * prod(input_shape_ / ct_stride_));
+    if (prod(input_shape_ / ct_stride_) < n_real_num_slot) {
+        n_channel_per_ct_out = n_real_num_slot / (prod(input_shape_ / ct_stride_));
     } else {
         n_channel_per_ct_out = 1;
     }
@@ -266,7 +266,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
                     auto restored = interleaved_seed::restore_plaintext(ctx_copy, seed,
                         seed_mask_values(subgrid, logical_kernel, false), seed_mask_values(subgrid, logical_kernel, true),
                         block_shape, {1, 1}, seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
-                    auto mul_pt = restored;
+                    const auto& mul_pt = restored;
                     auto term = ctx_copy.mult(rotated_x[ct_idx][k + base_idx], mul_pt);
                     if (k == 0) s = move(term);
                     else s = ctx_copy.add(s, term);
@@ -306,7 +306,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
     if (need_repack) {
         Duo out_skip = block_shape / (input_shape_ / stride_);
         uint32_t n_channel_per_block = prod(out_skip);
-        uint32_t n_block_per_ct_out = (N) / prod(block_shape);
+        uint32_t n_block_per_ct_out = (n_real_num_slot) / prod(block_shape);
         uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
         uint32_t n_out_ct = div_ceil(n_out_channel_, n_channel_per_ct_repack);
 
@@ -376,12 +376,12 @@ Feature2DEncrypted InverseMultiplexedConv2DLayerDepthwise::run(CkksContext& ctx,
     result.n_channel = n_out_channel_;
     if (need_repack) {
         result.skip = block_shape / result.shape;
-        result.n_channel_per_ct = N / (2 * prod(result.shape));
+        result.n_channel_per_ct = n_real_num_slot / (prod(result.shape));
         result.level = x.level - 2;
     } else {
         result.skip = {1, 1};
-        if (2 * prod(result.shape) < N) {
-            result.n_channel_per_ct = N / (2 * prod(result.shape));
+        if (prod(result.shape) < n_real_num_slot) {
+            result.n_channel_per_ct = n_real_num_slot / (prod(result.shape));
         } else {
             result.n_channel_per_ct = 1;
         }

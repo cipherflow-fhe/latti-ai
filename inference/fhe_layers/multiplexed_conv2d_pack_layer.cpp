@@ -171,7 +171,7 @@ MultiplexedConv2DPackedLayer::MultiplexedConv2DPackedLayer(const CkksParameter& 
     need_repack_ = !(stride_ == Duo{1, 1} && skip_ == Duo{1, 1});
     level_ = level_in;
     weight_scale = param_.q()[level_] * residual_scale;
-    N = param_in.n();
+    n_real_num_slot = param_in.max_slots();
     joint_seed_requests_ = joint_seed_requests;
     if (joint_seed_requests_ && div_ceil(n_out_channel_, n_block_per_ct) * legacy_weight_input_count() * prod(kernel_shape_) == 1)
         use_seed_weight_pack_ = false;
@@ -308,7 +308,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduc
     int kernel_shape_i = kernel_idx / kernel_shape_[1];
     int kernel_shape_j = kernel_idx % kernel_shape_[1];
 
-    vector<double> w(N, 0.0);
+    vector<double> w(n_real_num_slot, 0.0);
     for (int linear_idx = 0; linear_idx < n_block_per_ct * cached_input_block_size; ++linear_idx) {
         int t = linear_idx / cached_input_block_size;
         int shape_linear = linear_idx % cached_input_block_size;
@@ -340,7 +340,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_indices_reduc
 CkksPlaintext MultiplexedConv2DPackedLayer::generate_bias_pt_for_index_reduct_rot(CkksContext& ctx,
                                                                                        int bpt_idx) const {
     // Same layout as post_skip bias: indexed by n_packed_out_channel
-    vector<double> bias_vec(N, 0.0);
+    vector<double> bias_vec(n_real_num_slot, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         int j = linear_idx / (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
         int residual = linear_idx % (input_shape_[0] * skip_[0] * input_shape_[1] * skip_[1]);
@@ -373,7 +373,7 @@ vector<double> MultiplexedConv2DPackedLayer::generate_weight_values_for_indices(
     int packed_in_channel_idx = use_periodic_pack_ ? 0 : j / n_block_per_ct;
     int block_idx = use_periodic_pack_ ? j : j % n_block_per_ct;
     const Duo padding_shape = kernel_shape_ / 2;
-    vector<double> w(N, 0.0);
+    vector<double> w(n_real_num_slot, 0.0);
     int base_channel_in = packed_in_channel_idx * n_channel_per_ct;
     int kernel_shape_i = k / kernel_shape_[1];
     int kernel_shape_j = k % kernel_shape_[1];
@@ -415,7 +415,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_seed_indices(
             throw std::out_of_range("multiplexed joint seed index");
         const uint32_t requests = div_ceil(n_out_channel_, n_block_per_ct) * legacy_weight_input_count() * prod(kernel_shape_);
         auto seed = interleaved_seed::pack_kernels(requests, seed_j, seed_weight_subgrid_stride_,
-            input_shape_, skip_, n_block_per_ct, N / 2, [&](uint32_t u) {
+            input_shape_, skip_, n_block_per_ct, n_real_num_slot, [&](uint32_t u) {
                 const auto kernel = u % prod(kernel_shape_);
                 const auto j = (u / prod(kernel_shape_)) % legacy_weight_input_count();
                 const auto output = u / (prod(kernel_shape_) * legacy_weight_input_count());
@@ -427,7 +427,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_weight_pt_for_seed_indices(
     const uint32_t b = seed_weight_subgrid_stride_[1];
     const uint32_t group = a * b;
     const uint32_t legacy_count = n_packed_in_channel * input_block_count();
-    vector<double> seed(N / 2, 0.0);
+    vector<double> seed(n_real_num_slot, 0.0);
     for (uint32_t sub = 0; sub < group; ++sub) {
         uint32_t legacy_j = seed_j * group + sub;
         if (legacy_j >= legacy_count) continue;
@@ -451,7 +451,7 @@ CkksPlaintext MultiplexedConv2DPackedLayer::generate_bias_pt_for_index(CkksConte
     const Duo input_shape_ct = input_shape_ * skip_;
     const Duo skip_stride = stride_ * skip_;
 
-    vector<double> bias_vec(N, 0.0);
+    vector<double> bias_vec(n_real_num_slot, 0.0);
 
     for (uint32_t linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         const Duo block_pos = div_mod(linear_idx, static_cast<uint32_t>(cached_input_block_size));
@@ -526,12 +526,12 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
 
     const uint32_t legacy_weight_count = legacy_weight_input_count();
     const uint32_t seed_group = prod(seed_weight_subgrid_stride_);
-    auto restored_weight = [&](CkksContext& ctx_copy, int ct_idx, int logical_j,
+    auto weight_term = [&](CkksContext& ctx_copy, int ct_idx, int logical_j,
                                int kernel_idx) {
         const int request = joint_seed_weights() ? (ct_idx * legacy_weight_count + logical_j) * cached_kernel_size + kernel_idx : logical_j;
         const int stored_j = use_seed_weight_pack_ ? request / seed_group : logical_j;
         const auto& stored = weight_pt[joint_seed_weights() ? 0 : ct_idx][stored_j][joint_seed_weights() ? 0 : kernel_idx];
-        if (!use_seed_weight_pack_) return stored;
+        if (!use_seed_weight_pack_) return ctx_copy.mult(rotated_x[logical_j][kernel_idx], stored);
         const int subgrid = request % seed_group;
         const auto subgrid_mask = seed_mask_tensor_for_config(
             input_shape_, skip_, stride_, n_channel_per_ct, external_upsample_factor,
@@ -544,15 +544,14 @@ vector<CkksCiphertext> MultiplexedConv2DPackedLayer::run_core(CkksContext& ctx, 
         auto restored = interleaved_seed::restore_plaintext(
             ctx_copy, stored, subgrid_mask, boundary_mask, input_shape_, skip_,
             seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
-        return restored;
+        return ctx_copy.mult(rotated_x[logical_j][kernel_idx], restored);
     };
 
     parallel_for(div_ceil(n_out_channel_, n_block_per_ct), th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext s;
         for (uint32_t j = 0; j < legacy_weight_count; j++) {
             for (int k = 0; k < cached_kernel_size; k++) {
-                auto w_pt = restored_weight(ctx_copy, ct_idx, j, k);
-                auto res = ctx_copy.mult(rotated_x[j][k], w_pt);
+                auto res = weight_term(ctx_copy, ct_idx, j, k);
                 if (j == 0 && k == 0) {
                     s = move(res);
                 } else {
@@ -672,7 +671,7 @@ MultiplexedConv2DPackedLayer::run_core_for_post_skip_rotation(CkksContext& ctx, 
                         input_shape_, skip_, seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
                 }
                 const CkksPlaintext& w_pt_rt = use_seed_weight_pack_ ? restored : stored;
-                auto w_pt = w_pt_rt;
+                const auto& w_pt = w_pt_rt;
                 res = ctx_copy.mult(rotated_x[j][k], w_pt);
                 if (j == 0 && k == 0) {
                     s = move(res);

@@ -51,8 +51,8 @@ public:
     ls::CkksPlaintext generate_repack_mask_pt(ls::CkksContext& ctx) const;
     std::vector<uint32_t> get_used_input_indices() const;
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_seed_indices(ls::CkksContext& ctx, int ct_idx, int seed_kernel) const;
-    ls::CkksPlaintextRingt generate_mask_pt_for_seed_indices(ls::CkksContext& ctx, int subgrid,
+    ls::CkksPlaintext generate_weight_pt_for_seed_indices(ls::CkksContext& ctx, int ct_idx, int seed_kernel) const;
+    ls::CkksPlaintext generate_mask_pt_for_seed_indices(ls::CkksContext& ctx, int subgrid,
                                                             int kernel_index, bool boundary) const;
     bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
     uint32_t seed_weight_kernel_count() const {
@@ -66,7 +66,7 @@ public:
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);
 
-    int N;
+    int n_real_num_slot;
     Duo block_shape;
     Duo output_step;
     Duo input_step;

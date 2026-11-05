@@ -119,12 +119,13 @@ std::vector<double> pack_kernels(uint32_t count, uint32_t seed_index, const Duo&
 
 // The C++ layer's CT*PT path restores plaintext slots locally. Encrypted
 // parameters are restored homomorphically by the Python-generated Runner graph.
-inline ls::CkksPlaintextRingt restore_plaintext(ls::CkksContext& ctx, const ls::CkksPlaintextRingt& seed,
+inline ls::CkksPlaintext restore_plaintext(ls::CkksContext& ctx, const ls::CkksPlaintext& seed,
                                                const std::vector<double>& select,
                                                const std::vector<double>& boundary, const Duo& shape,
                                                const Duo& skip, const Duo& stride, int subgrid,
                                                int level, double scale) {
-    auto values = ctx.decode(ctx.ringt_to_pt(seed, level));
+    std::vector<double> values;
+    ctx.decode(seed, values);
     for (size_t i = 0; i < values.size(); ++i) values[i] *= i < select.size() ? select[i] : 0.0;
     const uint32_t residue[2] = {static_cast<uint32_t>(subgrid) / stride[1],
                                 static_cast<uint32_t>(subgrid) % stride[1]};
@@ -139,7 +140,7 @@ inline ls::CkksPlaintextRingt restore_plaintext(ls::CkksContext& ctx, const ls::
         }
     }
     for (size_t i = 0; i < values.size(); ++i) values[i] *= i < boundary.size() ? boundary[i] : 0.0;
-    return ctx.encode_ringt(values, scale);
+    return fhe_api::encode_ringt(ctx, values, scale);
 }
 
 }  // namespace interleaved_seed

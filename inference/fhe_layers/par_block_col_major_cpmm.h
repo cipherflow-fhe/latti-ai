@@ -65,10 +65,10 @@ public:
 
     uint32_t row_chunk_seed_count() const;
     std::vector<double> row_chunk_seed_values(uint32_t seed_id) const;
-    ls::CkksPlaintextRingt generate_row_chunk_seed_pt(ls::CkksContext& ctx, uint32_t seed_id) const;
-    static ls::CkksPlaintextRingt selection_for_config(ls::CkksContext& ctx, uint32_t block_size,
+    ls::CkksPlaintext generate_row_chunk_seed_pt(ls::CkksContext& ctx, uint32_t seed_id) const;
+    static ls::CkksPlaintext selection_for_config(ls::CkksContext& ctx, uint32_t block_size,
         uint32_t n_heads, uint32_t use_site_level, uint32_t position);
-    static ls::CkksPlaintextRingt head0_mask_for_config(ls::CkksContext& ctx, uint32_t block_size,
+    static ls::CkksPlaintext head0_mask_for_config(ls::CkksContext& ctx, uint32_t block_size,
         uint32_t n_heads, uint32_t use_site_level);
 
     bool has_bias() const {

@@ -39,7 +39,7 @@ public:
     static int compute_stockmeyer_horner_level_cost(int order, int baby_steps = 8);
 
 protected:
-    int N = 0;
+    int n_real_num_slot = 0;
     int order = 0;
     Array<double, 2> coeffs_;
 

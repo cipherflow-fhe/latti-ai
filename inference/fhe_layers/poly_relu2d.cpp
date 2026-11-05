@@ -114,7 +114,7 @@ void PolyRelu2D::prepare_weight_lazy() {
 
 CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
-    vector<double> feature_tmp_pack(N, 0.0);
+    vector<double> feature_tmp_pack(n_real_num_slot, 0.0);
 
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         int block_i = linear_idx / (block_shape[0] * block_shape[1]);
@@ -145,7 +145,7 @@ PolyRelu2D::generate_weight_pt_for_indices(CkksContext& ctx, int idx, int n_pack
 
 CkksPlaintext
 PolyRelu2D::generate_weight_pt_for_non_absorb_indices(CkksContext& ctx, int idx, int n_packed_out_channel_idx) const {
-    vector<double> feature_tmp_pack(N, 0.0);
+    vector<double> feature_tmp_pack(n_real_num_slot, 0.0);
     if (is_ordinary_pack) {
         for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
             int channel_idx = n_packed_out_channel_idx * n_channel_per_ct + ch;
@@ -421,7 +421,7 @@ PolyRelu2D::generate_weight_pt_for_bsgs(CkksContext& ctx, int idx, int n_packed_
 vector<double> PolyRelu2D::generate_weight_values_for_bsgs(int idx, int n_packed_out_channel_idx) const {
     if (idx < 0 || idx > order || n_packed_out_channel_idx < 0 || n_packed_out_channel_idx >= cached_n_packed_out_channel)
         throw std::out_of_range("polynomial coefficient index");
-    vector<double> feature_tmp_pack(N / 2, 0.0);
+    vector<double> feature_tmp_pack(n_real_num_slot, 0.0);
 
     if (is_ordinary_pack) {
         for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
@@ -461,7 +461,7 @@ void PolyRelu2D::validate_seed_geometry(const Duo& shape, const Duo& skip_in, ui
     const Duo seed_shape{block_shape[0] / skip[0], block_shape[1] / skip[1]};
     if (is_ordinary_pack || zero_skip != Duo{1, 1} ||
         seed_shape != shape || skip != skip_in || blocks != static_cast<uint32_t>(n_block_per_ct) ||
-        slots != N / 2 || groups != cached_n_packed_out_channel ||
+        slots != n_real_num_slot || groups != cached_n_packed_out_channel ||
         use_site_level != cached_bsgs_level_order.at(degree))
         throw std::invalid_argument("polynomial seed metadata does not match layer");
 }
@@ -473,7 +473,7 @@ CkksPlaintext PolyRelu2D::generate_channel_seed(CkksContext& ctx, int degree, in
     if (seed < 0 || seed >= static_cast<int>(div_ceil(cached_n_packed_out_channel, prod(stride))))
         throw std::out_of_range("polynomial seed index");
     auto values = interleaved_seed::pack_kernels(cached_n_packed_out_channel, seed, stride, seed_shape, skip,
-        n_block_per_ct, N / 2, [&](uint32_t group) { return generate_weight_values_for_bsgs(degree, group); });
+        n_block_per_ct, n_real_num_slot, [&](uint32_t group) { return generate_weight_values_for_bsgs(degree, group); });
     return fhe_api::encode_ringt(ctx, values, cached_bsgs_coeff_scale.at(degree));
 }
 

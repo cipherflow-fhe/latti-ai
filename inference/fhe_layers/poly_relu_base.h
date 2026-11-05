@@ -52,7 +52,7 @@ public:
     virtual ls::CkksPlaintext generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int ct_idx) const = 0;
 
 protected:
-    int N;
+    int n_real_num_slot;
     int cached_channel;
 
     // BSGS infrastructure
@@ -79,10 +79,10 @@ protected:
 
 class PolyRelu0D : public PolyReluBase {
 public:
-    // n_channel_per_ct is derived from skip_in: N / skip_in
+    // n_channel_per_ct is derived from skip_in: n_real_num_slot / skip_in
     // This matches both encoding cases:
-    //   Case 1 (Feature0DEncrypted::pack): n_channel_per_ct = N / skip
-    //   Case 2 (ReshapeLayer):             n_channel_per_ct = N / (shape[0]*skip2d[0]*shape[1]*skip2d[1])
+    //   Case 1 (Feature0DEncrypted::pack): n_channel_per_ct = n_real_num_slot / skip
+    //   Case 2 (ReshapeLayer):             n_channel_per_ct = n_real_num_slot / (shape[0]*skip2d[0]*shape[1]*skip2d[1])
     PolyRelu0D(const ls::CkksParameter& param_in,
                Array<double, 2>&& weight_in,
                uint32_t level_in,

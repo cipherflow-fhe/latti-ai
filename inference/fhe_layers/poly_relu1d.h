@@ -25,12 +25,12 @@
 // Two packing modes, matching Feature1DEncrypted::pack / pack_multiplexed:
 //
 //   Mode 1 — skip pack (wasted slots):
-//     n_channel_per_ct = N / (shape * skip)
+//     n_channel_per_ct = n_real_num_slot / (shape * skip)
 //     channel ch (CT-local), position i → slot = ch * shape * skip + i * skip
 //     Remaining (skip-1) slots per position are zero-padded.
 //
 //   Mode 2 — multiplexed/interleaved pack (no wasted slots):
-//     n_channel_per_ct = (N / (shape * skip)) * skip
+//     n_channel_per_ct = (n_real_num_slot / (shape * skip)) * skip
 //     channel j (CT-local), position i → slot = (j/skip)*shape*skip + i*skip + (j%skip)
 //     Each block of (shape*skip) slots carries `skip` channels interleaved.
 //
@@ -40,7 +40,7 @@ class PolyRelu1D : public PolyReluBase {
 public:
     // skip_in   : skip of the Feature1DEncrypted
     // shape_in  : shape of the Feature1DEncrypted
-    // For mode 1: n_channel_per_ct = N / (shape*skip)
+    // For mode 1: n_channel_per_ct = n_real_num_slot / (shape*skip)
     // For mode 2: call prepare_weight_bsgs_mux / prepare_weight_bsgs_mux_lazy instead
     PolyRelu1D(const ls::CkksParameter& param_in,
                Array<double, 2>&& weight_in,

@@ -36,7 +36,7 @@ PolyReluBase::PolyReluBase(const CkksParameter& param_in,
     order = order_in;
     level_ = level_in;
     n_channel_per_ct = n_channel_per_ct_in;
-    N = param_in.n();
+    n_real_num_slot = param_in.max_slots();
     cached_channel = weight.get_shape()[1];
 }
 
@@ -479,7 +479,7 @@ void PolyRelu0D::prepare_weight_0d_skip_lazy() {
 // ---- Mode 1: direct 0D skip pack ----
 
 CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, int ct_idx) const {
-    vector<double> feature_tmp_pack(N, 0.0);
+    vector<double> feature_tmp_pack(n_real_num_slot, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
         if (channel_idx >= cached_channel)
@@ -497,7 +497,7 @@ CkksPlaintext PolyRelu0D::generate_weight_pt_skip0d(CkksContext& ctx, int idx, i
 //   slot = ch * block_size + h * W * s0 * s1 + k * s1
 
 CkksPlaintext PolyRelu0D::generate_weight_pt_multiplexed(CkksContext& ctx, int idx, int ct_idx) const {
-    vector<double> feature_tmp_pack(N, 0.0);
+    vector<double> feature_tmp_pack(n_real_num_slot, 0.0);
     int H = special_input_shape[0], W = special_input_shape[1];
     int s0 = special_skip[0], s1 = special_skip[1];
     for (int ch = 0; ch < n_channel_per_ct_mux; ch++) {
@@ -523,7 +523,7 @@ void PolyRelu0D::prepare_weight_2d_multiplexed(const Duo& input_shape_in, const 
     special_input_shape = input_shape_in;
     special_skip = skip_in;
     block_size = input_shape_in[0] * skip_in[0] * input_shape_in[1] * skip_in[1];
-    n_channel_per_ct_mux = (N) / block_size;
+    n_channel_per_ct_mux = (n_real_num_slot) / block_size;
 
     int channel = weight.get_shape()[1];
     int n_packed_out_channel = div_ceil(channel, n_channel_per_ct_mux);
@@ -543,7 +543,7 @@ void PolyRelu0D::prepare_weight_2d_multiplexed_lazy(const Duo& input_shape_in, c
     special_input_shape = input_shape_in;
     special_skip = skip_in;
     block_size = input_shape_in[0] * skip_in[0] * input_shape_in[1] * skip_in[1];
-    n_channel_per_ct_mux = (N) / block_size;
+    n_channel_per_ct_mux = (n_real_num_slot) / block_size;
     weight_pt.clear();
 }
 

@@ -32,12 +32,12 @@ public:
                                    uint32_t init_level,
                                    uint32_t block_size);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> mask_pt_;
+    std::vector<ls::CkksPlaintext> mask_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     ParBlockColMajorLayout layout_;
@@ -56,14 +56,14 @@ public:
                                uint32_t init_level,
                                uint32_t block_size);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> mask_pt_, input_mask_pt_;
+    std::vector<ls::CkksPlaintext> mask_pt_, input_mask_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
-    ls::CkksPlaintextRingt generate_input_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_input_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     ParBlockColMajorLayout layout_;
@@ -83,12 +83,12 @@ public:
                                 uint32_t init_level,
                                 uint32_t block_size);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> two_pt_;
+    std::vector<ls::CkksPlaintext> two_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& b);
     Array<double, 2> run_plaintext(const Array<double, 2>& b) const;
 
-    ls::CkksPlaintextRingt generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     ParBlockColMajorLayout layout_;
@@ -107,14 +107,14 @@ public:
                                 uint32_t init_level,
                                 uint32_t block_size);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> one_pt_;
-    std::vector<ls::CkksPlaintextRingt> two_pt_;
+    std::vector<ls::CkksPlaintext> one_pt_;
+    std::vector<ls::CkksPlaintext> two_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& a, const FeatureMatEncrypted& b);
     Array<double, 2> run_plaintext(const Array<double, 2>& a, const Array<double, 2>& b) const;
 
-    ls::CkksPlaintextRingt generate_one_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
-    ls::CkksPlaintextRingt generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_one_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_two_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     ParBlockColMajorLayout layout_;
@@ -133,12 +133,12 @@ public:
                           uint32_t init_level,
                           uint32_t block_size);
     void prepare_weight() override;
-    std::vector<ls::CkksPlaintextRingt> mask_pt_;
+    std::vector<ls::CkksPlaintext> mask_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& a, const FeatureMatEncrypted& b);
     Array<double, 2> run_plaintext(const Array<double, 2>& a, const Array<double, 2>& b) const;
 
-    ls::CkksPlaintextRingt generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
+    ls::CkksPlaintext generate_mask_pt(ls::CkksContext& ctx, uint32_t ct_idx) const;
 
 private:
     ParBlockColMajorLayout layout_;

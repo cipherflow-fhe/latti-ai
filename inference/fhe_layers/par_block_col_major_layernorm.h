@@ -53,7 +53,7 @@ private:
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
     ls::CkksPlaintext h0_mask_pt_;
-    ls::CkksPlaintext inv_n_pt_;  // 1/N
+    ls::CkksPlaintext inv_n_pt_;  // 1/n_real_num_slot
     ls::CkksPlaintext iv_pt_;     // inv_var
     ls::CkksPlaintext eps_add_pt_;
 };
@@ -87,7 +87,7 @@ private:
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
     ls::CkksPlaintext h0_mask_pt_;
-    ls::CkksPlaintext inv_n_pt_;  // 1/N
+    ls::CkksPlaintext inv_n_pt_;  // 1/n_real_num_slot
 };
 
 // ============================================================

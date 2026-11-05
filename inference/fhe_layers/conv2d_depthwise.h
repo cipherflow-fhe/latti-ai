@@ -73,7 +73,7 @@ private:
     Duo skip_;
 
     // Cached values for on-demand generation (lazy mode)
-    int N = 0;
+    int n_real_num_slot = 0;
     uint32_t cached_input_block_size = 0;
     std::vector<std::vector<double>> kernel_masks_;
     std::vector<int> input_rotate_units_;

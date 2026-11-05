@@ -47,7 +47,7 @@ public:
     ls::CkksPlaintext
     generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const override;
     std::vector<double> generate_weight_values_for_bsgs(int degree, int channel_group) const;
-    ls::CkksPlaintextRingt generate_channel_seed(ls::CkksContext& ctx, int degree, int seed,
+    ls::CkksPlaintext generate_channel_seed(ls::CkksContext& ctx, int degree, int seed,
                                                 const Duo& stride) const;
     void validate_seed_geometry(const Duo& shape, const Duo& skip_in, uint32_t blocks,
                                 uint32_t slots, int groups, int degree, int use_site_level) const;

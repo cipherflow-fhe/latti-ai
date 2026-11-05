@@ -198,14 +198,14 @@ vector<double> ParBlockColMajorCPMM::row_chunk_seed_values(uint32_t seed_id) con
     return values;
 }
 
-CkksPlaintextRingt ParBlockColMajorCPMM::generate_row_chunk_seed_pt(CkksContext& ctx, uint32_t seed_id) const {
-    return ctx.encode_ringt(row_chunk_seed_values(seed_id), param_.get_q(level_));
+CkksPlaintext ParBlockColMajorCPMM::generate_row_chunk_seed_pt(CkksContext& ctx, uint32_t seed_id) const {
+    return fhe_api::encode_ringt(ctx, row_chunk_seed_values(seed_id), param_.q()[level_]);
 }
 
-CkksPlaintextRingt ParBlockColMajorCPMM::selection_for_config(CkksContext& ctx, uint32_t d,
+CkksPlaintext ParBlockColMajorCPMM::selection_for_config(CkksContext& ctx, uint32_t d,
     uint32_t heads, uint32_t level, uint32_t position) {
-    const auto& param = ctx.get_parameter();
-    const uint32_t slots = param.get_n() / 2;
+    const auto& param = ctx.parameter();
+    const uint32_t slots = param.max_slots();
     if (!d || (d & (d - 1)) || !heads || slots < uint64_t(d) * d)
         throw runtime_error("Invalid PCM selection geometry");
     const uint32_t u = min(next_pow2(heads), slots / (d * d));
@@ -216,19 +216,19 @@ CkksPlaintextRingt ParBlockColMajorCPMM::selection_for_config(CkksContext& ctx, 
     for (uint32_t j = 0; j < d; ++j)
         for (uint32_t h = 0; h < u; ++h)
             mask[(position / d) * chunk + (position % d + d * j) * u + h] = 1.0;
-    return ctx.encode_ringt(mask, param.get_q(level + 1));
+    return fhe_api::encode_ringt(ctx, mask, param.q()[level + 1]);
 }
 
-CkksPlaintextRingt ParBlockColMajorCPMM::head0_mask_for_config(CkksContext& ctx, uint32_t d,
+CkksPlaintext ParBlockColMajorCPMM::head0_mask_for_config(CkksContext& ctx, uint32_t d,
     uint32_t heads, uint32_t level) {
-    const auto& param = ctx.get_parameter();
-    const uint32_t slots = param.get_n() / 2;
+    const auto& param = ctx.parameter();
+    const uint32_t slots = param.max_slots();
     if (!d || (d & (d - 1)) || !heads || slots < uint64_t(d) * d)
         throw runtime_error("Invalid PCM head mask geometry");
     const uint32_t u = min(next_pow2(heads), slots / (d * d));
     vector<double> mask(slots, 0.0);
     for (uint32_t slot = 0; slot < slots; slot += u) mask[slot] = 1.0;
-    return ctx.encode_ringt(mask, param.get_q(level - 1));
+    return fhe_api::encode_ringt(ctx, mask, param.q()[level - 1]);
 }
 
 // Build mask selecting h=0 positions: mask[(i+d*j)*S + 0] = 1, rest = 0.

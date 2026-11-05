@@ -70,7 +70,7 @@ int stockmeyer_horner_baby_poly_count(int order, int baby_steps) {
 MatPolyBase::MatPolyBase(const CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in)
     : Layer(param_in), order(order_in), coeffs_(move(coeffs_in)) {
     level_ = level_in;
-    N = param_in.n();
+    n_real_num_slot = param_in.max_slots();
 }
 
 int MatPolyBase::compute_stockmeyer_level_cost(int order) {

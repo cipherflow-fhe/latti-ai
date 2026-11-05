@@ -113,7 +113,7 @@ private:
     uint32_t legacy_weight_input_count() const;
     uint32_t weight_input_count() const;
 
-    int N;
+    int n_real_num_slot;
     uint32_t n_channel_per_ct;
     uint32_t n_packed_in_channel;
     uint32_t n_packed_out_channel;

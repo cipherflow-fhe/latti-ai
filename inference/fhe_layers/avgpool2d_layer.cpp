@@ -170,8 +170,8 @@ void Avgpool2DLayer::prepare_weight_repack(const CkksParameter& param_in,
     block_shape = block_shape_in;
 
     // Generate repack mask: 1.0 at every second_stage_stride position within block
-    int N = ctx.parameter().n();
-    vector<double> mask_vec(N, 0.0);
+    int n_real_num_slot = ctx.parameter().n();
+    vector<double> mask_vec(n_real_num_slot, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += second_stage_stride[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += second_stage_stride[1]) {
             mask_vec[row * block_shape[1] + col] = 1.0;
@@ -259,7 +259,7 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
 
 Feature2DEncrypted
 Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion) {
-    int N = ctx.parameter().n();
+    int n_real_num_slot = ctx.parameter().n();
     uint32_t x_size = x.data.size();
 
     // Determine first_stage_stride and second_stage_stride
@@ -321,7 +321,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
         uint32_t out_skip0 = second_stage_stride[0];
         uint32_t out_skip1 = second_stage_stride[1];
         uint32_t n_channel_per_block = out_skip0 * out_skip1;
-        uint32_t n_block_per_ct_out = (N) / (block_shape[0] * block_shape[1]);
+        uint32_t n_block_per_ct_out = (n_real_num_slot) / (block_shape[0] * block_shape[1]);
         uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
         uint32_t n_out_ct = div_ceil(n_channel_, n_channel_per_ct_repack);
 
@@ -382,8 +382,8 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
     int output_w = shape[1] / stride[1];
 
     int n_channel_per_ct_out;
-    if (2 * output_h * output_w < N) {
-        n_channel_per_ct_out = N / (2 * output_h * output_w);
+    if (2 * output_h * output_w < n_real_num_slot) {
+        n_channel_per_ct_out = n_real_num_slot / (2 * output_h * output_w);
     } else {
         n_channel_per_ct_out = 1;
     }

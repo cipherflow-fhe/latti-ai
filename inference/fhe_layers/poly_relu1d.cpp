@@ -43,7 +43,7 @@ PolyRelu1D::PolyRelu1D(const CkksParameter& param_in,
 //   Weight value is broadcast to all `shape` positions of channel ch.
 
 CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, int ct_idx) const {
-    vector<double> buf(N, 0.0);
+    vector<double> buf(n_real_num_slot, 0.0);
     for (int ch = 0; ch < (int)n_channel_per_ct; ch++) {
         int channel_idx = ct_idx * n_channel_per_ct + ch;
         if (channel_idx >= cached_channel)
@@ -59,12 +59,12 @@ CkksPlaintext PolyRelu1D::generate_weight_pt_skip1d(CkksContext& ctx, int idx, i
 }
 
 // ---- Mode 2: multiplexed/interleaved pack ----
-//   n_channel_per_ct_mux = (N / shape_with_skip) * skip
+//   n_channel_per_ct_mux = (n_real_num_slot / shape_with_skip) * skip
 //   channel j (CT-local), position i → slot = (j/skip)*shape_with_skip + i*skip + (j%skip)
 //   Weight value is broadcast to all `shape` positions of channel j.
 
 CkksPlaintext PolyRelu1D::generate_weight_pt_mux1d(CkksContext& ctx, int idx, int ct_idx) const {
-    vector<double> buf(N, 0.0);
+    vector<double> buf(n_real_num_slot, 0.0);
     for (int j = 0; j < n_channel_per_ct_mux; j++) {
         int channel_idx = ct_idx * n_channel_per_ct_mux + j;
         if (channel_idx >= cached_channel)
