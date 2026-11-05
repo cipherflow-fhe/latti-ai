@@ -86,33 +86,6 @@ void copy_if_exists(const std::filesystem::path& src, const std::filesystem::pat
     }
 }
 
-Bytes serialize_context(const fhe::CkksContext& context) {
-    if (const auto* btp_context = dynamic_cast<const fhe::CkksBtpContext*>(&context)) {
-        return btp_context->serialize();
-    }
-    return context.serialize_advanced();
-}
-
-std::unique_ptr<fhe::CkksContext> deserialize_context(const Bytes& bytes, bool use_btp) {
-    if (use_btp) {
-        return std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::deserialize(bytes));
-    }
-    return std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(bytes));
-}
-
-Bytes serialize_public_context(fhe::CkksContext& context, bool use_btp) {
-    if (use_btp) {
-        auto* btp_context = dynamic_cast<fhe::CkksBtpContext*>(&context);
-        if (btp_context == nullptr) {
-            throw std::runtime_error("[Provisioner] expected CkksBtpContext for bootstrapping task");
-        }
-        auto pub_ctx = btp_context->make_public_context();
-        return pub_ctx.serialize();
-    }
-    auto pub_ctx = context.make_public_context(false, true, true);
-    return pub_ctx.serialize_advanced();
-}
-
 }  // namespace
 
 InferenceProvisioner::InferenceProvisioner(const std::string& task_dir) : task_dir_(task_dir) {
@@ -139,20 +112,12 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
     const auto& first_input = task_config_.at("task_input_param").begin().value();
     const std::string ckks_param_id = first_input.at("ckks_parameter_id").get<std::string>();
     const auto& entry = ckks_config_.at(ckks_param_id);
-    const int poly_modulus_degree = entry.at("poly_modulus_degree").get<int>();
-
-    fhe::CkksParameter param(0);
-    if (entry.contains("q") && entry.contains("p")) {
-        const auto q = entry.at("q").get<std::vector<uint64_t>>();
-        const auto p = entry.at("p").get<std::vector<uint64_t>>();
-        param = fhe::CkksParameter::create_custom_parameter(poly_modulus_degree, q, p);
-    } else {
-        param = fhe::CkksParameter::create_parameter(poly_modulus_degree);
-    }
-    if (entry.contains("log_slots")) {
-        param.set_log_slots(entry.at("log_slots").get<int>());
-    }
-    return param;
+    const int log_n = static_cast<int>(std::log2(entry.at("poly_modulus_degree").get<uint32_t>()));
+    const auto q = entry.at("q").get<std::vector<uint64_t>>();
+    const auto p = entry.at("p").get<std::vector<uint64_t>>();
+    return fhe::CkksParameter::create_custom_parameter(
+        log_n, entry.at("log_default_scale").get<int>(), q, p,
+        static_cast<fhe::RingType>(entry.value("ring_type", 1)));
 }
 
 void InferenceProvisioner::setup_or_load_keys() {
@@ -163,34 +128,22 @@ void InferenceProvisioner::setup_or_load_keys() {
     }
     const bool use_btp = task_config_.value("use_btp", false);
 
-    auto secret_context_path = provisioner_dir_ / "secret_context.bin";
-    if (!std::filesystem::exists(secret_context_path) && std::filesystem::exists(provisioner_dir_ / "secret_key.bin")) {
-        secret_context_path = provisioner_dir_ / "secret_key.bin";
-    }
-    if (std::filesystem::exists(secret_context_path)) {
-        std::cout << "[Provisioner] Loading existing server-owned secret context..." << std::endl;
-        context_ = deserialize_context(read_binary_file(secret_context_path), use_btp);
-        if (secret_context_path.filename() != "secret_context.bin") {
-            write_binary_file(provisioner_dir_ / "secret_context.bin", read_binary_file(secret_context_path));
-        }
+    const auto eval_context_path = provisioner_dir_ / "eval_context.bin";
+    const auto secret_key_path = provisioner_dir_ / "secret_key.bin";
+    if (std::filesystem::exists(eval_context_path) && std::filesystem::exists(secret_key_path)) {
+        std::cout << "[Provisioner] Loading existing server-owned CKKS keys..." << std::endl;
+        context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(read_binary_file(eval_context_path)));
+        context_->set_secret_key(fhe::SecretKey::deserialize(read_binary_file(secret_key_path)));
         return;
     }
 
     std::cout << "[Provisioner] Generating server-owned CKKS keys..." << std::endl;
-    if (use_btp) {
-        auto param = fhe::CkksBtpParameter::create_parameter();
-        auto btp_context = std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::create_random_context(param));
-        btp_context->gen_rotation_keys();
-        context_ = std::move(btp_context);
-    } else {
-        auto param = make_parameter();
-        context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::create_random_context(param));
-        context_->gen_rotation_keys();
-    }
-
-    const Bytes full_context = serialize_context(*context_);
-    write_binary_file(secret_context_path, full_context);
-    write_binary_file(provisioner_dir_ / "secret_key.bin", full_context);
+    auto param = make_parameter();
+    context_ = std::make_unique<fhe::CkksContext>(
+        fhe::CkksContext::create_random_context(param, fhe::EncryptorType::PUBLIC_KEY, use_btp));
+    context_->gen_rotation_keys();
+    write_binary_file(eval_context_path, context_->serialize());
+    write_binary_file(secret_key_path, context_->secret_key().serialize());
 }
 
 void InferenceProvisioner::copy_private_and_runner_configs(const std::filesystem::path& runner_dir) const {
@@ -349,13 +302,13 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
     encrypted.reserve(count);
 
     for (uint64_t flat_idx = 0; flat_idx < count; ++flat_idx) {
-        fhe::CkksPlaintextRingt ringt;
+        fhe::CkksPlaintext ringt;
 
         if (info.param_kind == "matrix_parameter") {
             const auto& generator = sig.at("generator");
             if (generator.at("op_class") == "InputZero") {
-                ringt = context.encode_ringt(std::vector<double>(context.get_parameter().get_n() / 2, 0.0),
-                                             context.get_parameter().get_default_scale());
+                ringt = fhe_api::encode_ringt(context, std::vector<double>(context.parameter().max_slots(), 0.0),
+                                             context.parameter().default_scale());
             } else {
                 ringt = generate_matrix_parameter(context, &init.get_layer<Layer>(info.layer_id), generator);
             }
@@ -621,12 +574,14 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
             throw std::runtime_error("[Provisioner] Unsupported encrypted parameter argument: " + arg_id);
         }
 
-        auto pt = context.ringt_to_pt(ringt, encrypt_level);
-        encrypted.push_back(context.encrypt_asymmetric(pt));
+        std::vector<double> values;
+        context.decode(ringt, values);
+        auto pt = fhe_api::encode(context, values, encrypt_level, ringt.scale());
+        encrypted.push_back(context.encrypt(pt));
         if (sig.contains("scale")) {
             const double expected = sig.at("scale").get<double>();
             if (!std::isfinite(expected) || expected <= 0 ||
-                std::abs(encrypted.back().get_scale() / expected - 1.0) > 1e-10)
+                std::abs(encrypted.back().scale() / expected - 1.0) > 1e-10)
                 throw std::runtime_error("[Provisioner] parameter scale mismatch: " + arg_id);
         }
     }
@@ -646,7 +601,7 @@ void InferenceProvisioner::write_encrypted_argument(const std::filesystem::path&
     ss_write(ss, count);
     json elements = json::array();
     for (const auto& ct : values) {
-        Bytes ct_bytes = ct.serialize(context_->get_parameter());
+        Bytes ct_bytes = ct.serialize();
         if (write_element_index) {
             const auto payload_offset = static_cast<uint64_t>(ss.tellp()) + sizeof(size_t);
             elements.push_back({{"offset", payload_offset}, {"length", static_cast<uint64_t>(ct_bytes.size())}});
@@ -690,7 +645,7 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     }
     const json runner_task_config = read_json((runner_dir / "task_config.json").string());
 
-    const Bytes eval_bytes = serialize_public_context(*context_, task_config_.value("use_btp", false));
+    const Bytes eval_bytes = context_->serialize();
     write_binary_file(provisioner_dir_ / "eval_context.bin", eval_bytes);
     write_binary_file(runner_dir / "eval_context.bin", eval_bytes);
 
@@ -747,7 +702,7 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
             const auto info = parse_parameter_argument(arg_id, init);
             auto& encrypted = batch[i];
             write_encrypted_argument(parameter_root, arg_id, encrypted, manifest, sig, info, runtime_lazy);
-            manifest["arguments"][arg_id]["scale"] = encrypted.front().get_scale();
+            manifest["arguments"][arg_id]["scale"] = encrypted.front().scale();
             const auto layout = parameter_layout_metadata(graph, info.layer_id, sig);
             if (sig.contains("layout") && nlohmann::json(sig.at("layout")) != nlohmann::json(layout))
                 throw std::runtime_error("[Provisioner] parameter layout mismatch: " + arg_id);

@@ -51,13 +51,9 @@ int main(int argc, char* argv[]) {
 
     try {
         std::filesystem::path provisioner_dir(task_dir);
-        std::filesystem::path secret_context_path = provisioner_dir / "secret_context.bin";
-        if (!std::filesystem::exists(secret_context_path)) {
-            secret_context_path = provisioner_dir / "secret_key.bin";
-        }
-
         InferenceClient decryptor(task_dir);
-        decryptor.load_full_context(read_binary_file(secret_context_path));
+        decryptor.load_context(read_binary_file(provisioner_dir / "eval_context.bin"),
+                               read_binary_file(provisioner_dir / "secret_key.bin"));
         auto encrypted_outputs = read_named_bytes_bundle(cipher_path);
         auto results = decryptor.decrypt(encrypted_outputs);
 

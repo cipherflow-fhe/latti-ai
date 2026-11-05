@@ -126,12 +126,12 @@ std::vector<fhe_ops_lib::CkksCiphertext>& EncryptedParameterStore::load_argument
         Bytes ct_bytes;
         ss_read_vector(ss, &ct_bytes);
         auto ct = fhe_ops_lib::CkksCiphertext::deserialize(ct_bytes);
-        if (ct.get_level() != entry.level) {
+        if (ct.level() != entry.level) {
             throw std::runtime_error("Encrypted parameter level mismatch for " + arg_id + ": expected " +
-                                     std::to_string(entry.level) + ", got " + std::to_string(ct.get_level()));
+                                     std::to_string(entry.level) + ", got " + std::to_string(ct.level()));
         }
         if (entry.scale != 0.0 && (!std::isfinite(entry.scale) || entry.scale <= 0 ||
-            std::abs(ct.get_scale() / entry.scale - 1.0) > 1e-10)) {
+            std::abs(ct.scale() / entry.scale - 1.0) > 1e-10)) {
             throw std::runtime_error("Encrypted parameter scale mismatch for " + arg_id);
         }
         values.push_back(std::move(ct));
@@ -207,11 +207,11 @@ std::shared_ptr<fhe_ops_lib::CkksCiphertext> EncryptedParameterStore::load_eleme
         throw std::runtime_error("Failed to read encrypted parameter element " + arg_id);
     }
     auto ct = std::make_shared<fhe_ops_lib::CkksCiphertext>(fhe_ops_lib::CkksCiphertext::deserialize(ct_bytes));
-    if (ct->get_level() != entry.level) {
+    if (ct->level() != entry.level) {
         throw std::runtime_error("Encrypted parameter level mismatch for " + arg_id);
     }
     if (entry.scale != 0.0 && (!std::isfinite(entry.scale) || entry.scale <= 0 ||
-        std::abs(ct->get_scale() / entry.scale - 1.0) > 1e-10)) {
+        std::abs(ct->scale() / entry.scale - 1.0) > 1e-10)) {
         throw std::runtime_error("Encrypted parameter scale mismatch for " + arg_id);
     }
     ++canonical_loads_;

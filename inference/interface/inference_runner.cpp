@@ -68,7 +68,7 @@ std::vector<json> online_args_with_phase(const json& signature, const std::strin
 }
 
 ExecutorFunc create_load_encrypted_param_executor() {
-    return [](ExecutionContext&, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+    return [](ExecutionContext&, std::unordered_map<NodeId, std::any>& local_data,
               const ComputeNode& self) -> void {
         if (!self.custom_prop.has_value()) {
             throw std::runtime_error("[Runner] load_encrypted_param_ct missing custom properties");
@@ -82,25 +82,25 @@ ExecutorFunc create_load_encrypted_param_executor() {
         const uint64_t flat_index = attrs.at("flat_index").get<uint64_t>();
         const int expected_level = attrs.value("expected_level", -1);
 
-        const NodeIndex store_node_idx = self.input_nodes[0]->index;
-        auto store_data = std::any_cast<std::shared_ptr<fhe::CustomData>>(inputs.at(store_node_idx));
+        const NodeId& store_node_idx = self.input_nodes[0]->id;
+        auto store_data = std::any_cast<std::shared_ptr<fhe::CustomData>>(local_data.at(store_node_idx));
         auto* store = store_data->get_typed_data<EncryptedParameterStore>();
         if (store == nullptr) {
             throw std::runtime_error("[Runner] encrypted parameter store is null");
         }
 
         auto value = store->load_element(arg_id, flat_index);
-        if (expected_level >= 0 && value->get_level() != expected_level) {
+        if (expected_level >= 0 && value->level() != expected_level) {
             throw std::runtime_error("[Runner] encrypted parameter level mismatch for " + arg_id + "[" +
                                      std::to_string(flat_index) + "]: expected " + std::to_string(expected_level) +
-                                     ", got " + std::to_string(value->get_level()));
+                                     ", got " + std::to_string(value->level()));
         }
-        output = value;
+        local_data[self.output_nodes[0]->id] = value;
     };
 }
 
 ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInferenceProcess> matrix_layers) {
-    return [matrix_layers](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>&, std::any& output,
+    return [matrix_layers](ExecutionContext& exec_ctx, std::unordered_map<NodeId, std::any>& local_data,
               const ComputeNode& self) -> void {
         if (!self.custom_prop.has_value()) {
             throw std::runtime_error("[Runner] encode_pt mask missing custom properties");
@@ -109,10 +109,9 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
         const auto op_class = attrs.value("op_class", std::string());
         if (attrs.contains("layer_id") && matrix_layers) {
             auto* context = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
-            if (!context) context = exec_ctx.get_arithmetic_context<fhe::CkksBtpContext>();
             if (!context) throw std::runtime_error("[Runner] matrix encode_pt cannot get CKKS context");
             const auto layer_id = attrs.at("layer_id").get<std::string>();
-            fhe::CkksPlaintextRingt pt;
+            fhe::CkksPlaintext pt;
             if (op_class == "ParBlockColMajorCPMM") {
                 const auto& layer = matrix_layers->json_layers.at(layer_id);
                 const auto& feature = matrix_layers->json_features.at(layer.at("feature_input")[0].get<std::string>());
@@ -127,7 +126,7 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
             } else {
                 pt = generate_matrix_parameter(*context, &matrix_layers->get_layer<Layer>(layer_id), attrs);
             }
-            output = std::make_shared<fhe::CkksPlaintextRingt>(std::move(pt));
+            local_data[self.output_nodes[0]->id] = std::make_shared<fhe::CkksPlaintext>(std::move(pt));
             return;
         }
         const bool upsample_mask = op_class == "UpsampleNearestLayer" && attrs.value("type", std::string()) == "mask_pt";
@@ -150,9 +149,6 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
         }
         fhe::CkksContext* ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksContext>();
         if (!ckks_ctx_ptr) {
-            ckks_ctx_ptr = exec_ctx.get_arithmetic_context<fhe::CkksBtpContext>();
-        }
-        if (!ckks_ctx_ptr) {
             throw std::runtime_error("[Runner] encode_pt mask cannot get CKKS context");
         }
         const auto read_duo = [&attrs](const char* key) {
@@ -161,21 +157,21 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
         };
         std::vector<double> mask;
         if (upsample_mask) {
-            UpsampleNearestLayer layer(ckks_ctx_ptr->get_parameter(), read_duo("input_shape"), read_duo("skip"),
+            UpsampleNearestLayer layer(ckks_ctx_ptr->parameter(), read_duo("input_shape"), read_duo("skip"),
                 read_duo("upsample_factor"), attrs.at("n_channel_per_ct").get<uint32_t>(), attrs.at("level").get<uint32_t>());
             mask = layer.select_tensor(attrs.at("i").get<int>());
         } else if (concat_mask) {
-            mask.assign(ckks_ctx_ptr->get_parameter().get_n() / 2, 0.0);
+            mask.assign(ckks_ctx_ptr->parameter().max_slots(), 0.0);
             mask.at(attrs.at("slot").get<uint64_t>()) = 1.0;
         } else if (inverse_repack) {
             const auto block = read_duo("block_shape");
             const auto stride = read_duo("stride"), ct_stride = read_duo("ct_stride");
             if (!prod(ct_stride) || stride[0] % ct_stride[0] || stride[1] % ct_stride[1] ||
-                prod(block) > ckks_ctx_ptr->get_parameter().get_n() / 2)
+                prod(block) > ckks_ctx_ptr->parameter().max_slots())
                 throw std::runtime_error("[Runner] invalid inverse repack geometry");
             const auto skip = stride / ct_stride;
             if (!prod(skip)) throw std::runtime_error("[Runner] invalid inverse repack skip");
-            mask.assign(ckks_ctx_ptr->get_parameter().get_n() / 2, 0.0);
+            mask.assign(ckks_ctx_ptr->parameter().max_slots(), 0.0);
             for (uint32_t row = 0; row < block[0]; row += skip[0])
                 for (uint32_t col = 0; col < block[1]; col += skip[1])
                     mask[row * block[1] + col] = 1.0;
@@ -184,17 +180,17 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
                 (attrs.at("param_kind") != "weight" && attrs.at("param_kind") != "bias"))
                 throw std::runtime_error("[Runner] invalid dense tile metadata");
             mask = interleaved_seed::tile_mask(read_duo("input_shape"), read_duo("skip"), read_duo("invalid_fill"),
-                ckks_ctx_ptr->get_parameter().get_n() / 2, attrs.at("subgrid").get<uint32_t>(), attrs.at("param_kind") == "bias");
+                ckks_ctx_ptr->parameter().max_slots(), attrs.at("subgrid").get<uint32_t>(), attrs.at("param_kind") == "bias");
         } else if (depthwise_mask) {
             mask = MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
                 read_duo("input_shape"), read_duo("skip"), read_duo("stride"),
-                attrs.at("n_channel_per_ct").get<uint32_t>(), ckks_ctx_ptr->get_parameter().get_n() / 2,
+                attrs.at("n_channel_per_ct").get<uint32_t>(), ckks_ctx_ptr->parameter().max_slots(),
                 attrs.at("ct_idx").get<int>(), attrs.at("local_idx").get<int>());
         } else if (kernel_seed) {
             const auto& step = attrs.at("seed_step");
             mask = interleaved_seed::mask(
                 read_duo("seed_shape"), read_duo("seed_skip"), attrs.at("seed_blocks").get<uint32_t>(),
-                ckks_ctx_ptr->get_parameter().get_n() / 2,
+                ckks_ctx_ptr->parameter().max_slots(),
                 Duo{attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>()},
                 attrs.at("subgrid").get<int>(), DuoInt{step.at(0).get<int>(), step.at(1).get<int>()},
                 attrs.value("mask_kind", std::string()) == "kernel");
@@ -214,8 +210,8 @@ ExecutorFunc create_multiplexed_conv_mask_executor(std::shared_ptr<InitInference
                 prod(read_duo("skip") * read_duo("stride") / read_duo("external_upsample_factor")));
         }
         const int level = attrs.at("level").get<int>();
-        auto pt = ckks_ctx_ptr->encode_ringt(mask, ckks_ctx_ptr->get_parameter().get_q(level));
-        output = std::make_shared<fhe::CkksPlaintextRingt>(std::move(pt));
+        auto pt = fhe_api::encode_ringt(*ckks_ctx_ptr, mask, ckks_ctx_ptr->parameter().q()[level]);
+        local_data[self.output_nodes[0]->id] = std::make_shared<fhe::CkksPlaintext>(std::move(pt));
     };
 }
 
@@ -372,12 +368,8 @@ void InferenceRunner::load() {
     read_configuration();
 
     const Bytes eval_context = read_binary_file(runner_dir_ / "eval_context.bin");
-    if (task_config_.value("use_btp", false)) {
-        eval_context_ = std::make_unique<fhe::CkksBtpContext>(fhe::CkksBtpContext::deserialize(eval_context));
-    } else {
-        eval_context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize_advanced(eval_context));
-    }
-    n_slots_ = eval_context_->get_parameter().get_n() / 2;
+    eval_context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(eval_context));
+    n_slots_ = eval_context_->parameter().max_slots();
     if (task_config_.value("mat_pack_style", std::string()) == "par_block_col_major") {
         public_matrix_layers_ = std::make_shared<InitInferenceProcess>(runner_dir_.string(), false);
         public_matrix_layers_->init_parameters(task_config_.value("use_btp", false));
@@ -387,7 +379,7 @@ void InferenceRunner::load() {
     validate_parameter_manifest(parameter_store_->manifest(), task_signature_, nn_layers_);
 }
 
-std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_0d_input(const std::string& name,
+std::vector<fhe::CkksPlaintext> InferenceRunner::encode_plaintext_0d_input(const std::string& name,
                                                                                 const std::string& csv_path,
                                                                                 const json& sig) const {
     auto param_it = input_params_.find(name);
@@ -401,8 +393,8 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_0d_input(
     if (param.pack_num <= 0) {
         throw std::runtime_error("[Runner] 0D input is missing a positive pack_num: " + name);
     }
-    if (sig.at("type").get<std::string>() != "pt_ringt") {
-        throw std::runtime_error("[Runner] plaintext runner expects pt_ringt input signature for: " + name);
+    if (sig.at("type").get<std::string>() != "pt") {
+        throw std::runtime_error("[Runner] plaintext runner expects v6 plaintext input signature for: " + name);
     }
 
     auto input_array = csv_to_array<1>(csv_path);
@@ -413,7 +405,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_0d_input(
         throw std::runtime_error("[Runner] invalid 0D input packing for: " + name);
     }
 
-    std::vector<fhe::CkksPlaintextRingt> encoded;
+    std::vector<fhe::CkksPlaintext> encoded;
     const uint64_t expected_count = shape_size(sig);
     const uint64_t actual_count = div_ceil(n_in_features, n_channel_per_ct);
     if (actual_count != expected_count) {
@@ -422,7 +414,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_0d_input(
     }
 
     encoded.reserve(actual_count);
-    const double scale = eval_context_->get_parameter().get_default_scale();
+    const double scale = eval_context_->parameter().default_scale();
     for (uint32_t pack_ct_idx = 0; pack_ct_idx < actual_count; ++pack_ct_idx) {
         std::vector<double> feature_flat(static_cast<size_t>(n_slots_), 0.0);
         for (uint32_t i = 0; i < n_channel_per_ct; ++i) {
@@ -431,12 +423,12 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_0d_input(
                 feature_flat[i * skip] = input_array.get(src_idx);
             }
         }
-        encoded.push_back(eval_context_->encode_ringt(feature_flat, scale));
+        encoded.push_back(fhe_api::encode_ringt(*eval_context_, feature_flat, scale));
     }
     return encoded;
 }
 
-std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_1d_input(const std::string& name,
+std::vector<fhe::CkksPlaintext> InferenceRunner::encode_plaintext_1d_input(const std::string& name,
                                                                                 const std::string& csv_path,
                                                                                 const json& sig) const {
     auto param_it = input_params_.find(name);
@@ -447,13 +439,13 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_1d_input(
     if (param.dim != 1) {
         throw std::runtime_error("[Runner] input is not 1D: " + name);
     }
-    if (sig.at("type").get<std::string>() != "pt_ringt") {
-        throw std::runtime_error("[Runner] plaintext runner expects pt_ringt input signature for: " + name);
+    if (sig.at("type").get<std::string>() != "pt") {
+        throw std::runtime_error("[Runner] plaintext runner expects v6 plaintext input signature for: " + name);
     }
 
     auto input_array = csv_to_array<2>(csv_path, {(uint64_t)param.channel, (uint64_t)param.length});
-    const double scale = eval_context_->get_parameter().get_default_scale();
-    std::vector<fhe::CkksPlaintextRingt> encoded;
+    const double scale = eval_context_->parameter().default_scale();
+    std::vector<fhe::CkksPlaintext> encoded;
 
     if (pack_style_ == "ordinary") {
         const uint32_t skip = param.skip > 0 ? static_cast<uint32_t>(param.skip) : 1;
@@ -480,7 +472,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_1d_input(
                     slots[k * shape_with_skip + i * skip] = input_array.get(source_channel, i);
                 }
             }
-            encoded.push_back(eval_context_->encode_ringt(slots, scale));
+            encoded.push_back(fhe_api::encode_ringt(*eval_context_, slots, scale));
         }
         return encoded;
     }
@@ -515,12 +507,12 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_1d_input(
                 slots[slot_idx] = input_array.get(channel, data_idx);
             }
         }
-        encoded.push_back(eval_context_->encode_ringt(slots, scale));
+        encoded.push_back(fhe_api::encode_ringt(*eval_context_, slots, scale));
     }
     return encoded;
 }
 
-std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(const std::string& name,
+std::vector<fhe::CkksPlaintext> InferenceRunner::encode_plaintext_2d_input(const std::string& name,
                                                                                 const std::string& csv_path,
                                                                                 const json& sig) const {
     auto param_it = input_params_.find(name);
@@ -531,14 +523,14 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(
     if (param.dim != 2) {
         throw std::runtime_error("[Runner] input is not 2D: " + name);
     }
-    if (sig.at("type").get<std::string>() != "pt_ringt") {
-        throw std::runtime_error("[Runner] plaintext runner expects pt_ringt input signature for: " + name);
+    if (sig.at("type").get<std::string>() != "pt") {
+        throw std::runtime_error("[Runner] plaintext runner expects v6 plaintext input signature for: " + name);
     }
 
     auto input_array =
         csv_to_array<3>(csv_path, {(uint64_t)param.channel, (uint64_t)param.height, (uint64_t)param.width});
-    const double scale = eval_context_->get_parameter().get_default_scale();
-    std::vector<fhe::CkksPlaintextRingt> encoded;
+    const double scale = eval_context_->parameter().default_scale();
+    std::vector<fhe::CkksPlaintext> encoded;
 
     if (pack_style_ == "ordinary") {
         const uint32_t pixels = static_cast<uint32_t>(param.height * param.width);
@@ -567,7 +559,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(
                     }
                 }
             }
-            encoded.push_back(eval_context_->encode_ringt(slots, scale));
+            encoded.push_back(fhe_api::encode_ringt(*eval_context_, slots, scale));
         }
         return encoded;
     }
@@ -603,7 +595,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(
                     }
                 }
             }
-            encoded.push_back(eval_context_->encode_ringt(slots, scale));
+            encoded.push_back(fhe_api::encode_ringt(*eval_context_, slots, scale));
         }
         return encoded;
     }
@@ -657,7 +649,7 @@ std::vector<fhe::CkksPlaintextRingt> InferenceRunner::encode_plaintext_2d_input(
                 }
             }
         }
-        encoded.push_back(eval_context_->encode_ringt(slots, scale));
+        encoded.push_back(fhe_api::encode_ringt(*eval_context_, slots, scale));
     }
     return encoded;
 }
@@ -672,7 +664,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
     std::cout << "[Runner] Running server_provisioned_runner task..." << std::endl;
 
     std::vector<lattisense::CxxVectorArgument> cxx_args;
-    std::vector<std::vector<fhe::CkksPlaintextRingt>> online_inputs;
+    std::vector<std::vector<fhe::CkksPlaintext>> online_inputs;
     std::vector<fhe::CustomData> lazy_parameter_store_arg;
     std::vector<std::unique_ptr<FeatureEncrypted>> output_features;
     std::vector<std::string> output_names;
@@ -703,9 +695,9 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
             FeatureMatEncrypted input(eval_context_.get(), param.level);
             auto packed = input.par_block_col_major_slots(csv, param.matmul_block_size, param.n_heads, param.head_shape[1]);
             if (packed.size() != shape_size(sig)) throw std::runtime_error("[Runner] matrix input count mismatch");
-            std::vector<fhe::CkksPlaintextRingt> encoded;
+            std::vector<fhe::CkksPlaintext> encoded;
             for (const auto& slots : packed)
-                encoded.push_back(eval_context_->encode_ringt(slots, eval_context_->get_parameter().get_default_scale()));
+                encoded.push_back(fhe_api::encode_ringt(*eval_context_, slots, eval_context_->parameter().default_scale()));
             online_inputs.push_back(std::move(encoded));
         } else if (param.dim == 0) {
             online_inputs.push_back(encode_plaintext_0d_input(id, csv_it->second, sig));
@@ -743,7 +735,6 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
 
         const int level = sig.at("level").get<int>();
         const uint64_t count = shape_size(sig);
-        const double scale = eval_context_->get_parameter().get_default_scale();
 
         if (param.is_mat) {
             auto output = std::make_unique<FeatureMatEncrypted>(eval_context_.get(), level);
@@ -751,7 +742,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
             output->head_shape = param.head_shape;
             output->matmul_block_size = param.matmul_block_size;
             for (uint64_t i = 0; i < count; ++i)
-                output->data.push_back(eval_context_->new_ciphertext(level, scale));
+                output->data.push_back(fhe::CkksCiphertext(eval_context_->parameter(), level));
             cxx_args.push_back(lattisense::CxxVectorArgument{id, &output->data});
             output_names.push_back(id);
             output_features.push_back(std::move(output));
@@ -762,7 +753,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
                                                             std::max<uint32_t>(1, static_cast<uint32_t>(param.channel));
             output->n_channel = static_cast<uint32_t>(param.channel);
             for (uint64_t i = 0; i < count; ++i) {
-                output->data.push_back(eval_context_->new_ciphertext(level, scale));
+                output->data.push_back(fhe::CkksCiphertext(eval_context_->parameter(), level));
             }
             cxx_args.push_back(lattisense::CxxVectorArgument{id, &output->data});
             output_names.push_back(id);
@@ -774,7 +765,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
             output->n_channel_per_ct = param.pack_num > 0 ? static_cast<uint32_t>(param.pack_num) : 1;
             output->n_channel = static_cast<uint32_t>(param.channel);
             for (uint64_t i = 0; i < count; ++i) {
-                output->data.push_back(eval_context_->new_ciphertext(level, scale));
+                output->data.push_back(fhe::CkksCiphertext(eval_context_->parameter(), level));
             }
             cxx_args.push_back(lattisense::CxxVectorArgument{id, &output->data});
             output_names.push_back(id);
@@ -796,7 +787,7 @@ InferenceRunner::evaluate_plaintext_input(const std::map<std::string, std::strin
             output->n_channel_per_ct = param.pack_num > 0 ? static_cast<uint32_t>(param.pack_num) : 1;
             output->n_channel = static_cast<uint32_t>(param.channel);
             for (uint64_t i = 0; i < count; ++i) {
-                output->data.push_back(eval_context_->new_ciphertext(level, scale));
+                output->data.push_back(fhe::CkksCiphertext(eval_context_->parameter(), level));
             }
             cxx_args.push_back(lattisense::CxxVectorArgument{id, &output->data});
             output_names.push_back(id);
