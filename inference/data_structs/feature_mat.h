@@ -27,7 +27,6 @@ public:
     Duo head_shape = {0, 0};  // per-head shape: {rows, cols_per_head}
     uint32_t matmul_block_size = 0;
     std::vector<ls::CkksCiphertext> data;
-    std::vector<ls::CkksCiphertext> data_compress;
 
     FeatureMatEncrypted(ls::CkksContext* context_in, int ct_level);
 
@@ -58,7 +57,6 @@ public:
     Array<double, 2>
     par_diagonal_unpack(uint32_t n_heads, const Duo& head_shape, bool is_lower = true, bool is_transposed = true) const;
 
-    void decompress();
 
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;

@@ -449,15 +449,6 @@ Array<double, 2> FeatureMatEncrypted::par_diagonal_unpack(uint32_t n_heads,
     return result;
 }
 
-void FeatureMatEncrypted::decompress() {
-    assert(data.size() == 0 && data_compress.size() > 0);
-    size_t n_ct = data_compress.size();
-    for (size_t i = 0; i < n_ct; i++) {
-        data.push_back(std::move(data_compress[i]));
-    }
-    data_compress.clear();
-}
-
 Bytes FeatureMatEncrypted::serialize() const {
     stringstream ss;
     ss_write(ss, dim);
@@ -473,12 +464,6 @@ Bytes FeatureMatEncrypted::serialize() const {
     for (const CkksCiphertext& ct : data) {
         Bytes ct_data = ct.serialize();
         ss_write_vector(ss, ct_data);
-    }
-    uint32_t n_cct = data_compress.size();
-    ss_write(ss, n_cct);
-    for (const CkksCiphertext& cct : data_compress) {
-        Bytes cct_data = cct.serialize();
-        ss_write_vector(ss, cct_data);
     }
     return ss_to_bytes(ss);
 }
@@ -500,13 +485,6 @@ void FeatureMatEncrypted::deserialize(const Bytes& bytes) {
         Bytes ct_data;
         ss_read_vector(ss, &ct_data);
         data.push_back(CkksCiphertext::deserialize(ct_data));
-    }
-    uint32_t n_cct;
-    ss_read(ss, &n_cct);
-    for (uint32_t i = 0; i < n_cct; i++) {
-        Bytes cct_data;
-        ss_read_vector(ss, &cct_data);
-        data_compress.push_back(CkksCiphertext::deserialize(cct_data));
     }
 }
 

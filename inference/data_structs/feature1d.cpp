@@ -186,12 +186,6 @@ Bytes Feature1DEncrypted::serialize() const {
         Bytes ct_data = ct.serialize();
         ss_write_vector(ss, ct_data);
     }
-    uint32_t n_cct = data_compress.size();
-    ss_write(ss, n_cct);
-    for (const CkksCiphertext& cct : data_compress) {
-        Bytes cct_data = cct.serialize();
-        ss_write_vector(ss, cct_data);
-    }
     return ss_to_bytes(ss);
 }
 
@@ -211,13 +205,6 @@ void Feature1DEncrypted::deserialize(const Bytes& bytes) {
         Bytes ct_data;
         ss_read_vector(ss, &ct_data);
         data.push_back(CkksCiphertext::deserialize(ct_data));
-    }
-    uint32_t n_cct;
-    ss_read(ss, &n_cct);
-    for (uint32_t i = 0; i < n_cct; i++) {
-        Bytes cct_data;
-        ss_read_vector(ss, &cct_data);
-        data_compress.push_back(CkksCiphertext::deserialize(cct_data));
     }
 }
 
