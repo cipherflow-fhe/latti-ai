@@ -3,6 +3,7 @@
 
 #define CATCH_CONFIG_MAIN
 #include "catch.hpp"
+#include "fhe_api.h"
 #include "inference_task/inference_process.h"
 #include "cxx_sdk_v2/cxx_fhe_task.h"
 #include "cxx_sdk_v2/cxx_argument.h"
@@ -18,11 +19,11 @@ namespace {
 void require_close(CkksContext& ctx, const FeatureMatEncrypted& actual,
                    const Array<double, 2>& expected, uint32_t d, uint32_t heads,
                    uint32_t cols, int level) {
-    double scale = ctx.get_parameter().get_default_scale();
+    double scale = ctx.parameter().default_scale();
     REQUIRE(actual.level == level);
     for (const auto& ct : actual.data) {
-        REQUIRE(ct.get_level() == level);
-        REQUIRE(ct.get_scale() / scale == Approx(1.0).epsilon(1e-9));
+        REQUIRE(ct.level() == level);
+        REQUIRE(ct.scale() / scale == Approx(1.0).epsilon(1e-9));
     }
     auto unpacked = actual.par_block_col_major_unpack(expected.get_shape()[0], cols, d, heads);
     REQUIRE(unpacked.get_shape() == expected.get_shape());
@@ -42,10 +43,9 @@ vector<CkksCiphertext> run_lazy(CkksContext& ctx, const string& path,
     unordered_map<string, ExecutorFunc> executors;
     atomic<size_t> encoded{0}, checked{0};
     mutex probe_mutex;
-    executors["encode_pt"] = [&](ExecutionContext& c, const unordered_map<NodeIndex, any>& in,
-                                  any& out, const ComputeNode& node) {
+    executors["encode_pt"] = [&](ExecutionContext& c, unordered_map<NodeId, any>& in, const ComputeNode& node) {
         auto* context = c.get_arithmetic_context<CkksContext>();
-        auto data = any_cast<shared_ptr<CustomData>>(in.at(node.input_nodes[0]->index));
+        auto data = any_cast<shared_ptr<CustomData>>(in.at(node.input_nodes[0]->id));
         auto* layer = static_cast<Layer*>(data->get_typed_data<void>());
         const auto& attrs = node.custom_prop->attributes;
         const string op_class = attrs.at("op_class");
@@ -53,7 +53,7 @@ vector<CkksCiphertext> run_lazy(CkksContext& ctx, const string& path,
             return ln->generate_pt(*context, attrs.value("pt_idx", 0), attrs.value("bi", 0),
                                    attrs.value("bj", 0), attrs.value("g", 0));
         };
-        CkksPlaintextRingt pt;
+        CkksPlaintext pt;
         if (op_class == "ParBlockColMajorLNStats")
             pt = ln_pt(static_cast<ParBlockColMajorLNStats*>(layer));
         else if (op_class == "ParBlockColMajorLNXCentered")
@@ -68,49 +68,44 @@ vector<CkksCiphertext> run_lazy(CkksContext& ctx, const string& path,
             pt = generate_matrix_parameter(*context, layer, attrs);
         if (node.custom_prop->type == "encode_secret") {
             lock_guard<mutex> lock(probe_mutex);
-            out = make_shared<CkksCiphertext>(ctx.encrypt_symmetric(
-                ctx.ringt_to_pt(pt, attrs.at("parameter_level").get<int>())));
+            vector<double> values;
+            ctx.decode(pt, values);
+            auto encoded = fhe_api::encode(ctx, values, attrs.at("parameter_level").get<int>(), pt.scale());
+            in[node.output_nodes[0]->id] = make_shared<CkksCiphertext>(ctx.encrypt(encoded));
         } else {
-            out = make_shared<CkksPlaintextRingt>(move(pt));
+            in[node.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
         }
         ++encoded;
     };
     executors["encode_secret"] = executors["encode_pt"];
-    executors["check_contract"] = [&](ExecutionContext& ec, const unordered_map<NodeIndex, any>& in,
-                                       any& out, const ComputeNode& node) {
+    executors["check_contract"] = [&](ExecutionContext& ec, unordered_map<NodeId, any>& in, const ComputeNode& node) {
         auto* context = ec.get_arithmetic_context<CkksContext>();
         if (!context)
             throw runtime_error("contract check: missing CKKS context");
         const auto& attrs = node.custom_prop->attributes;
-        auto x = any_cast<shared_ptr<CkksCiphertext>>(in.at(node.input_nodes[0]->index));
+        auto x = any_cast<shared_ptr<CkksCiphertext>>(in.at(node.input_nodes[0]->id));
         auto second = node.input_nodes.size() == 1 ? 0 : 1;
         double rhs_scale;
         int rhs_level;
         if (attrs.at("plaintext").get<bool>()) {
-            auto pt = any_cast<shared_ptr<CkksPlaintextRingt>>(in.at(node.input_nodes[second]->index));
-            // Ringt has no scale accessor. Convert at the real operation level
-            // and read the scale through encryption, without setting metadata.
-            // Executor contexts have no secret key; use the test client's
-            // context only for this metadata probe, serialized across workers.
-            lock_guard<mutex> lock(probe_mutex);
-            auto encrypted = ctx.encrypt_symmetric(context->ringt_to_pt(*pt, x->get_level()));
-            rhs_scale = encrypted.get_scale();
-            rhs_level = encrypted.get_level();
+            auto pt = any_cast<shared_ptr<CkksPlaintext>>(in.at(node.input_nodes[second]->id));
+            rhs_scale = pt->scale();
+            rhs_level = pt->is_ringt() ? x->level() : pt->level();
         } else {
-            auto y = any_cast<shared_ptr<CkksCiphertext>>(in.at(node.input_nodes[second]->index));
-            rhs_scale = y->get_scale();
-            rhs_level = y->get_level();
+            auto y = any_cast<shared_ptr<CkksCiphertext>>(in.at(node.input_nodes[second]->id));
+            rhs_scale = y->scale();
+            rhs_level = y->level();
         }
-        if (x->get_level() != rhs_level)
+        if (x->level() != rhs_level)
             throw runtime_error("contract check: arithmetic operands have different levels");
-        if (attrs.at("operation") != "mult" && abs(x->get_scale() / rhs_scale - 1) > 1e-9)
+        if (attrs.at("operation") != "mult" && abs(x->scale() / rhs_scale - 1) > 1e-9)
             throw runtime_error("contract check: add/sub operands have different scales");
-        out = make_shared<CkksCiphertext>(x->copy());
+        in[node.output_nodes[0]->id] = make_shared<CkksCiphertext>(x->copy());
         ++checked;
     };
     vector<CkksCiphertext> output;
     for (size_t i = 0; i < (output_count ? output_count : a.data.size()); i++)
-        output.push_back(ctx.new_ciphertext(level, ctx.get_parameter().get_default_scale()));
+        output.push_back(CkksCiphertext(ctx.parameter(), level));
     vector<vector<CustomData>> sources(layers.size());
     vector<CxxVectorArgument> args{{"a", &a.data}};
     for (size_t i = 0; i < layers.size(); i++) {
@@ -146,11 +141,11 @@ vector<CkksCiphertext> run_lazy(CkksContext& ctx, const string& path,
 }  // namespace
 
 TEST_CASE("PCM row/chunk seeds restore independent matrix diagonals", "[pcm_seed]") {
-    auto param = CkksParameter::create_parameter(8192);
-    const uint32_t L = 3, slots = param.get_n() / 2;
-    auto ctx = CkksContext::create_random_context(param, L + 1);
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    const uint32_t L = 3, slots = param.max_slots();
+    auto ctx = CkksContext::create_random_context(param);
     ctx.gen_rotation_keys();
-    REQUIRE(double(param.get_q(L)) != param.get_default_scale());
+    REQUIRE(double(param.q()[L]) != param.default_scale());
     // Repeated chunks, head padding, multiple groups, u=1 and non-square BSGS.
     for (auto cfg : vector<array<uint32_t, 4>>{{8, 3, 24, 24}, {8, 3, 24, 43},
             {8, 3, 43, 24}, {32, 7, 224, 2}, {64, 3, 192, 192}}) {
@@ -191,9 +186,13 @@ TEST_CASE("PCM row/chunk seeds restore independent matrix diagonals", "[pcm_seed
             // Boundary requests exercise every seed, chunk and both signed row directions.
             if (ridx%capacity != 0 && ridx%capacity != capacity-1 && ridx+1 != requests &&
                 ridx != d-1 && ridx != d) continue;
-            auto seed = ctx.encrypt_symmetric(ctx.ringt_to_pt(layer.generate_row_chunk_seed_pt(ctx, sid), L+1));
-            auto restored = ctx.mult_plain_mul(seed,
-                ctx.ringt_to_mul(ParBlockColMajorCPMM::selection_for_config(ctx, d, heads, L, position), L+1));
+            const auto& seed_pt_2 = layer.generate_row_chunk_seed_pt(ctx, sid);
+            std::vector<double> seed_values_2;
+            ctx.decode(seed_pt_2, seed_values_2);
+            auto encoded_seed_2 = fhe_api::encode(ctx, seed_values_2, L+1, seed_pt_2.scale());
+            auto seed = ctx.encrypt(std::move(encoded_seed_2));
+            auto restored = ctx.mult(seed,
+                ParBlockColMajorCPMM::selection_for_config(ctx, d, heads, L, position));
             for (uint32_t bit = 0; (1u<<bit) < d; ++bit) {
                 const int step = int((1u<<bit)*u);
                 restored = ctx.add(restored, ctx.rotate(restored, position%d & (1u<<bit) ? step : -step));
@@ -202,11 +201,15 @@ TEST_CASE("PCM row/chunk seeds restore independent matrix diagonals", "[pcm_seed
                 const int step = int((1u<<bit)*chunk);
                 restored = ctx.add(restored, ctx.rotate(restored, position/d & (1u<<bit) ? step : -step));
             }
-            restored = ctx.rescale(restored, param.get_default_scale());
-            REQUIRE(restored.get_level() == L);
-            REQUIRE(restored.get_scale()/param.get_q(L) == Approx(1.0).epsilon(1e-9));
-            auto values = ctx.decode_complex(ctx.decrypt(restored));
-            auto reference = ctx.decode_complex(ctx.ringt_to_pt(layer.generate_diag_pt(ctx, mb, g, bp, k), L));
+            restored = ctx.rescale(restored);
+            REQUIRE(restored.level() == L);
+            REQUIRE(restored.scale()/param.q()[L] == Approx(1.0).epsilon(1e-9));
+            vector<double> values; ctx.decode(ctx.decrypt(restored), values);
+            const auto& seed_pt_3 = layer.generate_diag_pt(ctx, mb, g, bp, k);
+            std::vector<double> seed_values_3;
+            ctx.decode(seed_pt_3, seed_values_3);
+            auto encoded_seed_3 = fhe_api::encode(ctx, seed_values_3, L, seed_pt_3.scale());
+            vector<double> reference; ctx.decode(encoded_seed_3, reference);
             for (uint32_t s = 0; s < slots; ++s) {
                 recovery_error = max(recovery_error, abs(values[s]-expected[s]));
                 diagonal_error = max(diagonal_error, abs(values[s]-reference[s]));
@@ -224,17 +227,17 @@ TEST_CASE("PCM row/chunk seeds restore independent matrix diagonals", "[pcm_seed
 }
 
 TEST_CASE("PCM BERT LayerNorm stages preserve actual scale and lazy arithmetic contracts", "[pcm_bert]") {
-    auto param = CkksParameter::create_parameter(16384);
+    auto param = CkksParameter::create_parameter(14, RingType::ConjugateInvariant);
     const int L = 6;
-    auto ctx = CkksContext::create_random_context(param, L);
+    auto ctx = CkksContext::create_random_context(param);
     ctx.gen_rotation_keys();
-    REQUIRE(double(param.get_q(L)) != param.get_default_scale());
+    REQUIRE(double(param.q()[L]) != param.default_scale());
     const char* task_root = getenv("PCM_BERT_TASK_ROOT");
     uint32_t cfg_index = 0;
     for (auto cfg : vector<array<uint32_t, 3>>{{35, 12, 32}, {11, 3, 8}}) {
         auto [rows, heads, d] = cfg;
         Duo shape{rows, heads * 2 * d}, head{rows, 2 * d};
-        ParBlockColMajorLayout layout(shape, head, heads, d, param.get_n() / 2);
+        ParBlockColMajorLayout layout(shape, head, heads, d, param.max_slots());
         Array<double, 2> x({rows, shape[1]}), scalar({rows, 1}), other({rows, 1});
         for (uint32_t i = 0; i < rows; i++) {
             scalar.set(i, 0, 0.5 + 0.002 * i);
@@ -243,17 +246,17 @@ TEST_CASE("PCM BERT LayerNorm stages preserve actual scale and lazy arithmetic c
                 x.set(i, j, 0.03 + 0.001 * i + 0.0001 * j);
         }
         FeatureMatEncrypted full(&ctx, L), compact(&ctx, L), b(&ctx, L);
-        full.par_block_col_major_pack(x, d, heads, 2 * d, false, param.get_default_scale());
+        full.par_block_col_major_pack(x, d, heads, 2 * d, param.default_scale());
         auto pack_compact = [&](FeatureMatEncrypted& target, const Array<double, 2>& values) {
             target.data.clear();
             for (uint32_t bi = 0; bi < layout.br; bi++) {
-                vector<double> slots(param.get_n() / 2);
+                vector<double> slots(param.max_slots());
                 for (uint32_t s = 0; s < slots.size(); s++) {
                     uint32_t row = bi * d + (s % layout.chunk / layout.u) % d;
                     if (row < rows)
                         slots[s] = values.get(row, 0);
                 }
-                target.data.push_back(ctx.encrypt_symmetric(ctx.encode(slots, L, param.get_default_scale())));
+                target.data.push_back(ctx.encrypt(fhe_api::encode(ctx, slots, L, param.default_scale())));
             }
         };
         pack_compact(compact, scalar);
@@ -265,13 +268,13 @@ TEST_CASE("PCM BERT LayerNorm stages preserve actual scale and lazy arithmetic c
             auto verify = [&](const vector<CkksCiphertext>& cts) {
                 REQUIRE(cts.size() == (is_compact ? layout.br : layout.total_cts()));
                 for (const auto& ct : cts) {
-                    REQUIRE(ct.get_level() == L - cost);
-                    REQUIRE(ct.get_scale() / param.get_default_scale() == Approx(1.0).epsilon(1e-9));
+                    REQUIRE(ct.level() == L - cost);
+                    REQUIRE(ct.scale() / param.default_scale() == Approx(1.0).epsilon(1e-9));
                 }
                 if (is_compact) {
                     double error = 0;
                     for (uint32_t bi = 0; bi < cts.size(); bi++) {
-                        auto values = ctx.decode(ctx.decrypt(cts[bi]));
+                        std::vector<double> values; ctx.decode(ctx.decrypt(cts[bi]), values);
                         for (uint32_t s = 0; s < values.size(); s++) {
                             uint32_t row = bi * d + (s % layout.chunk / layout.u) % d;
                             if (row < rows)
@@ -298,8 +301,8 @@ TEST_CASE("PCM BERT LayerNorm stages preserve actual scale and lazy arithmetic c
                 verify(lazy);
                 double error = 0;
                 for (uint32_t i = 0; i < actual.size(); i++) {
-                    auto eager_values = ctx.decode(ctx.decrypt(actual[i]));
-                    auto lazy_values = ctx.decode(ctx.decrypt(lazy[i]));
+                    std::vector<double> eager_values; ctx.decode(ctx.decrypt(actual[i]), eager_values);
+                    std::vector<double> lazy_values; ctx.decode(ctx.decrypt(lazy[i]), lazy_values);
                     for (uint32_t s = 0; s < eager_values.size(); s++)
                         error = max(error, abs(eager_values[s] - lazy_values[s]));
                 }
@@ -333,11 +336,11 @@ TEST_CASE("PCM BERT LayerNorm stages preserve actual scale and lazy arithmetic c
 }
 
 TEST_CASE("PCM BERT primitives, eager/lazy parity and arithmetic contracts", "[pcm_bert]") {
-    auto param = CkksParameter::create_parameter(16384);
+    auto param = CkksParameter::create_parameter(14, RingType::ConjugateInvariant);
     const int L = 6;
-    auto ctx = CkksContext::create_random_context(param, L);
+    auto ctx = CkksContext::create_random_context(param);
     ctx.gen_rotation_keys();
-    REQUIRE(double(param.get_q(L)) != param.get_default_scale());
+    REQUIRE(double(param.q()[L]) != param.default_scale());
     const char* task_root = getenv("PCM_BERT_TASK_ROOT");
     if (!task_root)
         WARN("native checks only; generate tasks with gen_pcm_bert_layers.py and set PCM_BERT_TASK_ROOT for lazy checks");
@@ -353,8 +356,8 @@ TEST_CASE("PCM BERT primitives, eager/lazy parity and arithmetic contracts", "[p
                 y.set(i, j, 0.5 + 0.002 * i + 0.0002 * j);
             }
         FeatureMatEncrypted a(&ctx, L), b(&ctx, L);
-        a.par_block_col_major_pack(x, d, heads, cols, false, param.get_default_scale());
-        b.par_block_col_major_pack(y, d, heads, cols, false, param.get_default_scale());
+        a.par_block_col_major_pack(x, d, heads, cols, param.default_scale());
+        b.par_block_col_major_pack(y, d, heads, cols, param.default_scale());
         auto check = [&](const string& name, FeatureMatEncrypted actual,
                          const Array<double, 2>& expected, vector<Layer*> layers, bool binary = false) {
             INFO("layer=" << name);
@@ -379,16 +382,16 @@ TEST_CASE("PCM BERT primitives, eager/lazy parity and arithmetic contracts", "[p
         ParBlockColMajorHeadColSum sum(param, shape, head, heads, L, d);
         sum.prepare_weight();
         // Poison every padding slot, including padded heads, rows and columns.
-        ParBlockColMajorLayout layout(shape, head, heads, d, param.get_n() / 2);
+        ParBlockColMajorLayout layout(shape, head, heads, d, param.max_slots());
         for (uint32_t idx = 0; idx < a.data.size(); idx++) {
             auto noise = layout.constant(idx, 0.0);
             for (uint32_t slot = 0; slot < noise.size(); slot++)
                 if (layout.column(idx, slot) < 0)
                     noise[slot] = 7;
-            a.data[idx] = ctx.add(a.data[idx], ctx.encrypt_symmetric(ctx.encode(noise, L, param.get_default_scale())));
+            a.data[idx] = ctx.add(a.data[idx], ctx.encrypt(fhe_api::encode(ctx, noise, L, param.default_scale())));
         }
         check("headsum", sum.run(ctx, a), sum.run_plaintext(x), {&sum});
-        a.par_block_col_major_pack(x, d, heads, cols, false, param.get_default_scale());
+        a.par_block_col_major_pack(x, d, heads, cols, param.default_scale());
         ParBlockColMajorInverseInit init(param, shape, head, heads, L, d);
         init.prepare_weight();
         check("invinit", init.run(ctx, a), init.run_plaintext(x), {&init});
@@ -415,7 +418,7 @@ TEST_CASE("PCM BERT primitives, eager/lazy parity and arithmetic contracts", "[p
         // order-15 coefficients and refresh scheduling are covered end to end.
         vector<unique_ptr<ParBlockColMajorPoly>> polys;
         FeatureMatEncrypted intermediate(&ctx, L);
-        intermediate.par_block_col_major_pack(x, d, heads, cols, false, param.get_default_scale());
+        intermediate.par_block_col_major_pack(x, d, heads, cols, param.default_scale());
         auto expected = x.copy();
         vector<Layer*> stages;
         for (uint32_t i = 0; i < 3; i++) {

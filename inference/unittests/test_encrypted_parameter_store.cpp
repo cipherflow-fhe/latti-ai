@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <fstream>
+#include "fhe_api.h"
 #include "interface/encrypted_parameter_store.h"
 #include "interface/runner_bundle_io.h"
 #include "util/serial.h"
@@ -13,14 +14,13 @@ namespace fs = std::filesystem;
 using namespace fhe_ops_lib;
 
 TEST_CASE("lazy store evicts safely and supports containers without an index", "[parameter_store]") {
-    const auto param = CkksParameter::create_parameter(8192);
+    const auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
     auto ctx = CkksContext::create_random_context(param);
     const int level = 1;
-    const double scale = param.get_default_scale() * 0.625;
+    const double scale = param.default_scale() * 0.625;
     std::vector<Bytes> payloads;
     for (double value : {0.25, -0.5, 0.75}) {
-        payloads.push_back(ctx.encrypt_asymmetric(ctx.encode(std::vector<double>(param.get_n() / 2, value),
-                                                            level, scale)).serialize(param));
+        payloads.push_back(ctx.encrypt(fhe_api::encode(ctx, std::vector<double>(param.max_slots(), value), level, scale)).serialize());
     }
     const auto root = fs::temp_directory_path() / ("latti-store-test-" +
         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -56,12 +56,15 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
         REQUIRE(stats["cache_peak_bytes"].get<uint64_t>() <= payloads[0].size());
         // Eviction releases only the store's reference; in-flight graph branches
         // continue to own the same valid, unmodified ciphertext.
-        REQUIRE(ctx.decode(ctx.decrypt(*first))[0] == Approx(0.25).margin(1e-5));
+        std::vector<double> decoded_1; ctx.decode(ctx.decrypt(*first), decoded_1);
+        REQUIRE(decoded_1[0] == Approx(0.25).margin(1e-5));
         auto reloaded = store.load_element("w", 0);
         REQUIRE(reloaded != first);
-        REQUIRE(reloaded->get_scale() == Approx(scale));
-        REQUIRE(ctx.decode(ctx.decrypt(*second))[0] == Approx(-0.5).margin(1e-5));
-        REQUIRE(ctx.decode(ctx.decrypt(*reloaded))[0] == Approx(0.25).margin(1e-5));
+        REQUIRE(reloaded->scale() == Approx(scale));
+        std::vector<double> decoded_2; ctx.decode(ctx.decrypt(*second), decoded_2);
+        REQUIRE(decoded_2[0] == Approx(-0.5).margin(1e-5));
+        std::vector<double> decoded_3; ctx.decode(ctx.decrypt(*reloaded), decoded_3);
+        REQUIRE(decoded_3[0] == Approx(0.25).margin(1e-5));
         REQUIRE_THROWS_WITH(store.load_element("w", 3), Catch::Contains("out of range"));
         REQUIRE_THROWS_WITH(store.load_element("missing", 0), Catch::Contains("not found"));
 
@@ -74,7 +77,8 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
         EncryptedParameterStore eager(root);
         auto& all = eager.load_argument("w");
         REQUIRE(all.size() == 3);
-        REQUIRE(ctx.decode(ctx.decrypt(all[2]))[0] == Approx(0.75).margin(1e-5));
+        std::vector<double> decoded_4; ctx.decode(ctx.decrypt(all[2]), decoded_4);
+        REQUIRE(decoded_4[0] == Approx(0.75).margin(1e-5));
 
         manifest["arguments"]["w"]["scale"] = scale * 2;
         std::ofstream(root / "manifest.json") << manifest;
