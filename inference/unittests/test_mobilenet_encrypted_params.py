@@ -97,8 +97,8 @@ class MobileNetEncryptedParamsTest(unittest.TestCase):
                 with self.subTest(case=case, mode=mode), tempfile.TemporaryDirectory() as tmp:
                     root = Path(tmp)
                     feat = {'dim': 2, 'channel': case['ci'], 'shape': case['shape'], 'skip': [1, 1],
-                            'pack_num': case['pack'], 'level': 4}
-                    out = dict(feat, channel=case['co'], level=2,
+                            'pack_num': case['pack'], 'level': 2}
+                    out = dict(feat, channel=case['co'], level=0,
                                shape=[v // s for v, s in zip(case['shape'], case['stride'])])
                     layer = dict(case, type='conv2d', channel_input=case['ci'], channel_output=case['co'],
                                  feature_input=['input'], feature_output=['output'])
@@ -106,7 +106,7 @@ class MobileNetEncryptedParamsTest(unittest.TestCase):
                              'input_feature': ['input'], 'output_feature': ['output']}
                     (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
                     (root / 'task_config.json').write_text(json.dumps({'block_shape': [8, 8]}))
-                    gen_custom_task(str(root), param_name='PN13QP218', style='multiplexed',
+                    gen_custom_task(str(root), param_name='PN13Default', style='multiplexed',
                                     parameter_mode='encrypted_offline', input_mode='plaintext',
                                     deployment_mode='server_provisioned_runner', parameter_loading_mode=mode)
                     mega = json.loads((root / 'mega_ag.json').read_text())
