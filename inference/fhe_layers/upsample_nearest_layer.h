@@ -40,9 +40,9 @@ public:
     Array<double, 3> run_plaintext(const Array<double, 3>& x);
 
     // Helper function to generate select_tensor plaintext on-demand
-    ls::CkksPlaintextRingt generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int idx) const;
+    ls::CkksPlaintext generate_select_tensor_pt_for_index(ls::CkksContext& ctx, int idx) const;
 
-    std::vector<ls::CkksPlaintextRingt> select_tensor_pt;
+    std::vector<ls::CkksPlaintext> select_tensor_pt;
     Duo upsample_factor;
     Duo shape;
     Duo skip;

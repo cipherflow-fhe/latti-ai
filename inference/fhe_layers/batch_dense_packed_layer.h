@@ -57,15 +57,15 @@ private:
     void encode_diagonals(ls::CkksContext& ctx,
                           uint32_t input_block,
                           uint32_t output_block,
-                          std::vector<ls::CkksPlaintextMul>& diagonal_now,
-                          std::vector<ls::CkksPlaintextMul>& diagonal_wrap) const;
+                          std::vector<ls::CkksPlaintext>& diagonal_now,
+                          std::vector<ls::CkksPlaintext>& diagonal_wrap) const;
 
     RotatedInput precompute_input_rotations(ls::CkksContext& ctx, const ls::CkksCiphertext& input) const;
 
     ls::CkksCiphertext block_matmul(ls::CkksContext& ctx,
                                     const RotatedInput& rotations,
-                                    const std::vector<ls::CkksPlaintextMul>& diagonal_now,
-                                    const std::vector<ls::CkksPlaintextMul>& diagonal_wrap) const;
+                                    const std::vector<ls::CkksPlaintext>& diagonal_now,
+                                    const std::vector<ls::CkksPlaintext>& diagonal_wrap) const;
 
     uint32_t batch_size_;
     uint32_t input_dim_;
@@ -85,6 +85,6 @@ private:
     Array<double, 1> bias_;
     bool has_bias_ = false;
 
-    std::vector<ls::CkksPlaintextRingt> bias_pt_;
+    std::vector<ls::CkksPlaintext> bias_pt_;
     bool diagonals_prepared_ = false;
 };

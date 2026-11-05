@@ -124,7 +124,7 @@ class MatPolyBase:
         return param
 
     def _default_scale(self) -> float:
-        return float(self._param().scale)
+        return float(self._param().default_scale)
 
     def _q(self, level: int) -> float:
         return float(self._param().q[level])

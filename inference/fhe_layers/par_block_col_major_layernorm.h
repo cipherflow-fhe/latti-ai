@@ -39,7 +39,7 @@ public:
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
@@ -52,10 +52,10 @@ private:
 
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
-    ls::CkksPlaintextRingt iv_pt_;     // inv_var
-    ls::CkksPlaintextRingt eps_add_pt_;
+    ls::CkksPlaintext h0_mask_pt_;
+    ls::CkksPlaintext inv_n_pt_;  // 1/N
+    ls::CkksPlaintext iv_pt_;     // inv_var
+    ls::CkksPlaintext eps_add_pt_;
 };
 
 // ============================================================
@@ -74,7 +74,7 @@ public:
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
@@ -86,8 +86,8 @@ private:
 
     ls::CkksCiphertext intra_block_col_sum(ls::CkksContext& ctx, const ls::CkksCiphertext& ct) const;
 
-    ls::CkksPlaintextRingt h0_mask_pt_;
-    ls::CkksPlaintextRingt inv_n_pt_;  // 1/N
+    ls::CkksPlaintext h0_mask_pt_;
+    ls::CkksPlaintext inv_n_pt_;  // 1/N
 };
 
 // ============================================================
@@ -107,16 +107,16 @@ public:
     std::vector<ls::CkksCiphertext> run(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& a_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& a) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
     uint32_t d_, n_slot_, chunk_size_;
     double c0_, c1_, c2_;
 
-    ls::CkksPlaintextRingt c2_norm_pt_;
-    ls::CkksPlaintextRingt c1_pt_;
-    ls::CkksPlaintextRingt c0_add_pt_;
+    ls::CkksPlaintext c2_norm_pt_;
+    ls::CkksPlaintext c1_pt_;
+    ls::CkksPlaintext c0_add_pt_;
 };
 
 // ============================================================
@@ -134,14 +134,14 @@ public:
                                         const std::vector<ls::CkksCiphertext>& a_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& y, const Array<double, 2>& a) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
     uint32_t d_, n_slot_, chunk_size_;
 
-    ls::CkksPlaintextRingt three_pt_;      // 3.0, for pt*ct with y
-    ls::CkksPlaintextRingt half_norm_pt_;  // 0.5, normalizing scale
+    ls::CkksPlaintext three_pt_;      // 3.0, for pt*ct with y
+    ls::CkksPlaintext half_norm_pt_;  // 0.5, normalizing scale
 };
 
 // ============================================================
@@ -165,7 +165,7 @@ public:
                             const std::vector<ls::CkksCiphertext>& y_cts);
     Array<double, 2> run_plaintext(const Array<double, 2>& x_centered, const Array<double, 2>& y) const;
 
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_pt(ls::CkksContext& ctx, uint32_t pt_idx, uint32_t bi = 0, uint32_t bj = 0, uint32_t g = 0) const;
 
 private:
@@ -177,6 +177,6 @@ private:
     double inv_std_;
     Array<double, 1> gamma_vals_, beta_vals_;
 
-    std::vector<ls::CkksPlaintextRingt> gamma_pt_;
-    std::vector<ls::CkksPlaintextRingt> beta_add_pt_;
+    std::vector<ls::CkksPlaintext> gamma_pt_;
+    std::vector<ls::CkksPlaintext> beta_add_pt_;
 };

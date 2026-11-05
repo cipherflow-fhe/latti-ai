@@ -26,7 +26,7 @@ using namespace lattisense;
 int32_t bitlength = RING_MOD_BIT;
 
 Bytes save_ct(const CkksCiphertext& ct, const CkksParameter& param_h) {
-    auto vec = ct.serialize(param_h);
+    auto vec = ct.serialize();
     return vec;
 }
 CkksCiphertext load_ct(Bytes& vec) {
@@ -51,56 +51,25 @@ int64_t gen_random_for_share(int r_bitlength) {
 
 void parallel_for(int n, int n_thread, CkksContext& context, const function<void(CkksContext&, int)>& fn) {
     int n_group = div_ceil(n, n_thread);
-    context.resize_copies(n_thread);
 #pragma omp parallel for num_threads(n_thread)
     for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
-        CkksContext& context_copy = context.get_copy(thread_idx);
         for (int group_idx = 0; group_idx < n_group; group_idx++) {
             int i = group_idx * n_thread + thread_idx;
             if (i >= n) {
                 continue;
             }
-            fn(context_copy, i);
+            fn(context, i);
         }
     }
 }
 
-void parallel_for(int n, int n_thread, CkksBtpContext& context, const function<void(CkksBtpContext&, int)>& fn) {
-    int n_group = div_ceil(n, n_thread);
-    context.resize_copies(n_thread);
-#pragma omp parallel for num_threads(n_thread)
-    for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
-        CkksBtpContext& context_copy = context.get_copy(thread_idx);
-        for (int group_idx = 0; group_idx < n_group; group_idx++) {
-            int i = group_idx * n_thread + thread_idx;
-            if (i >= n) {
-                continue;
-            }
-            fn(context_copy, i);
-        }
-    }
-}
-
+// The v6 SDK evaluates on a thread-safe context and no longer exposes a
+// separate extra-level context; both callbacks receive the same context.
 void parallel_for_with_extra_level_context(int n,
                                            int n_thread,
                                            CkksContext& context,
                                            const function<void(CkksContext&, CkksContext&, int)>& fn) {
-    int n_group = div_ceil(n, n_thread);
-    context.resize_copies(n_thread);
-    CkksContext& extra_level_context = context.get_extra_level_context();
-    extra_level_context.resize_copies(n_thread);
-#pragma omp parallel for num_threads(n_thread)
-    for (int thread_idx = 0; thread_idx < n_thread; thread_idx++) {
-        CkksContext& context_copy = context.get_copy(thread_idx);
-        CkksContext& extra_level_context_copy = extra_level_context.get_copy(thread_idx);
-        for (int group_idx = 0; group_idx < n_group; group_idx++) {
-            int i = group_idx * n_thread + thread_idx;
-            if (i >= n) {
-                continue;
-            }
-            fn(context_copy, extra_level_context_copy, i);
-        }
-    }
+    parallel_for(n, n_thread, context, [&](CkksContext& ctx, int i) { fn(ctx, ctx, i); });
 }
 
 FeatureEncrypted::FeatureEncrypted() {}

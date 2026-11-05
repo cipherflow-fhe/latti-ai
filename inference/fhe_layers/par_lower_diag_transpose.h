@@ -30,8 +30,8 @@ public:
                           uint32_t level);
 
     void prepare_weight() override;
-    std::vector<std::vector<ls::CkksPlaintextRingt>> transpose_mask_pt_;
-    ls::CkksPlaintextRingt
+    std::vector<std::vector<ls::CkksPlaintext>> transpose_mask_pt_;
+    ls::CkksPlaintext
     generate_transpose_mask_pt(ls::CkksContext& ctx, uint32_t out_diag_idx, uint32_t mask_idx) const;
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& input);
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
@@ -43,7 +43,7 @@ private:
     std::vector<double> build_transpose_mask(uint32_t out_diag_idx, uint32_t mask_idx) const;
     ls::CkksCiphertext apply_mask(ls::CkksContext& ctx,
                                   const ls::CkksCiphertext& input_level_l,
-                                  const ls::CkksPlaintextRingt& mask_pt) const;
+                                  const ls::CkksPlaintext& mask_pt) const;
 
     uint32_t expected_ct_count() const;
 

@@ -42,7 +42,7 @@ BlockColMajorCPMM::BlockColMajorCPMM(const CkksParameter& param_in,
     n_ = n;
     p_ = p;
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     chunk_size_ = d_ * d_;
     assert(n_slot_ % chunk_size_ == 0 && "n_slot must be divisible by block_size^2");
     num_chunks_ = n_slot_ / chunk_size_;
@@ -94,7 +94,7 @@ std::vector<double> BlockColMajorCPMM::build_block_diagonal(int bj, int bp, int 
 void BlockColMajorCPMM::precompute_diagonals() {
     CkksContext ctx = CkksContext::create_empty_context(param_);
 
-    double scale = param_.get_q(level_);
+    double scale = param_.q()[level_];
 
     uint32_t total_b_blocks = num_block_rows_B_ * num_block_cols_B_;
     diag_pt_.clear();
@@ -106,7 +106,7 @@ void BlockColMajorCPMM::precompute_diagonals() {
             diag_pt_[b_idx].reserve(d_);
             for (uint32_t k = 0; k < d_; k++) {
                 auto diag_vec = build_block_diagonal(bj, bp, k);
-                diag_pt_[b_idx].push_back(ctx.encode_ringt(diag_vec, scale));
+                diag_pt_[b_idx].push_back(fhe_api::encode_ringt(ctx, diag_vec, scale));
             }
         }
     }
@@ -115,16 +115,16 @@ void BlockColMajorCPMM::precompute_diagonals() {
 // block_mult_cpmm: C_block = Σ_{k=0}^{d-1} rot(a, k*d) ⊙ diag_k(B_block)
 // Input level L -> Output level L-1
 CkksCiphertext BlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx, const CkksCiphertext& a, int bj, int bp) const {
-    double default_scale = param_.get_default_scale();
+    double default_scale = param_.default_scale();
     int b_idx = get_block_index(bj, bp, num_block_rows_B_);
-    CkksCiphertext result(0);
+    CkksCiphertext result;
 
     for (uint32_t k = 0; k < d_; k++) {
         int rot_amount = (k * d_) % chunk_size_;
         CkksCiphertext rotated = (rot_amount == 0) ? a.copy() : ctx.rotate(a, rot_amount);
 
-        auto diag_mul = ctx.ringt_to_mul(diag_pt_[b_idx][k], level_);
-        auto product = ctx.mult_plain_mul(rotated, diag_mul);
+        const auto& diag_mul = diag_pt_[b_idx][k];
+        auto product = ctx.mult(rotated, diag_mul);
 
         if (k == 0) {
             result = move(product);
@@ -132,7 +132,7 @@ CkksCiphertext BlockColMajorCPMM::block_mult_cpmm(CkksContext& ctx, const CkksCi
             result = ctx.add(result, product);
         }
     }
-    return ctx.rescale(result, default_scale);
+    return ctx.rescale(result);
 }
 
 std::vector<CkksCiphertext> BlockColMajorCPMM::run_core(CkksContext& ctx, const std::vector<CkksCiphertext>& A_cts) {
@@ -160,9 +160,9 @@ std::vector<CkksCiphertext> BlockColMajorCPMM::run_core(CkksContext& ctx, const 
     return C_cts;
 }
 
-CkksPlaintextRingt BlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const {
+CkksPlaintext BlockColMajorCPMM::generate_diag_pt(CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const {
     auto diag_vec = build_block_diagonal(bj, bp, k);
-    return ctx.encode_ringt(diag_vec, param_.get_q(level_));
+    return fhe_api::encode_ringt(ctx, diag_vec, param_.q()[level_]);
 }
 
 FeatureMatEncrypted BlockColMajorCPMM::run(CkksContext& ctx, const FeatureMatEncrypted& A) {

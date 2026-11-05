@@ -39,13 +39,13 @@ public:
 
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
 
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt_;
+    std::vector<std::vector<ls::CkksPlaintext>> weight_pt_;
 
-    std::vector<ls::CkksPlaintextRingt> bias_pt_;
+    std::vector<ls::CkksPlaintext> bias_pt_;
 
     // Helper functions to generate weights/bias on-demand (for lazy mode)
-    ls::CkksPlaintextRingt generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintext generate_weight_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int j) const;
+    ls::CkksPlaintext generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x) const;

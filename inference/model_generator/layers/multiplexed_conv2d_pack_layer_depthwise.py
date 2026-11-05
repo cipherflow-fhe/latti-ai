@@ -280,9 +280,9 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
         import math as _math
 
         n_bias = _math.ceil(self.n_out_channel / (self.stride[0] * self.stride[1] * self.n_channel_per_ct))
-        bias_pt = [CkksPlaintextRingtNode(f'convb_{layer_id}_{i}') for i in range(n_bias)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(n_bias)]
         if self.stride[0] != 1 or self.stride[1] != 1:
-            mask_pt = [CkksPlaintextRingtNode(f'convm_{layer_id}_{i}') for i in range(self.n_out_channel)]
+            mask_pt = [CkksPlaintextNode(f'convm_{layer_id}_{i}', is_ringt=True) for i in range(self.n_out_channel)]
         else:
             mask_pt = []
         return weight_pt, bias_pt, mask_pt
@@ -571,7 +571,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             x_ct_list = list()
             w_pt_list = list()
             for j in range(k_size):
-                w_pt = CkksPlaintextRingtNode(f'encode_pt_{ct_idx}_{j}')
+                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}', is_ringt=True)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=w_pt,
@@ -618,7 +618,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
 
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        m_pt = CkksPlaintextRingtNode(f'encode_pt_mask_{ct_idx}_{i}')
+                        m_pt = CkksPlaintextNode(f'encode_pt_mask_{ct_idx}_{i}', is_ringt=True)
                         custom_compute(
                             inputs=[conv_data_source],
                             output=m_pt,
@@ -630,7 +630,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[1])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_{i}')
+                b_pt = CkksPlaintextNode(f'encode_pt_{i}', is_ringt=True)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -646,7 +646,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             if p == 0:
                 sp = c_m_s
                 btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                b_pt = CkksPlaintextRingtNode(f'encode_pt_{btp_idx}')
+                b_pt = CkksPlaintextNode(f'encode_pt_{btp_idx}', is_ringt=True)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,

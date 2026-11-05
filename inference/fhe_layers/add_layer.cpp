@@ -28,7 +28,7 @@ void copy_param(const Feature2DEncrypted& x1, Feature2DEncrypted& result) {
     result.shape[1] = x1.shape[1];
     result.skip[0] = x1.skip[0];
     result.skip[1] = x1.skip[1];
-    result.level = x1.data[0].get_level();
+    result.level = x1.data[0].level();
     result.n_channel = x1.n_channel;
     result.n_channel_per_ct = x1.n_channel_per_ct;
 }
@@ -56,7 +56,7 @@ Feature2DEncrypted AddLayer::run(CkksContext& ctx, const Feature2DEncrypted& x0,
     result.shape[1] = x1.shape[1];
     result.skip[0] = x1.skip[0];
     result.skip[1] = x1.skip[1];
-    result.level = result.data[0].get_level();
+    result.level = result.data[0].level();
     result.n_channel = x1.n_channel;
     result.n_channel_per_ct = x1.n_channel_per_ct;
     return result;
@@ -122,7 +122,7 @@ ParBlockColMajorAdd::run(CkksContext& ctx, const FeatureMatEncrypted& x0, const 
     result.n_channel = x0.n_channel;
     result.n_channel_per_ct = x0.n_channel_per_ct;
     add(&ctx, x0, x1, result);
-    result.level = result.data.empty() ? x0.level : result.data[0].get_level();
+    result.level = result.data.empty() ? x0.level : result.data[0].level();
     return result;
 }
 

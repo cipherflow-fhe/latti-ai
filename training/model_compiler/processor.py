@@ -62,7 +62,7 @@ def update_subgraph_node_param(dag, param_dict: dict[str, FheParameter], param_i
 
     sub = LayerAbstractGraph()
     sub.dag = dag
-    slot_num = param_dict[param_id].poly_modulus_degree / 2
+    slot_num = param_dict[param_id].poly_modulus_degree
     # print(f'slot_num={slot_num}')
     if config.mpc_refresh:
         update_skip_for_btp(sub, print_flag)
@@ -414,7 +414,7 @@ def get_slot_num(ckks_parameter_id_input: str, param_dict: dict) -> int:
     """
     Get the slot number based on the parameter dictionary.
     """
-    return param_dict[ckks_parameter_id_input].poly_modulus_degree // 2
+    return param_dict[ckks_parameter_id_input].poly_modulus_degree
 
 
 def set_is_adaptive_avgpool(graph: LayerAbstractGraph):

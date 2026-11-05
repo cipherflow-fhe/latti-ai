@@ -41,16 +41,16 @@ public:
     virtual Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     virtual std::vector<double> select_tensor(int num) const;
 
-    std::vector<std::vector<ls::CkksPlaintextRingt>> weight_pt;
-    std::vector<ls::CkksPlaintextRingt> bias_pt;
-    std::vector<ls::CkksPlaintextRingt> mask_pt;
+    std::vector<std::vector<ls::CkksPlaintext>> weight_pt;
+    std::vector<ls::CkksPlaintext> bias_pt;
+    std::vector<ls::CkksPlaintext> mask_pt;
     bool normal_conv = true;
 
     // Helper functions to generate weights/bias/mask on-demand
-    ls::CkksPlaintextRingt
+    ls::CkksPlaintext
     generate_weight_pt_for_indices(ls::CkksContext& ctx, int n_packed_out_channel_idx, int kernel_idx) const;
-    ls::CkksPlaintextRingt generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
-    ls::CkksPlaintextRingt generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
+    ls::CkksPlaintext generate_bias_pt_for_index(ls::CkksContext& ctx, int bpt_idx) const;
+    ls::CkksPlaintext generate_mask_pt_for_indices(ls::CkksContext& ctx, int ct_idx, int i) const;
     static std::vector<double> mask_tensor_for_config(const Duo& input_shape, const Duo& skip,
                                                      const Duo& stride, uint32_t channels_per_ct,
                                                      uint32_t slots, int ct_idx, int local_idx);
@@ -60,8 +60,8 @@ public:
         return n_channel_per_ct;
     }
 
-    ls::CkksPlaintextRingt generate_weight_pt_for_seed_indices(ls::CkksContext& ctx, int ct_idx, int seed_kernel) const;
-    ls::CkksPlaintextRingt generate_mask_pt_for_seed_indices(ls::CkksContext& ctx, int subgrid,
+    ls::CkksPlaintext generate_weight_pt_for_seed_indices(ls::CkksContext& ctx, int ct_idx, int seed_kernel) const;
+    ls::CkksPlaintext generate_mask_pt_for_seed_indices(ls::CkksContext& ctx, int subgrid,
                                                             int kernel_index, bool boundary) const;
     bool use_seed_weight_pack() const { return use_seed_weight_pack_; }
     bool joint_seed_weights() const { return use_seed_weight_pack_ && joint_seed_requests_; }

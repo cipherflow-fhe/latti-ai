@@ -34,19 +34,14 @@ public:
     uint32_t batch_feature_dim = 0;
     uint32_t batch_block_size = 0;
     std::vector<ls::CkksCiphertext> data;
-    std::vector<ls::CkksCompressedCiphertext> data_compressed;
 
     Feature0DEncrypted(ls::CkksContext* context_in, int ct_level);
-    void pack(const Array<double, 1>& feature_mg,
-              bool is_symmetric = false,
-              double scale_in = DEFAULT_SCALE,
-              uint32_t skip_in = 1);
+    void pack(const Array<double, 1>& feature_mg, double scale_in = DEFAULT_SCALE, uint32_t skip_in = 1);
     // Batch-packed matrix mode. Each input row is one sample; different
     // batch row blocks are stored in different d*d chunks of one ciphertext.
-    void
-    batch_pack(const Array<double, 2>& matrix, uint32_t d, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    void batch_pack(const Array<double, 2>& matrix, uint32_t d, double scale_in = DEFAULT_SCALE);
     Array<double, 2> batch_unpack(uint32_t batch_size, uint32_t feature_dim, uint32_t d) const;
-    void pack_cyclic(const std::vector<double>& feature_mg, bool is_symmetric = false, double scale_in = DEFAULT_SCALE);
+    void pack_cyclic(const std::vector<double>& feature_mg, double scale_in = DEFAULT_SCALE);
     Array<double, 1> unpack() const;
 
     void to_share(Feature0DEncrypted* share0, Feature0DShare* share1) const;
@@ -55,7 +50,6 @@ public:
     void split_to_shares_reshape(Feature0DEncrypted* share0, Feature0DShare* share1) const;
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;
-    void decompress();
     Feature0DEncrypted combine_with_share(const Feature0DShare& share) const;
     Feature0DEncrypted
     combine_with_share_new_protocol(const Feature0DShare& share, const Feature0DEncrypted& f2d, const Bytes& b1) const;

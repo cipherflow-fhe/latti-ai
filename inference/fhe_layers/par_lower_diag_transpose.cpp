@@ -56,7 +56,7 @@ ParLowerDiagTranspose::ParLowerDiagTranspose(const CkksParameter& param_in,
     n_ = next_pow2(n_prepad_);
     assert(n_ % m_ == 0);
 
-    n_slot_ = param_.get_n() / 2;
+    n_slot_ = param_.max_slots();
     segment_len_ = H_ * n_;
     assert(segment_len_ > 0);
     assert(n_slot_ % segment_len_ == 0);
@@ -108,17 +108,17 @@ void ParLowerDiagTranspose::prepare_weight() {
     }
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 ParLowerDiagTranspose::generate_transpose_mask_pt(CkksContext& ctx, uint32_t out_diag_idx, uint32_t mask_idx) const {
-    return ctx.encode_ringt(build_transpose_mask(out_diag_idx, mask_idx), param_.get_q(level_));
+    return fhe_api::encode_ringt(ctx, build_transpose_mask(out_diag_idx, mask_idx), param_.q()[level_]);
 }
 
 CkksCiphertext ParLowerDiagTranspose::apply_mask(CkksContext& ctx,
                                                  const CkksCiphertext& input_level_l,
-                                                 const CkksPlaintextRingt& mask_pt) const {
-    double default_scale = param_.get_default_scale();
-    auto mask_mul = ctx.ringt_to_mul(mask_pt, level_);
-    return ctx.rescale(ctx.mult_plain_mul(input_level_l, mask_mul), default_scale);
+                                                 const CkksPlaintext& mask_pt) const {
+    double default_scale = param_.default_scale();
+    const auto& mask_mul = mask_pt;
+    return ctx.rescale(ctx.mult(input_level_l, mask_mul));
 }
 
 std::vector<CkksCiphertext> ParLowerDiagTranspose::run_core(CkksContext& ctx,

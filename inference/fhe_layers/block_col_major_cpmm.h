@@ -33,7 +33,7 @@ public:
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
     // Lazy generation: encode on demand without precompute_diagonals()
-    ls::CkksPlaintextRingt generate_diag_pt(ls::CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const;
+    ls::CkksPlaintext generate_diag_pt(ls::CkksContext& ctx, uint32_t bj, uint32_t bp, uint32_t k) const;
 
 private:
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& A_cts);
@@ -51,5 +51,5 @@ private:
     uint32_t num_block_rows_B_, num_block_cols_B_;
 
     // diag_pt_[b_block_idx][k], k=0..d-1
-    std::vector<std::vector<ls::CkksPlaintextRingt>> diag_pt_;
+    std::vector<std::vector<ls::CkksPlaintext>> diag_pt_;
 };

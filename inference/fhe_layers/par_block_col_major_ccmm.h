@@ -31,11 +31,11 @@ public:
     void precompute_diagonals();
 
     // Lazy generation: encode diagonal plaintexts on demand
-    ls::CkksPlaintextRingt generate_sigma_pt(ls::CkksContext& ctx, uint32_t k) const;
-    ls::CkksPlaintextRingt generate_tau_pt(ls::CkksContext& ctx, uint32_t offset_idx) const;
-    ls::CkksPlaintextRingt generate_psi_k0_pt(ls::CkksContext& ctx) const;
-    ls::CkksPlaintextRingt generate_psi_wk_pt(ls::CkksContext& ctx, uint32_t i) const;
-    ls::CkksPlaintextRingt generate_psi_wkd_pt(ls::CkksContext& ctx, uint32_t i) const;
+    ls::CkksPlaintext generate_sigma_pt(ls::CkksContext& ctx, uint32_t k) const;
+    ls::CkksPlaintext generate_tau_pt(ls::CkksContext& ctx, uint32_t offset_idx) const;
+    ls::CkksPlaintext generate_psi_k0_pt(ls::CkksContext& ctx) const;
+    ls::CkksPlaintext generate_psi_wk_pt(ls::CkksContext& ctx, uint32_t i) const;
+    ls::CkksPlaintext generate_psi_wkd_pt(ls::CkksContext& ctx, uint32_t i) const;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A, const FeatureMatEncrypted& B);
     Array<double, 2> run_plaintext(const Array<double, 2>& A, const Array<double, 2>& B) const;
@@ -79,9 +79,9 @@ private:
     uint32_t bsgs_gs_tau_;
 
     // Precomputed diagonal plaintexts
-    std::vector<ls::CkksPlaintextRingt> sigma_diag_pt_;       // d vectors
-    std::vector<ls::CkksPlaintextRingt> tau_diag_pt_;         // 2d-1 vectors
-    ls::CkksPlaintextRingt psi_k0_pt_;                        // all-ones for i=0
-    std::vector<ls::CkksPlaintextRingt> psi_w_k_pt_;          // d-1 vectors (i=1..d-1)
-    std::vector<ls::CkksPlaintextRingt> psi_w_k_minus_d_pt_;  // d-1 vectors (i=1..d-1)
+    std::vector<ls::CkksPlaintext> sigma_diag_pt_;       // d vectors
+    std::vector<ls::CkksPlaintext> tau_diag_pt_;         // 2d-1 vectors
+    ls::CkksPlaintext psi_k0_pt_;                        // all-ones for i=0
+    std::vector<ls::CkksPlaintext> psi_w_k_pt_;          // d-1 vectors (i=1..d-1)
+    std::vector<ls::CkksPlaintext> psi_w_k_minus_d_pt_;  // d-1 vectors (i=1..d-1)
 };

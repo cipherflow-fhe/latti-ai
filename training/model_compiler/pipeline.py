@@ -30,11 +30,10 @@ from components import (
     FeatureNode,
     LayerAbstractGraph,
     config,
-    PN13QP218,
-    PN14QP438,
-    PN15QP880,
-    PN16QP1761,
-    N16QP1546H192H32,
+    PN12Default,
+    PN13Default,
+    PN14Default,
+    PN15Default,
 )
 import processor
 from processor import *
@@ -131,7 +130,7 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
           until shape0 * shape1 <= N / 2. If this leaves half the slots
           unused, double the width (dimension 1).
     """
-    slot_num = params.poly_modulus_degree // 2
+    slot_num = params.poly_modulus_degree
     leading_nodes = raw_graph.get_leading_feature_nodes()
     if getattr(config, 'model_type', '') == 'bert' or any(node.data_type == 'feature_mat' for node in leading_nodes):
         config.block_shape = [1, 1]
@@ -142,7 +141,7 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
         return
     leading_shape = leading_nodes[0].shape
     block = list(leading_shape)
-    slot_num = params.poly_modulus_degree // 2
+    slot_num = params.poly_modulus_degree
     # threshold = N / 2
     import math
 
@@ -167,7 +166,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    no_btp_params = [PN13QP218, PN14QP438, PN15QP880, PN16QP1761]
+    no_btp_params = [PN12Default, PN13Default, PN14Default, PN15Default]
 
     for params in no_btp_params:
         set_fhe_param(params)
@@ -206,7 +205,7 @@ def try_btp(
     num_workers: int,
     enable_score_cache: bool = True,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
-    btp_param_list = [N16QP1546H192H32]
+    btp_param_list = [PN15Default]
     valid_results = []
     for params in btp_param_list:
         set_fhe_param(params)
@@ -270,7 +269,7 @@ def run_btp_compilation(
 
 
 def post_process(graph: LayerAbstractGraph):
-    slot_num = config.fhe_param.poly_modulus_degree / 2
+    slot_num = config.fhe_param.poly_modulus_degree
     for node in list(graph.dag.nodes):
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()

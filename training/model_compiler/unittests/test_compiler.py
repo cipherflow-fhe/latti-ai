@@ -929,7 +929,6 @@ class TestCompiler(CompilerTestBase):
                 if node.dim == 0:
                     expected = math.ceil(
                         config.fhe_param.poly_modulus_degree
-                        / 2
                         / (
                             attrs['virtual_shape'][0]
                             * attrs['virtual_shape'][1]
@@ -940,7 +939,6 @@ class TestCompiler(CompilerTestBase):
                 else:
                     expected = math.ceil(
                         config.fhe_param.poly_modulus_degree
-                        / 2
                         / (node.shape[0] * node.shape[1] * attrs['skip'][0] * attrs['skip'][1])
                     )
                 self.assertEqual(attrs['pack_num'], expected)
@@ -958,7 +956,6 @@ class TestCompiler(CompilerTestBase):
                 if node.dim == 0:
                     expected = math.ceil(
                         config.fhe_param.poly_modulus_degree
-                        / 2
                         / (
                             attrs['virtual_shape'][0]
                             * attrs['virtual_shape'][1]
@@ -967,7 +964,7 @@ class TestCompiler(CompilerTestBase):
                         )
                     )
                 else:
-                    expected = math.ceil(config.fhe_param.poly_modulus_degree / 2 / (node.shape[0] * node.shape[1]))
+                    expected = math.ceil(config.fhe_param.poly_modulus_degree / (node.shape[0] * node.shape[1]))
                 self.assertEqual(attrs['pack_num'], expected)
         self.assertEqual(check_dropped_levels_per_subgraph(graph), True)
 

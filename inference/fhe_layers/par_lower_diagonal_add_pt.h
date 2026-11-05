@@ -37,12 +37,12 @@ public:
                           uint32_t level,
                           Array<double, 2>&& B);
     void precompute_pts();
-    std::vector<ls::CkksPlaintextRingt> pt_;
+    std::vector<ls::CkksPlaintext> pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& A);
     Array<double, 2> run_plaintext(const Array<double, 2>& A) const;
 
-    ls::CkksPlaintextRingt generate_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local) const;
+    ls::CkksPlaintext generate_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local) const;
 
 private:
     std::vector<double> build_pt_vec(uint32_t mb, uint32_t ct_local) const;

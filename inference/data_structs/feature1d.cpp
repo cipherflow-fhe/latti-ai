@@ -32,22 +32,17 @@ Feature1DEncrypted::Feature1DEncrypted(CkksContext* context_in,
     invalid_fill = invalid_fill_in;
 }
 
-void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, double scale_in) {
     const int N_THREAD = 4;
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];
 
     uint32_t shape_with_skip = shape * skip;
-    n_channel_per_ct = context->get_parameter().get_n() / 2 / shape_with_skip;
+    n_channel_per_ct = context->parameter().max_slots() / shape_with_skip;
     uint32_t n_ct = div_ceil(n_channel, n_channel_per_ct);
 
     data.clear();
-    data_compress.clear();
-    if (is_symmetric) {
-        data_compress.resize(n_ct);
-    } else {
-        data.resize(n_ct);
-    }
+    data.resize(n_ct);
 
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<double> image_flat;
@@ -74,23 +69,17 @@ void Feature1DEncrypted::pack(Array<double, 2>& feature_mg, bool is_symmetric, d
             }
         }
 
-        auto image_flat_pt = ctx_copy.encode(image_flat, level, scale_in);
-        if (is_symmetric) {
-            auto image_flat_ct = ctx_copy.encrypt_symmetric_compressed(image_flat_pt);
-            data_compress[ct_idx] = move(image_flat_ct);
-        } else {
-            auto image_flat_ct = ctx_copy.encrypt_symmetric(image_flat_pt);
-            data[ct_idx] = move(image_flat_ct);
-        }
+        auto image_flat_pt = fhe_api::encode(ctx_copy, image_flat, level, scale_in);
+        data[ct_idx] = ctx_copy.encrypt(image_flat_pt);
     });
 }
 
-void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bool is_symmetric, double scale_in) {
+void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, double scale_in) {
     const int N_THREAD = 4;
     n_channel = feature_mg.get_shape()[0];
     shape = feature_mg.get_shape()[1];
 
-    int n_slot = context->get_parameter().get_n() / 2;
+    int n_slot = context->parameter().max_slots();
 
     // skip already contains invalid_fill: block_stride = skip (not skip*invalid_fill)
     // valid channels per block = skip / invalid_fill
@@ -102,12 +91,7 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
     int f_ct_num = div_ceil(n_channel, n_channel_per_ct);
 
     data.clear();
-    data_compress.clear();
-    if (is_symmetric) {
-        data_compress.resize(f_ct_num);
-    } else {
-        data.resize(f_ct_num);
-    }
+    data.resize(f_ct_num);
 
     parallel_for(f_ct_num, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         vector<double> image_flat(n_slot, 0.0);
@@ -127,14 +111,8 @@ void Feature1DEncrypted::pack_multiplexed(const Array<double, 2>& feature_mg, bo
             }
         }
 
-        auto image_flat_pt = ctx_copy.encode(image_flat, level, scale_in);
-        if (is_symmetric) {
-            auto image_flat_ct = ctx_copy.encrypt_symmetric_compressed(image_flat_pt);
-            data_compress[ct_idx] = move(image_flat_ct);
-        } else {
-            auto image_flat_ct = ctx_copy.encrypt_symmetric(image_flat_pt);
-            data[ct_idx] = move(image_flat_ct);
-        }
+        auto image_flat_pt = fhe_api::encode(ctx_copy, image_flat, level, scale_in);
+        data[ct_idx] = ctx_copy.encrypt(image_flat_pt);
     });
 }
 
@@ -151,8 +129,8 @@ Array<double, 2> Feature1DEncrypted::unpack_multiplexed() const {
 
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
-
+        Array1D x_mg;
+        ctx_copy.decode(x_pt, x_mg);
         for (int j = 0; j < (int)n_channel_per_ct; j++) {
             int channel = ct_idx * (int)n_channel_per_ct + j;
             if (channel >= (int)n_channel) {
@@ -178,7 +156,8 @@ Array<double, 2> Feature1DEncrypted::unpack() const {
     Array<double, 2> result({n_channel, shape});
     parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksPlaintext x_pt = ctx_copy.decrypt(data[ct_idx]);
-        Array1D x_mg = ctx_copy.decode(x_pt);
+        Array1D x_mg;
+        ctx_copy.decode(x_pt, x_mg);
         for (int i = 0; i < n_channel_per_ct; i++) {
             int channel_idx = ct_idx * n_channel_per_ct + i;
             if (channel_idx >= n_channel) {
@@ -204,13 +183,13 @@ Bytes Feature1DEncrypted::serialize() const {
     uint32_t n_ct = data.size();
     ss_write(ss, n_ct);
     for (const CkksCiphertext& ct : data) {
-        Bytes ct_data = ct.serialize(context->get_parameter());
+        Bytes ct_data = ct.serialize();
         ss_write_vector(ss, ct_data);
     }
     uint32_t n_cct = data_compress.size();
     ss_write(ss, n_cct);
-    for (const CkksCompressedCiphertext& cct : data_compress) {
-        Bytes cct_data = cct.serialize(context->get_parameter());
+    for (const CkksCiphertext& cct : data_compress) {
+        Bytes cct_data = cct.serialize();
         ss_write_vector(ss, cct_data);
     }
     return ss_to_bytes(ss);
@@ -238,7 +217,7 @@ void Feature1DEncrypted::deserialize(const Bytes& bytes) {
     for (uint32_t i = 0; i < n_cct; i++) {
         Bytes cct_data;
         ss_read_vector(ss, &cct_data);
-        data_compress.push_back(CkksCompressedCiphertext::deserialize(cct_data));
+        data_compress.push_back(CkksCiphertext::deserialize(cct_data));
     }
 }
 
@@ -262,8 +241,8 @@ Feature1DEncrypted Feature1DEncrypted::drop_level(int n_level_to_drop) const {
     result.data.resize(data.size());
     parallel_for(data.size(), th_nums, *context, [&](CkksContext& ctx_copy, int ct_idx) {
         auto ct_tmp = data[ct_idx].copy();
-        for (int j = 0; j < n_level_to_drop; j++) {
-            ct_tmp = ctx_copy.drop_level(ct_tmp);
+        if (n_level_to_drop > 0) {
+            ct_tmp = ctx_copy.drop_level(ct_tmp, n_level_to_drop);
         }
         result.data[ct_idx] = move(ct_tmp);
     });

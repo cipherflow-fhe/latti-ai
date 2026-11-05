@@ -70,7 +70,7 @@ int stockmeyer_horner_baby_poly_count(int order, int baby_steps) {
 MatPolyBase::MatPolyBase(const CkksParameter& param_in, Array<double, 2>&& coeffs_in, uint32_t level_in, int order_in)
     : Layer(param_in), order(order_in), coeffs_(move(coeffs_in)) {
     level_ = level_in;
-    N = param_in.get_n();
+    N = param_in.n();
 }
 
 int MatPolyBase::compute_stockmeyer_level_cost(int order) {
@@ -111,7 +111,7 @@ void MatPolyBase::init_stockmeyer() {
 
     modulus.clear();
     for (int i = 0; i <= (int)level_; i++) {
-        modulus.push_back(param_.get_q(i));
+        modulus.push_back(param_.q()[i]);
     }
 
     stockmeyer_baby_steps = 4;
@@ -140,7 +140,7 @@ void MatPolyBase::init_stockmeyer_horner(int baby_steps) {
 
     modulus.clear();
     for (int i = 0; i <= (int)level_; i++) {
-        modulus.push_back(param_.get_q(i));
+        modulus.push_back(param_.q()[i]);
     }
 
     stockmeyer_horner_baby_steps = baby_steps;
@@ -154,7 +154,7 @@ void MatPolyBase::init_stockmeyer_horner(int baby_steps) {
 }
 
 void MatPolyBase::compute_stockmeyer_power_info() {
-    double S = param_.get_default_scale();
+    double S = param_.default_scale();
     stockmeyer_powers.clear();
 
     stockmeyer_powers[1] = {0, (int)level_, S, 0, 0, true};
@@ -184,7 +184,7 @@ void MatPolyBase::compute_stockmeyer_power_info() {
 }
 
 void MatPolyBase::compute_stockmeyer_horner_power_info() {
-    double S = param_.get_default_scale();
+    double S = param_.default_scale();
     stockmeyer_horner_powers.clear();
 
     stockmeyer_horner_powers[1] = {0, (int)level_, S, 0, 0, true};
@@ -209,7 +209,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
     coeff_scale.clear();
     level_order.clear();
 
-    double S = param_.get_default_scale();
+    double S = param_.default_scale();
     double A1 = stockmeyer_powers.at(1).scale;
 
     stockmeyer_baby_poly_output_scale.assign(stockmeyer_n_baby_polys, 0.0);
@@ -238,7 +238,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             int combine_power = stockmeyer_baby_steps * half;
             const auto& power_info = stockmeyer_powers.at(combine_power);
             int right_level = target_level + 1;
-            double right_scale = (target_scale / power_info.scale) * param_.get_q(right_level);
+            double right_scale = (target_scale / power_info.scale) * param_.q()[right_level];
             assign_targets(start + half, half, right_count, right_level, right_scale);
         }
     };
@@ -262,7 +262,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
                 throw invalid_argument("MatPolyBase Stockmeyer linear coefficient target level is out of range");
             }
             level_order[base + 1] = target_level + 1;
-            coeff_scale[base + 1] = (target_scale / A1) * param_.get_q(target_level + 1);
+            coeff_scale[base + 1] = (target_scale / A1) * param_.q()[target_level + 1];
         }
         if (base + 2 <= order) {
             if (target_level + 1 > (int)level_) {
@@ -270,7 +270,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             }
             double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 2] = target_level + 1;
-            coeff_scale[base + 2] = (target_scale / A2) * param_.get_q(target_level + 1);
+            coeff_scale[base + 2] = (target_scale / A2) * param_.q()[target_level + 1];
         }
         if (base + 3 <= order) {
             if (target_level + 2 > (int)level_) {
@@ -279,7 +279,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer(std::map<int, double>& c
             double A2 = stockmeyer_powers.at(2).scale;
             level_order[base + 3] = target_level + 2;
             coeff_scale[base + 3] =
-                ((target_scale / A2) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2);
+                ((target_scale / A2) * param_.q()[target_level + 1] / A1) * param_.q()[target_level + 2];
         }
     }
 }
@@ -289,7 +289,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
     coeff_scale.clear();
     level_order.clear();
 
-    double S = param_.get_default_scale();
+    double S = param_.default_scale();
     double A1 = stockmeyer_horner_powers.at(1).scale;
     double A2 = stockmeyer_horner_powers.at(2).scale;
     double A4 = stockmeyer_horner_powers.at(4).scale;
@@ -309,7 +309,7 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
         }
         stockmeyer_horner_baby_poly_output_level[j] = target_level;
         stockmeyer_horner_baby_poly_output_scale[j] =
-            (stockmeyer_horner_baby_poly_output_scale[j - 1] / AB) * param_.get_q(target_level);
+            (stockmeyer_horner_baby_poly_output_scale[j - 1] / AB) * param_.q()[target_level];
     }
 
     auto set_coeff = [&](int coeff_idx, int coeff_level, double scale) {
@@ -332,14 +332,14 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
             set_coeff(base, target_level, target_scale);
         }
         if (base + 1 <= order) {
-            set_coeff(base + 1, target_level + 1, (target_scale / A1) * param_.get_q(target_level + 1));
+            set_coeff(base + 1, target_level + 1, (target_scale / A1) * param_.q()[target_level + 1]);
         }
         if (base + 2 <= order) {
-            set_coeff(base + 2, target_level + 1, (target_scale / A2) * param_.get_q(target_level + 1));
+            set_coeff(base + 2, target_level + 1, (target_scale / A2) * param_.q()[target_level + 1]);
         }
         if (base + 3 <= order) {
             set_coeff(base + 3, target_level + 2,
-                      ((target_scale / A2) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2));
+                      ((target_scale / A2) * param_.q()[target_level + 1] / A1) * param_.q()[target_level + 2]);
         }
 
         if (stockmeyer_horner_baby_steps == 4) {
@@ -347,21 +347,21 @@ void MatPolyBase::compute_coefficient_scales_stockmeyer_horner(std::map<int, dou
         }
 
         if (base + 4 <= order) {
-            set_coeff(base + 4, target_level + 1, (target_scale / A4) * param_.get_q(target_level + 1));
+            set_coeff(base + 4, target_level + 1, (target_scale / A4) * param_.q()[target_level + 1]);
         }
         if (base + 5 <= order) {
             set_coeff(base + 5, target_level + 2,
-                      ((target_scale / A4) * param_.get_q(target_level + 1) / A1) * param_.get_q(target_level + 2));
+                      ((target_scale / A4) * param_.q()[target_level + 1] / A1) * param_.q()[target_level + 2]);
         }
         if (base + 6 <= order) {
             set_coeff(base + 6, target_level + 2,
-                      ((target_scale / A4) * param_.get_q(target_level + 1) / A2) * param_.get_q(target_level + 2));
+                      ((target_scale / A4) * param_.q()[target_level + 1] / A2) * param_.q()[target_level + 2]);
         }
         if (base + 7 <= order) {
             set_coeff(
                 base + 7, target_level + 3,
-                (((target_scale / A4) * param_.get_q(target_level + 1) / A2) * param_.get_q(target_level + 2) / A1) *
-                    param_.get_q(target_level + 3));
+                (((target_scale / A4) * param_.q()[target_level + 1] / A2) * param_.q()[target_level + 2] / A1) *
+                    param_.q()[target_level + 3]);
         }
     }
 }

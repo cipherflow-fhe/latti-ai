@@ -68,7 +68,7 @@ public:
                               const std::vector<uint32_t>& input_invalid_fills,
                               int level);
 
-    std::vector<ls::CkksPlaintextRingt> mask_pt;
+    std::vector<ls::CkksPlaintext> mask_pt;
 
 private:
     Feature2DEncrypted run_multiple_inputs_uneven(ls::CkksContext& ctx, const std::vector<Feature2DEncrypted>& inputs);

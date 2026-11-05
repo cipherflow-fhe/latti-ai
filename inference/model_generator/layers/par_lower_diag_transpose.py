@@ -100,7 +100,7 @@ class ParLowerDiagTranspose:
         for out_diag_idx in range(self.m):
             row = []
             for mask_idx in range(2):
-                node = CkksPlaintextRingtNode(f'encode_pt_transpose_mask_{out_diag_idx}_{mask_idx}')
+                node = CkksPlaintextNode(f'encode_pt_transpose_mask_{out_diag_idx}_{mask_idx}', is_ringt=True)
                 custom_compute(
                     inputs=[data_source],
                     output=node,

@@ -31,14 +31,14 @@ public:
 
     void prepare_weight() override;
 
-    std::vector<ls::CkksPlaintextRingt> one_pt_;
-    std::vector<ls::CkksPlaintextRingt> half_pt_;
+    std::vector<ls::CkksPlaintext> one_pt_;
+    std::vector<ls::CkksPlaintext> half_pt_;
 
     FeatureMatEncrypted run(ls::CkksContext& ctx, const FeatureMatEncrypted& half_tanh, const FeatureMatEncrypted& x);
     Array<double, 2> run_plaintext(const Array<double, 2>& half_tanh, const Array<double, 2>& x) const;
 
-    ls::CkksPlaintextRingt generate_one_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t g = 0) const;
-    ls::CkksPlaintextRingt generate_half_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t g = 0) const;
+    ls::CkksPlaintext generate_one_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t g = 0) const;
+    ls::CkksPlaintext generate_half_pt(ls::CkksContext& ctx, uint32_t mb, uint32_t ct_local, uint32_t g = 0) const;
 
 private:
     uint32_t n_prepad_ = 0, total_cols_ = 0, m_prepad_ = 0;

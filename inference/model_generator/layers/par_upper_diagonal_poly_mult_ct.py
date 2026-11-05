@@ -86,7 +86,7 @@ class ParUpperDiagonalPolyMultCt:
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextRingtNode(f'encode_pt_{op_class}_{pt_type}_{mb}_{ct_local}')
+                node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_type}_{mb}_{ct_local}', is_ringt=True)
                 custom_compute(
                     inputs=[data_source],
                     output=node,

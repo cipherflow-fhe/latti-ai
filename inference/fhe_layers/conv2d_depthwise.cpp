@@ -52,7 +52,7 @@ Conv2DPackedDepthwiseLayer::Conv2DPackedDepthwiseLayer(const CkksParameter& para
     n_groups_ = n_out_channel_;
     n_in_channel_ = n_out_channel_;
     level_ = level;
-    modified_scale_ = param_.get_q(level_) * residual_scale;
+    modified_scale_ = param_.q()[level_] * residual_scale;
 }
 
 void Conv2DPackedDepthwiseLayer::prepare_weight() {
@@ -81,7 +81,7 @@ void Conv2DPackedDepthwiseLayer::mult_add(CkksContext* ctx,
                                           uint32_t end,
                                           std::vector<CkksCiphertext>& result) const {
     for (uint32_t packed_out_ct_idx = start; packed_out_ct_idx < end; packed_out_ct_idx++) {
-        CkksCiphertext accumulator(0);
+        CkksCiphertext accumulator;
 
         for (uint32_t ki = 0; ki < kernel_shape_[0]; ki++) {
             for (uint32_t kj = 0; kj < kernel_shape_[1]; kj++) {
@@ -90,13 +90,13 @@ void Conv2DPackedDepthwiseLayer::mult_add(CkksContext* ctx,
                 const CkksCiphertext& x_ct = rotated_x[packed_out_ct_idx][kernel_idx];
                 CkksCiphertext product;
                 if (weight_pt_.empty()) {
-                    CkksPlaintextRingt w_pt_rt = generate_weight_pt_for_indices(*ctx, packed_out_ct_idx, kernel_idx);
-                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level_);
-                    product = ctx->mult_plain_mul(x_ct, w_pt);
+                    CkksPlaintext w_pt_rt = generate_weight_pt_for_indices(*ctx, packed_out_ct_idx, kernel_idx);
+                    const auto& w_pt = w_pt_rt;
+                    product = ctx->mult(x_ct, w_pt);
                 } else {
-                    const CkksPlaintextRingt& w_pt_rt = weight_pt_[packed_out_ct_idx][kernel_idx];
-                    auto w_pt = ctx->ringt_to_mul(w_pt_rt, level_);
-                    product = ctx->mult_plain_mul(x_ct, w_pt);
+                    const CkksPlaintext& w_pt_rt = weight_pt_[packed_out_ct_idx][kernel_idx];
+                    const auto& w_pt = w_pt_rt;
+                    product = ctx->mult(x_ct, w_pt);
                 }
                 if (ki == 0 && kj == 0) {
                     accumulator = std::move(product);
@@ -106,13 +106,13 @@ void Conv2DPackedDepthwiseLayer::mult_add(CkksContext* ctx,
             }
         }
 
-        accumulator = ctx->rescale(accumulator, param_.get_default_scale());
+        accumulator = ctx->rescale(accumulator);
         if (bias_pt_.empty()) {
-            CkksPlaintextRingt bias_plaintext = generate_bias_pt_for_index(*ctx, packed_out_ct_idx);
-            accumulator = ctx->add_plain_ringt(accumulator, bias_plaintext);
+            CkksPlaintext bias_plaintext = generate_bias_pt_for_index(*ctx, packed_out_ct_idx);
+            accumulator = ctx->add(accumulator, bias_plaintext);
         } else {
-            const CkksPlaintextRingt& bias_plaintext = bias_pt_[packed_out_ct_idx];
-            accumulator = ctx->add_plain_ringt(accumulator, bias_plaintext);
+            const CkksPlaintext& bias_plaintext = bias_pt_[packed_out_ct_idx];
+            accumulator = ctx->add(accumulator, bias_plaintext);
         }
         result[packed_out_ct_idx] = std::move(accumulator);
     }
@@ -204,7 +204,7 @@ void Conv2DPackedDepthwiseLayer::prepare_weight_lazy() {
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
 
     // Cache values for on-demand generation
-    N = param_.get_n();
+    N = param_.n();
     cached_input_block_size = input_shape_ct[0] * input_shape_ct[1];
 
     // Generate kernel masks
@@ -240,7 +240,7 @@ void Conv2DPackedDepthwiseLayer::prepare_weight_lazy() {
     input_rotate_units_.push_back(skip_[0] * 1);
 }
 
-CkksPlaintextRingt
+CkksPlaintext
 Conv2DPackedDepthwiseLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j) const {
     const uint32_t packed_out_ct_idx = ct_idx;
     const uint32_t ki = j / kernel_shape_[1];
@@ -266,15 +266,15 @@ Conv2DPackedDepthwiseLayer::generate_weight_pt_for_indices(CkksContext& ctx, int
         }
     }
 
-    return ctx.encode_ringt(packed_weights, encode_pt_scale);
+    return fhe_api::encode_ringt(ctx, packed_weights, encode_pt_scale);
 }
 
-CkksPlaintextRingt Conv2DPackedDepthwiseLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
+CkksPlaintext Conv2DPackedDepthwiseLayer::generate_bias_pt_for_index(CkksContext& ctx, int bpt_idx) const {
     const uint32_t packed_out_ct_idx = bpt_idx;
 
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
 
-    const double bias_scale = param_.get_default_scale();
+    const double bias_scale = param_.default_scale();
 
     std::vector<double> packed_bias;
     for (uint32_t pack_idx = 0; pack_idx < n_channel_per_ct_; pack_idx++) {
@@ -293,5 +293,5 @@ CkksPlaintextRingt Conv2DPackedDepthwiseLayer::generate_bias_pt_for_index(CkksCo
         }
     }
 
-    return ctx.encode_ringt(packed_bias, bias_scale);
+    return fhe_api::encode_ringt(ctx, packed_bias, bias_scale);
 }

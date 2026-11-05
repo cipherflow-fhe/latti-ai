@@ -1,7 +1,7 @@
 # v6 语义下移植 encparams 功能与 CIFAR10 GPU lazy 验收规范
 
 状态：设计规范
-依据：docs/research/v6_adapt_encparams_merge_research.md、v6 侧 feat/lattisense-adapt 代码、runs/cifar10/run_pipeline.md
+依据：v6 侧 feat/lattisense-adapt 代码、feat/linghm-encparams 功能代码、runs/cifar10/run_pipeline.md（原研究文档已按要求删除）
 目标：在 v6 语义和接口下重新移植 feat/linghm-encparams 的参数加密功能，并用 CIFAR10 的输入加密 GPU lazy 和参数加密 GPU runtime-lazy 两条端到端链路验收。
 
 ## 1. 范围与不可变原则
@@ -38,6 +38,83 @@
 | GPU memory monitor path | 记录验收时的 GPU 内存证据 |
 
 每个行为作为可独立回溯的 commit，不能把旧 submodule tip 直接覆盖 v6 tip。
+
+#### 2.1.1 latti-ai 主仓库：切出分支和合并方向
+
+主仓库从 `feat/linghm-encparams` 的 `02abe9e` 切出工作分支 `feat/v6-adapt-encparams`，将 `origin/feat/lattisense-adapt` 的 `d5fcca9` 合并到该工作分支。源分支均不直接修改。保留 encparams 分支历史只为保留待移植功能；发生语义或接口冲突时仍以 v6 为唯一基准，不能据此保留旧语义或添加兼容层。
+
+以下是首次建立工作分支的命令；恢复执行时先检查 `git status` 和当前分支，不重复切出已存在的分支或启动第二次 merge：
+
+    cd /home/linghm/project/latti-ai
+    git fetch origin feat/linghm-encparams feat/lattisense-adapt
+    git switch feat/linghm-encparams
+    git rev-parse HEAD
+    # 本次 encparams 基线必须为 02abe9e；不使用 reset 覆盖已有工作。
+    git switch -c feat/v6-adapt-encparams
+    git rev-parse origin/feat/lattisense-adapt
+    # 本次 v6 基线必须为 d5fcca9；若远端已推进，仍使用下列固定提交。
+    git merge --no-commit --no-ff d5fcca9603790768cff3aaccade588eff99f829a
+
+解决主仓库冲突时，按第 2.2 节逐项把 encparams 功能改写为 v6 接口；不得对整个冲突文件统一选 ours/theirs 而丢失功能或带回旧接口。示例 task、compiled_mega_ag.json 和模型二进制不作为本次验收证据，验收必须在独立目录重新生成。merge 中的 `inference/lattisense` 冲突按下一节处理，不能合并旧 SDK tip。冲突全部解决并检查后，显式暂存相关源码并完成基线 merge：
+
+    git diff --name-only --diff-filter=U
+    # 上一命令必须无输出；逐项检查并 git add 实际解决的文件。
+    git diff --cached --check
+    git commit -m "Merge v6 adaptation baseline into encparams migration branch"
+
+基线 merge 后，容量、序列化、各 FHE layer、generator/compiler、runner/store 的修改和修正分别提交；不得把验收目录加入任何 commit。记录方向始终为 `feat/lattisense-adapt -> feat/v6-adapt-encparams`，不向两个源分支反向合并。
+
+#### 2.1.2 inference/lattisense：从 v6 基线切出并移植行为
+
+主仓库 v6 提交绑定的 SDK 基线为 `898bc396cb247426e5c76ab2ae7702558b0c3766`，属于 SDK 的 `origin/feat/lattigo-v6-adaptation` 分支。SDK 的目标分支也命名为 `feat/v6-adapt-encparams`，但它与主仓库同名分支属于两个独立 Git 仓库。必须从该 v6 固定提交切出，不能从 SDK 的旧 `feat/linghm-encparams` tip `e0db939` 切出后覆盖 v6。
+
+    cd /home/linghm/project/latti-ai/inference/lattisense
+    git fetch origin feat/lattigo-v6-adaptation feat/linghm-encparams
+    git switch -c feat/v6-adapt-encparams 898bc396cb247426e5c76ab2ae7702558b0c3766
+
+SDK 不执行 `git merge feat/linghm-encparams`。从旧 SDK 功能分支向新 SDK 工作分支按以下顺序逐个移植提交，每次应用后都检查并按 v6 task node/ABI 语义调整；检查完成才提交，前一个行为未完成时不执行下一个：
+
+| 源提交（旧 SDK 功能分支） | 移植行为 |
+| --- | --- |
+| `1f17d57` | extra task signature fields |
+| `108f6ae` | custom compute wait inputs |
+| `c1a248d` | online/offline argument validation |
+| `7e7cf87` | inputless encode_pt |
+| `e0db939` | GPU memory monitor path |
+
+源补丁先用 `git show` 检查，再按 v6 的模块布局重写；旧版 `frontend/custom_task.py` 中的签名和 node 实现已拆分到 v6 的 `frontend/linker/` 与 `frontend/types.py`，因此本次不直接 cherry-pick 旧版文件。检查命令如下，`<source_commit>` 依次取表中值：
+
+    git show --stat <source_commit>
+    git show <source_commit>
+    # 按 v6 语义编辑对应模块，显式 git add 实际修改的文件。
+    git diff --cached --check
+    git commit -m "<本次 v6 行为移植说明>"
+
+这只是功能移植入口，不是允许保留旧接口。本次 SDK 行为提交为 `2bd6550`（离线参数和额外签名字段）、`3f9e241`（参数边界校验）、`f7857f3`（inputless encode_pt）、`387731e`（以 v6 普通 graph input 表达等待依赖）。`e0db939` 的内存监控路径修复在 v6 基线 `mega_ag_runners/gpu/gpu_wrapper.cu` 中已经存在，无须重复提交。后续修正仍按模块单独提交，不引入兼容类或 wrapper。
+
+#### 2.1.3 SDK 嵌套子模块及主仓库指针
+
+Lattigo 与 GPU core 使用 SDK v6 基线绑定的提交，不创建功能分支、不合并旧 HEonGPU/FPGA 分支：
+
+| 嵌套子模块 | 固定提交 |
+| --- | --- |
+| `fhe_ops_lib/lattigo` | `22bff324e146968c186106524c06cea607462b05` |
+| `backends/lattisense-gpu-core` | `aea1ef873aed3e199aa785a0e4f42d8a42b9351f` |
+
+    cd /home/linghm/project/latti-ai/inference/lattisense
+    git submodule sync --recursive
+    git submodule update --init --recursive -- fhe_ops_lib/lattigo backends/lattisense-gpu-core
+    git submodule status --recursive
+
+`submodule update` 将嵌套仓库检出到 SDK gitlink 对应提交（detached HEAD），不执行嵌套仓库的 `git pull` 或分支 merge。旧工作区残留的 HEonGPU 目录不作为构建输入，也不重新加入 `.gitmodules`。SDK 行为提交完成后，在主仓库记录其最终指针；若主仓库 merge 尚未结束，先解决其他冲突再完成基线 merge，否则独立提交 SDK 指针：
+
+    cd /home/linghm/project/latti-ai
+    git -C inference/lattisense log --oneline -6
+    git add inference/lattisense
+    # 非 merge 状态下独立提交；merge 状态使用第 2.1.1 节的基线提交。
+    git commit -m "Port encparams task protocols onto the v6 SDK baseline"
+
+主仓库提交必须引用包含移植行为的 SDK commit，不能仅在 SDK 工作区保留未提交修改。两层仓库的源码提交与验收产物分开管理，任何 push 均不属于本规范的本地实现和验收步骤。
 
 ### 2.2 latti-ai v6 适配层
 
@@ -331,7 +408,7 @@ C++/v6 侧执行已构建的 data struct、FHE layer、heterogeneous GPU 和 run
 
 ## 8. 证据文件和完成定义
 
-每次验收提交以下文件：
+每次验收在本地保留以下证据文件，不纳入 Git commit：
 
     runs/cifar10/v6_adapt_validation/reference/onnx.csv
     runs/cifar10/v6_adapt_validation/reference/onnx.json

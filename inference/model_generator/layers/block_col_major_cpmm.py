@@ -92,7 +92,7 @@ class BlockColMajorCPMM:
         for bp in range(self.num_block_cols_B):
             for bj in range(self.num_block_rows_B):
                 b_idx = self._block_index(bj, bp, self.num_block_rows_B)
-                diag_pt[b_idx] = [CkksPlaintextRingtNode(f'cpmm_diag_{layer_id}_{bj}_{bp}_{k}') for k in range(self.d)]
+                diag_pt[b_idx] = [CkksPlaintextNode(f'cpmm_diag_{layer_id}_{bj}_{bp}_{k}', is_ringt=True) for k in range(self.d)]
         return diag_pt
 
     # ------------------------------------------------------------------ #
@@ -107,7 +107,7 @@ class BlockColMajorCPMM:
 
         Args:
             a_ct:       input CkksCiphertextNode at level L.
-            diag_pts_d: list of d CkksPlaintextRingtNode, one per rotation k.
+            diag_pts_d: list of d CkksPlaintextNode, one per rotation k.
         """
         d, chunk_size = self.d, self.chunk_size
         x_ct_list = []
@@ -180,7 +180,7 @@ class BlockColMajorCPMM:
                 b_idx = self._block_index(bj, bp, self.num_block_rows_B)
                 diag_pt_b = []
                 for k in range(d):
-                    node = CkksPlaintextRingtNode(f'encode_pt_{bj}_{bp}_{k}')
+                    node = CkksPlaintextNode(f'encode_pt_{bj}_{bp}_{k}', is_ringt=True)
                     custom_compute(
                         inputs=[data_source],
                         output=node,

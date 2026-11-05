@@ -199,13 +199,13 @@ struct SharedHeteroResources {
         return instance;
     }
     const int N = 16384;
-    const int n_slot = N / 2;
+    const int n_slot = N;
     CkksParameter param;
     CkksContext context;
 
 private:
     SharedHeteroResources()
-        : param(CkksParameter::create_parameter(N)), context(CkksContext::create_random_context(param)) {
+        : param(CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant)), context(CkksContext::create_random_context(param)) {
         context.gen_rotation_keys();
     }
     SharedHeteroResources(const SharedHeteroResources&) = delete;
@@ -218,13 +218,13 @@ struct UpperDiagonalHeteroResources {
         return instance;
     }
     const int N = 8192;
-    const int n_slot = N / 2;
+    const int n_slot = N;
     CkksParameter param;
     CkksContext context;
 
 private:
     UpperDiagonalHeteroResources()
-        : param(CkksParameter::create_parameter(N)), context(CkksContext::create_random_context(param)) {
+        : param(CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant)), context(CkksContext::create_random_context(param)) {
         context.gen_rotation_keys();
     }
     UpperDiagonalHeteroResources(const UpperDiagonalHeteroResources&) = delete;
@@ -702,7 +702,7 @@ public:
     HeteroFixture()
         : N{SharedHeteroResources::get().N}, n_slot{SharedHeteroResources::get().n_slot},
           param{SharedHeteroResources::get().param}, context{SharedHeteroResources::get().context}, level(3),
-          min_level{0}, max_level{param.get_max_level()}, default_scale{param.get_default_scale()} {}
+          min_level{0}, max_level{param.max_level()}, default_scale{param.default_scale()} {}
 
     ~HeteroFixture() {
         MetricsCollector::save_to_csv("hetero_performance_results.csv");
@@ -785,7 +785,7 @@ par_diagonal_total_cts(const CkksParameter& param, Duo shape, Duo head_shape, ui
     uint32_t m = next_pow2_u32(m_prepad);
     uint32_t n = next_pow2_u32(n_prepad);
     uint32_t segment_len = H * n;
-    uint32_t c = (param.get_n() / 2) / segment_len;
+    uint32_t c = (param.max_slots()) / segment_len;
     uint32_t cts_per_mb = m / c;
     uint32_t packed_extent = n_heads * m_prepad;
     uint32_t packed_total = is_transposed ? shape[0] : shape[1];
@@ -821,14 +821,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FOR_EACH_SECTION(uint32_t n_prepad, n_prepads, "n_prepad=" + to_string(n_prepad)) {
         fs::path project_path = base_path / "CKKS_par_lower_diag_transpose" / ("n_prepad_" + to_string(n_prepad)) /
                                 ("level_" + to_string(init_level)) / "server";
+
         if (!fs::exists(project_path / "mega_ag.json"))
             return;
 
         Array<double, 2> X_T = gen_random_array<2>({n_heads * head_dim, n_prepad}, 1.0);
 
         FeatureMatEncrypted input_enc(&this->context, init_level);
-        input_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false,
-                                    this->param.get_default_scale());
+        input_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true,
+                                    this->param.default_scale());
 
         ParLowerDiagTranspose layer(this->param, Duo{head_dim, n_prepad}, n_heads, head_dim, init_level);
         layer.prepare_weight();
@@ -840,7 +841,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_out =
             par_diagonal_total_cts(this->param, {n_prepad, n_heads * head_dim}, {n_prepad, head_dim}, n_heads, false);
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            out_cts.emplace_back(this->context.parameter(), init_level - 1);
+            out_cts.back().set_scale(this->param.default_scale());
 
         auto arg_names = read_arg_names(project_path);
         vector<CxxVectorArgument> cxx_args;
@@ -902,7 +904,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         Array<double, 1> bias = gen_random_array<1>({cfg.w_cols}, 0.1);
 
         FeatureMatEncrypted X_enc(&this->context, init_level);
-        X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+        X_enc.par_diagonal_pack(X_T, n_heads, {head_dim, n_prepad}, true, true, this->param.default_scale());
 
         ParLowerDiagPCMM layer(this->param, Duo{cfg.w_rows, n_prepad}, n_heads, head_dim, W_T, init_level, bias.copy());
         layer.prepare_weight();
@@ -914,7 +916,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_out =
             par_diagonal_total_cts(this->param, {cfg.w_cols, n_prepad}, {head_dim, n_prepad}, n_heads, true);
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+            out_cts.emplace_back(this->context.parameter(), init_level - 2);
+            out_cts.back().set_scale(this->param.default_scale());
 
         auto arg_names = read_arg_names(project_path);
         vector<CxxVectorArgument> cxx_args;
@@ -960,8 +963,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, ccmm_level);
     FeatureMatEncrypted B_enc(&this->context, ccmm_level);
-    A_enc.par_diagonal_pack(A, n_heads, {n_prepad, head_dim}, true, false, false, this->param.get_default_scale());
-    B_enc.par_diagonal_pack(B, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, {n_prepad, head_dim}, true, false, this->param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {head_dim, n_prepad}, true, true, this->param.default_scale());
 
     ParLowerDiagCCMM layer(this->param, Duo{n_prepad, head_dim}, Duo{head_dim, n_prepad}, n_heads, head_dim,
                            ccmm_level);
@@ -976,7 +979,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_out =
         par_diagonal_total_cts(this->param, {n_heads * n_prepad, n_prepad}, {n_prepad, n_prepad}, n_heads, true);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(ccmm_level - 3, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), ccmm_level - 3);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1022,8 +1026,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&this->context, init_level);
     FeatureMatEncrypted B_enc(&this->context, init_level);
-    A_enc.par_diagonal_pack(A, n_heads, {head_dim, n_prepad}, true, true, false, this->param.get_default_scale());
-    B_enc.par_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, true, true, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, {head_dim, n_prepad}, true, true, this->param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, {n_prepad, n_prepad}, true, true, this->param.default_scale());
 
     ParLowerDiagCCMM layer(this->param, Duo{head_dim, n_prepad}, Duo{n_prepad, n_prepad}, n_heads, head_dim,
                            init_level);
@@ -1038,7 +1042,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_out =
         par_diagonal_total_cts(this->param, {n_heads * head_dim, n_prepad}, {head_dim, n_prepad}, n_heads, true);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level - 3);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1086,7 +1091,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto B = gen_random_array<2>({total_rows, n_prepad}, 0.5);
 
     FeatureMatEncrypted A_enc(&this->context, init_level);
-    A_enc.par_diagonal_pack(A, n_heads, head_shape, true, true, false, this->param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, true, true, this->param.default_scale());
 
     ParLowerDiagonalAddPt layer(this->param, shape, head_shape, n_heads, init_level, B.copy());
     layer.precompute_pts();
@@ -1097,7 +1102,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, true);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1141,7 +1147,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         return;
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     FeatureMatEncrypted X_enc(&this->context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalLNStats layer(this->param, shape, head_shape, n_heads, init_level, eps, inv_var);
     layer.prepare_weight();
@@ -1152,7 +1158,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level - 3);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1199,7 +1206,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         return;
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     FeatureMatEncrypted X_enc(&this->context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalLNXCentered layer(this->param, shape, head_shape, n_heads, init_level);
     layer.prepare_weight();
@@ -1210,7 +1217,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level - 2);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1256,7 +1264,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         return;
     auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
     FeatureMatEncrypted a_input(&this->context, input_level);
-    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalLNMinimaxInit layer(this->param, shape, head_shape, n_heads, input_level, c0, c1, c2);
     layer.prepare_weight();
@@ -1267,7 +1275,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(input_level - 2, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), input_level - 2);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1314,8 +1323,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto a_mat = gen_random_array<2>({n_prepad, total_cols}, 1.0);
     FeatureMatEncrypted y_input(&this->context, input_level);
     FeatureMatEncrypted a_input(&this->context, input_level);
-    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
-    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, this->param.default_scale());
+    a_input.par_diagonal_pack(a_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalLNGoldschmidt layer(this->param, shape, head_shape, n_heads, input_level);
     layer.prepare_weight();
@@ -1328,7 +1337,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         a_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(input_level - 3, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), input_level - 3);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1379,9 +1389,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto beta = gen_random_array<1>({total_cols}, 0.1);
     FeatureMatEncrypted x_centered_input(&this->context, y_level - 1);
     FeatureMatEncrypted y_input(&this->context, y_level);
-    x_centered_input.par_diagonal_pack(x_centered_mat, n_heads, head_shape, false, false, false,
-                                       this->param.get_default_scale());
-    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    x_centered_input.par_diagonal_pack(x_centered_mat, n_heads, head_shape, false, false,
+                                       this->param.default_scale());
+    y_input.par_diagonal_pack(y_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalLNAffine layer(this->param, shape, head_shape, n_heads, y_level, inv_std, gamma.copy(),
                                    beta.copy());
@@ -1395,7 +1405,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         y_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(y_level - 2, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), y_level - 2);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1442,7 +1453,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     auto gamma_vals = gen_random_array<1>({total_cols}, 0.5);
     FeatureMatEncrypted X_enc(&this->context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalPolyActRNGamma layer(this->param, shape, head_shape, n_heads, init_level, gamma_vals.copy());
     layer.prepare_weight();
@@ -1453,7 +1464,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level - 1);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1497,7 +1509,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto X_mat = gen_random_array<2>({n_prepad, total_cols}, 0.5);
     auto coeffs = gen_random_array<2>({degree + 1, total_cols}, 0.2);
     FeatureMatEncrypted X_enc(&this->context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, this->param.get_default_scale());
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, this->param.default_scale());
 
     ParUpperDiagonalPolyActRNPoly layer(this->param, shape, head_shape, n_heads, init_level, coeffs.copy(), degree);
     layer.prepare_weight();
@@ -1508,7 +1520,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     uint32_t n_out = par_diagonal_total_cts(this->param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level - 3, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level - 3);
+        out_cts.back().set_scale(this->param.default_scale());
 
     auto arg_names = read_arg_names(project_path);
     vector<CxxVectorArgument> cxx_args;
@@ -1540,13 +1553,30 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     REQUIRE(comparison.rmse < 1.0e-2 * comparison.rms);
 }
 
-TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
-    const uint32_t N = 65536;
-    CkksParameter param = CkksParameter::create_parameter(N);
-    const int init_level = 17;
-    CkksContext context = CkksContext::create_random_context(param, init_level);
+// Test-only conjugate-invariant parameter chain with enough levels for the
+// deep three-stage polynomial tests. The default PN15 chain keeps only 13 Q
+// primes (max_level=12), while these tests need 18 levels. All moduli are
+// 1 mod 4N for N=2^15, as required by the conjugate-invariant ring.
+static CkksParameter make_long_ci_parameter() {
+    static const vector<uint64_t> q = {
+        0x7FFFFFFFE0001, 0x10000140001, 0xFFFFE80001, 0xFFFFC40001, 0x100003E0001, 0x10000500001,
+        0xFFFFB20001,    0xFFFF940001,    0xFFFF8A0001, 0xFFFF820001, 0xFFFF780001, 0x10000960001,
+        0x10000A40001,   0x10000B60001,   0x10000CE0001, 0x10000DE0001, 0x100010A0001, 0x10001680001,
+    };
+    static const vector<uint64_t> p = {
+        0x4000000120001,
+        0x3FFFFFFD20001,
+    };
+    return CkksParameter::create_custom_parameter(15, 40, q, p, RingType::ConjugateInvariant);
+}
 
-    const uint32_t n_slot = param.get_n() / 2;
+TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
+    const uint32_t N = 1 << 15;
+    CkksParameter param = make_long_ci_parameter();
+    const int init_level = param.max_level();
+    CkksContext context = CkksContext::create_random_context(param);
+
+    const uint32_t n_slot = param.max_slots();
     const uint32_t n_prepad = 128;
     const uint32_t n_heads = 2;
     const uint32_t m_prepad = 128;
@@ -1555,12 +1585,12 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     const double scale = 64.0;
     const double f2_input_scale = 0.5;
     const double f3_input_scale = 0.5;
-    const double default_scale = param.get_default_scale();
+    const double default_scale = param.default_scale();
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
 
     REQUIRE(n_slot == n_prepad * total_cols);
-    REQUIRE(init_level >= 17);
+    REQUIRE(init_level > 0);
 
     const vector<double> p1_desc = {
         -0.029080343483084341, 2.3066773634990557e-17,  0.45471038861073326, -2.8078925777913385e-16,
@@ -1622,7 +1652,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     }
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, default_scale);
 
     auto make_scalar_gamma = [&](double scalar) {
         Array<double, 1> gamma({total_cols});
@@ -1671,8 +1701,8 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
     gelu_layer.prepare_weight();
     FeatureMatEncrypted gelu_enc = gelu_layer.run(context, half_tanh_refined, X_for_gelu);
     REQUIRE(gelu_enc.level == init_level - 17);
-    CAPTURE(gelu_enc.data[0].get_scale(), default_scale);
-    REQUIRE(fabs(gelu_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+    CAPTURE(gelu_enc.data[0].scale(), default_scale);
+    REQUIRE(fabs(gelu_enc.data[0].scale() - default_scale) <= default_scale * 1.0e-12);
 
     Array<double, 2> output_mg = gelu_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
     Array<double, 2> plain_output = expected.copy();
@@ -1692,12 +1722,12 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polygelu_cpp", "[fhe_layers][par_u
 }
 
 TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_upper_diagonal_poly][stockmeyer]") {
-    const uint32_t N = 65536;
-    CkksParameter param = CkksParameter::create_parameter(N);
+    const uint32_t N = 1 << 15;
+    CkksParameter param = CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant);
     const int init_level = 9;
-    CkksContext context = CkksContext::create_random_context(param, init_level);
+    CkksContext context = CkksContext::create_random_context(param);
 
-    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_slot = param.max_slots();
     const uint32_t n_prepad = 128;
     const uint32_t n_heads = 2;
     const uint32_t m_prepad = 128;
@@ -1705,7 +1735,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_u
     const uint32_t order = 15;
     const int stockmeyer_level_cost = MatPolyBase::compute_stockmeyer_level_cost(order);
     const double input_scale = 40.0;
-    const double default_scale = param.get_default_scale();
+    const double default_scale = param.default_scale();
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
 
@@ -1776,7 +1806,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_u
     }
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, default_scale);
 
     input_scale_layer.prepare_weight();
     FeatureMatEncrypted X_scaled = input_scale_layer.run(context, X_enc);
@@ -1789,8 +1819,8 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_u
     poly2.prepare_weight_stockmeyer();
     FeatureMatEncrypted tanh_enc = poly2.run_stockmeyer(context, f1_enc);
     REQUIRE(tanh_enc.level == f1_enc.level - stockmeyer_level_cost);
-    CAPTURE(tanh_enc.data[0].get_scale(), default_scale);
-    REQUIRE(fabs(tanh_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+    CAPTURE(tanh_enc.data[0].scale(), default_scale);
+    REQUIRE(fabs(tanh_enc.data[0].scale() - default_scale) <= default_scale * 1.0e-12);
 
     Array<double, 2> output_mg = tanh_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
     Array<double, 2> plain_output = expected.copy();
@@ -1821,10 +1851,10 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_polytanh_cpp", "[fhe_layers][par_u
 
 TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
           "[fhe_layers][par_upper_diagonal_poly][stockmeyer][horner]") {
-    const uint32_t N = 65536;
-    CkksParameter param = CkksParameter::create_parameter(N);
+    const uint32_t N = 1 << 15;
+    CkksParameter param = make_long_ci_parameter();
 
-    const uint32_t n_slot = param.get_n() / 2;
+    const uint32_t n_slot = param.max_slots();
     const uint32_t n_prepad = 128;
     const uint32_t n_heads = 2;
     const uint32_t m_prepad = 128;
@@ -1833,12 +1863,12 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
     const int horner_baby_steps = 8;
     const int horner_level_cost = MatPolyBase::compute_stockmeyer_horner_level_cost(order, horner_baby_steps);
     const int init_level = 3 * horner_level_cost + 5;
-    CkksContext context = CkksContext::create_random_context(param, init_level);
+    CkksContext context = CkksContext::create_random_context(param);
 
     const double scale = 64.0;
     const double f2_input_scale = 0.5;
     const double f3_input_scale = 0.5;
-    const double default_scale = param.get_default_scale();
+    const double default_scale = param.default_scale();
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
 
@@ -1906,7 +1936,7 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
     }
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, false, default_scale);
+    X_enc.par_diagonal_pack(X_mat, n_heads, head_shape, false, false, default_scale);
 
     auto make_scalar_gamma = [&](double scalar) {
         Array<double, 1> gamma({total_cols});
@@ -1956,8 +1986,8 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
     gelu_layer.prepare_weight();
     FeatureMatEncrypted gelu_enc = gelu_layer.run(context, half_tanh_refined, X_for_gelu);
     REQUIRE(gelu_enc.level == init_level - (3 * horner_level_cost + 5));
-    CAPTURE(gelu_enc.data[0].get_scale(), default_scale);
-    REQUIRE(fabs(gelu_enc.data[0].get_scale() - default_scale) <= default_scale * 1.0e-12);
+    CAPTURE(gelu_enc.data[0].scale(), default_scale);
+    REQUIRE(fabs(gelu_enc.data[0].scale() - default_scale) <= default_scale * 1.0e-12);
 
     Array<double, 2> output_mg = gelu_enc.par_diagonal_unpack(n_heads, head_shape, false, false);
     auto compare_result = compare(expected, output_mg);
@@ -1969,10 +1999,9 @@ TEST_CASE("par_upper_diagonal_poly_stockmeyer_horner_polygelu_cpp",
 }
 
 TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal_softmax]") {
-    CkksBtpParameter btp_param = CkksBtpParameter::create_parameter();
-    CkksParameter& param = btp_param.get_ckks_parameter();
-    const double default_scale = param.get_default_scale();
-    const uint32_t plaintext_level = static_cast<uint32_t>(param.get_max_level());
+    CkksParameter param = CkksParameter::create_parameter(15, RingType::ConjugateInvariant);
+    const double default_scale = param.default_scale();
+    const uint32_t plaintext_level = static_cast<uint32_t>(param.max_level());
     const uint32_t n_prepad = 96;
     const uint32_t n_heads = 2;
     const uint32_t total_cols = n_prepad * n_heads;
@@ -2143,7 +2172,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
         return std::move(x);
     };
 
-    auto multiply_scalar = [&](CkksBtpContext& context, FeatureMatEncrypted&& x, double scalar) {
+    auto multiply_scalar = [&](CkksContext& context, FeatureMatEncrypted&& x, double scalar) {
         REQUIRE(x.level >= 1);
         ParUpperDiagonalPolyActRNGamma gamma_layer(param, shape, head_shape, n_heads, x.level,
                                                    make_scalar_gamma(scalar));
@@ -2151,7 +2180,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
         return gamma_layer.run(context, x);
     };
 
-    auto refresh_inverse_to_min_level = [&](CkksBtpContext& context, FeatureMatEncrypted&& x, uint32_t min_level) {
+    auto refresh_inverse_to_min_level = [&](CkksContext& context, FeatureMatEncrypted&& x, uint32_t min_level) {
         if (x.level < min_level) {
             constexpr double inverse_refresh_scale = 8.0;
             x = multiply_scalar(context, std::move(x), 1.0 / inverse_refresh_scale);
@@ -2165,7 +2194,7 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
         return std::move(x);
     };
 
-    auto run_normalize_encrypt = [&](CkksBtpContext& context, const FeatureMatEncrypted& values_in,
+    auto run_normalize_encrypt = [&](CkksContext& context, const FeatureMatEncrypted& values_in,
                                      double denominator_scale) {
         FeatureMatEncrypted values = refresh_to_min_level(values_in.drop_level(0), 1);
         ParUpperDiagonalHeadColSum sum_layer(param, shape, head_shape, n_heads, values.level);
@@ -2213,10 +2242,10 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
         return mult_layer.run(context, values_dropped, inv_denominator);
     };
 
-    auto run_encrypted = [&](CkksBtpContext& context, const Array<double, 2>& input, const SoftmaxProfile& profile,
+    auto run_encrypted = [&](CkksContext& context, const Array<double, 2>& input, const SoftmaxProfile& profile,
                              int init_level) {
         FeatureMatEncrypted input_enc(&context, init_level);
-        input_enc.par_diagonal_pack(input, n_heads, head_shape, false, false, false, default_scale);
+        input_enc.par_diagonal_pack(input, n_heads, head_shape, false, false, default_scale);
 
         double mid = (profile.range_min + profile.range_max) / 2.0;
         ParUpperDiagonalAddPt add_mid(param, shape, head_shape, n_heads, input_enc.level, -mid);
@@ -2264,8 +2293,8 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
             }
             (void)refinement_steps;
             int init_level = 9;
-            REQUIRE(init_level <= param.get_max_level());
-            CkksBtpContext context = CkksBtpContext::create_random_context(btp_param);
+            REQUIRE(init_level <= param.max_level());
+            CkksContext context = CkksContext::create_random_context(param, EncryptorType::PUBLIC_KEY, true);
             context.gen_rotation_keys();
 
             Array<double, 2> input({n_prepad, total_cols});
@@ -2284,8 +2313,12 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
             Array<double, 2> expected = run_expected(input, profile);
             Array<double, 2> ground_truth = run_ground_truth(input);
             FeatureMatEncrypted encrypted = run_encrypted(context, input, profile, init_level);
-            CAPTURE(encrypted.data[0].get_scale(), default_scale);
-            REQUIRE(fabs(encrypted.data[0].get_scale() - default_scale) <= default_scale * 1.0e-10);
+            CAPTURE(encrypted.data[0].scale(), default_scale);
+            // The final scale accumulates q[level]/default_scale ratios over many
+            // rescales; the CI default chain primes are not exactly 2^log_default_scale,
+            // so a tight 1e-10 bound is not meaningful. 2e-3 still detects real
+            // scale-planning errors while tolerating modulus-ratio drift.
+            REQUIRE(fabs(encrypted.data[0].scale() - default_scale) <= default_scale * 2.0e-3);
 
             Array<double, 2> output_mg = encrypted.par_diagonal_unpack(n_heads, head_shape, false, false);
             Array<double, 2> plain_output = expected.copy();
@@ -2321,17 +2354,16 @@ TEST_CASE("par_upper_diagonal_polysoftmax_cpp", "[fhe_layers][par_upper_diagonal
 }
 
 TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_diagonal_layernorm][polylayernorm]") {
-    CkksBtpParameter btp_param = CkksBtpParameter::create_parameter();
-    CkksParameter& param = btp_param.get_ckks_parameter();
-    const double default_scale = param.get_default_scale();
-    const uint32_t plaintext_level = static_cast<uint32_t>(param.get_max_level());
+    CkksParameter param = CkksParameter::create_parameter(15, RingType::ConjugateInvariant);
+    const double default_scale = param.default_scale();
+    const uint32_t plaintext_level = static_cast<uint32_t>(param.max_level());
     const uint32_t n_prepad = 65;
     const uint32_t n_heads = 3;
     const uint32_t m_prepad = 64;
     const uint32_t total_cols = n_heads * m_prepad;
     const uint32_t max_inverse_sqrt_iterations = 7;
     const int init_level = 9;
-    REQUIRE(init_level <= param.get_max_level());
+    REQUIRE(init_level <= param.max_level());
 
     Duo shape = {n_prepad, total_cols};
     Duo head_shape = {n_prepad, m_prepad};
@@ -2437,9 +2469,9 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
 
     auto cts_level = [](const vector<CkksCiphertext>& cts) {
         REQUIRE_FALSE(cts.empty());
-        int level = cts[0].get_level();
+        int level = cts[0].level();
         for (const auto& ct : cts) {
-            REQUIRE(ct.get_level() == level);
+            REQUIRE(ct.level() == level);
         }
         return static_cast<uint32_t>(level);
     };
@@ -2448,13 +2480,13 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
         REQUIRE_FALSE(cts.empty());
         for (const auto& ct : cts) {
             INFO(label);
-            CAPTURE(ct.get_scale(), default_scale);
-            REQUIRE(fabs(ct.get_scale() - default_scale) <= default_scale * 1.0e-10);
+            CAPTURE(ct.scale(), default_scale);
+            REQUIRE(fabs(ct.scale() - default_scale) <= default_scale * 1.0e-10);
         }
     };
 
-    auto make_feature = [&](CkksBtpContext& context, vector<CkksCiphertext>&& cts) {
-        int level = cts.empty() ? 0 : cts[0].get_level();
+    auto make_feature = [&](CkksContext& context, vector<CkksCiphertext>&& cts) {
+        int level = cts.empty() ? 0 : cts[0].level();
         FeatureMatEncrypted feature(&context, level);
         feature.shape = shape;
         feature.head_shape = head_shape;
@@ -2463,7 +2495,7 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
         return feature;
     };
 
-    auto refresh_cts_to_min_level = [&](CkksBtpContext& context, vector<CkksCiphertext>&& cts, uint32_t min_level) {
+    auto refresh_cts_to_min_level = [&](CkksContext& context, vector<CkksCiphertext>&& cts, uint32_t min_level) {
         FeatureMatEncrypted feature = make_feature(context, std::move(cts));
         if (feature.level < static_cast<int>(min_level)) {
             if (feature.level > 0) {
@@ -2475,7 +2507,7 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
         return std::move(feature.data);
     };
 
-    auto align_cts_to_level = [&](CkksBtpContext& context, vector<CkksCiphertext>&& cts, uint32_t target_level) {
+    auto align_cts_to_level = [&](CkksContext& context, vector<CkksCiphertext>&& cts, uint32_t target_level) {
         FeatureMatEncrypted feature = make_feature(context, std::move(cts));
         if (feature.level < static_cast<int>(target_level)) {
             if (feature.level > 0) {
@@ -2491,10 +2523,10 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
         return std::move(feature.data);
     };
 
-    auto run_encrypted = [&](CkksBtpContext& context, const Array<double, 2>& input, const Array<double, 1>& gamma,
+    auto run_encrypted = [&](CkksContext& context, const Array<double, 2>& input, const Array<double, 1>& gamma,
                              const Array<double, 1>& beta) {
         FeatureMatEncrypted input_enc(&context, init_level);
-        input_enc.par_diagonal_pack(input, n_heads, head_shape, false, false, false, default_scale);
+        input_enc.par_diagonal_pack(input, n_heads, head_shape, false, false, default_scale);
 
         ParUpperDiagonalLNStats stats(param, shape, head_shape, n_heads, input_enc.level, eps, inv_var);
         stats.prepare_weight();
@@ -2530,7 +2562,7 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
         return affine.run(context, x_centered_cts, y_cts);
     };
 
-    CkksBtpContext context = CkksBtpContext::create_random_context(btp_param);
+    CkksContext context = CkksContext::create_random_context(param, EncryptorType::PUBLIC_KEY, true);
     context.gen_rotation_keys();
 
     Array<double, 2> input = make_input();
@@ -2540,8 +2572,8 @@ TEST_CASE("par_upper_diagonal_polylayernorm_ln3_cpp", "[fhe_layers][par_upper_di
     Array<double, 2> ground_truth = run_ground_truth(input, gamma, beta);
 
     FeatureMatEncrypted encrypted = run_encrypted(context, input, gamma, beta);
-    CAPTURE(encrypted.data[0].get_scale(), default_scale, encrypted.level);
-    REQUIRE(fabs(encrypted.data[0].get_scale() - default_scale) <= default_scale * 1.0e-10);
+    CAPTURE(encrypted.data[0].scale(), default_scale, encrypted.level);
+    REQUIRE(fabs(encrypted.data[0].scale() - default_scale) <= default_scale * 1.0e-10);
 
     Array<double, 2> output_mg = encrypted.par_diagonal_unpack(n_heads, head_shape, false, false);
     Array<double, 2> plain_output = expected.copy();
@@ -2581,13 +2613,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "sq", "", HeteroProcessors) {
         Array<double, 3> input_array = gen_random_array<3>({1, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level);
-        input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiple_channel(input_array, this->param.default_scale());
 
         Feature2DEncrypted output_feature(&this->context, init_level);
 
         for (int i = 0; i < 1; i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path /
@@ -2633,9 +2665,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_packed", "", HeteroProcess
         Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level);
-        input_feature.pack_multiple_channel(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiple_channel(input_array, this->param.default_scale());
 
-        Conv2DPackedLayer conv0_layer(this->context.get_parameter(), input_shape, move(conv0_weight), move(conv0_bias),
+        Conv2DPackedLayer conv0_layer(this->context.parameter(), input_shape, move(conv0_weight), move(conv0_bias),
                                       stride, skip, n_channel_per_ct, init_level);
         conv0_layer.prepare_weight();
 
@@ -2645,8 +2677,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_packed", "", HeteroProcess
         output_feature.n_channel = n_out_channel;
         output_feature.n_channel_per_ct = n_channel_per_ct;
         for (int i = 0; i < div_ceil(n_out_channel, n_channel_per_ct); i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path / "CKKS_conv2d" /
@@ -2763,12 +2795,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_depthwise", "", HeteroProc
                     Array<double, 1> conv0_bias = gen_random_array<1>({n_channel}, 0);
                     Array<double, 3> input = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1);
 
-                    Conv2DPackedDepthwiseLayer conv(this->context.get_parameter(), input_shape, move(conv0_weight),
+                    Conv2DPackedDepthwiseLayer conv(this->context.parameter(), input_shape, move(conv0_weight),
                                                     move(conv0_bias), stride, skip, n_channel_per_ct, init_level);
                     conv.prepare_weight();
 
                     Feature2DEncrypted f2d(&this->context, init_level);
-                    f2d.pack_multiple_channel(input, false, this->param.get_default_scale());
+                    f2d.pack_multiple_channel(input, this->param.default_scale());
 
                     Feature2DEncrypted output_feature(&this->context, init_level - 1);
                     output_feature.shape = input_shape / stride;
@@ -2776,8 +2808,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv2d_depthwise", "", HeteroProc
                     output_feature.n_channel = n_channel;
                     output_feature.n_channel_per_ct = n_channel_per_ct;
                     for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
-                        output_feature.data.push_back(
-                            this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                        output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+                        output_feature.data.back().set_scale(this->param.default_scale());
                     }
 
                     fs::path project_path =
@@ -2831,12 +2863,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv2d_packed", "", HeteroPro
         Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
         Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-        MultiplexedConv2DPackedLayer conv_layer(this->context.get_parameter(), input_shape, move(conv0_weight),
+        MultiplexedConv2DPackedLayer conv_layer(this->context.parameter(), input_shape, move(conv0_weight),
                                                 move(conv0_bias), stride, skip, n_channel_per_ct, init_level, 1.0);
         conv_layer.prepare_weight_for_post_skip_rotation();
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->context.parameter().default_scale());
 
         Feature2DEncrypted output_feature(&this->context, output_level);
         output_feature.shape = input_shape / stride;
@@ -2844,7 +2876,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_conv2d_packed", "", HeteroPro
         output_feature.n_channel = n_out_channel;
         output_feature.n_channel_per_ct = (n_channel_per_ct * prod(stride));
         for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * prod(stride))); i++) {
-            output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), output_level);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path / "CKKS_multiplexed_conv2d" /
@@ -2955,13 +2988,13 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
             Array<double, 1> conv0_bias = gen_random_array<1>({n_out_channel}, 0.1);
             Array<double, 3> input_array = gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-            MultiplexedConv2DPackedLayerDepthwise dw_conv_layer(this->context.get_parameter(), input_shape,
+            MultiplexedConv2DPackedLayerDepthwise dw_conv_layer(this->context.parameter(), input_shape,
                                                                 move(conv0_weight), move(conv0_bias), stride, skip,
                                                                 n_channel_per_ct, init_level, 1.0);
             dw_conv_layer.prepare_weight();
 
             Feature2DEncrypted input_feature(&this->context, init_level, skip);
-            input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+            input_feature.pack_multiplexed(input_array, this->context.parameter().default_scale());
 
             Feature2DEncrypted output_feature(&this->context, init_level - 2);
             output_feature.shape = input_shape / stride;
@@ -2969,8 +3002,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_s2_64x64_k3", "", HeteroPr
             output_feature.n_channel = n_out_channel;
             output_feature.n_channel_per_ct = (n_channel_per_ct * prod(stride));
             for (int i = 0; i < div_ceil(n_out_channel, (n_channel_per_ct * prod(stride))); i++) {
-                output_feature.data.push_back(
-                    this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+                output_feature.data.emplace_back(this->context.parameter(), init_level - 2);
+                output_feature.data.back().set_scale(this->param.default_scale());
             }
 
             fs::path project_path = base_path / "CKKS_multiplexed_dw_conv2d" /
@@ -3043,15 +3076,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv", "", HeteroProcesso
                                 Array<double, 3> input_array =
                                     gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-                                InverseMultiplexedConv2DLayer conv_layer(this->context.get_parameter(), input_shape,
+                                InverseMultiplexedConv2DLayer conv_layer(this->context.parameter(), input_shape,
                                                                          move(conv0_weight), move(conv0_bias), padding,
                                                                          stride, block_shape, init_level, 1.0);
                                 conv_layer.prepare_weight();
 
                                 Feature2DEncrypted input_feature(&this->context, init_level, skip);
                                 Duo total_stride = stride * stride_next;
-                                input_feature.pack_interleaved(input_array, block_shape, total_stride, false,
-                                                               this->context.get_parameter().get_default_scale());
+                                input_feature.pack_interleaved(input_array, block_shape, total_stride,
+                                                               this->context.parameter().default_scale());
 
                                 Duo output_shape = input_shape / stride;
                                 uint32_t output_total = prod(output_shape);
@@ -3069,8 +3102,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv", "", HeteroProcesso
                                 output_feature.n_channel_per_ct = output_n_channel_per_ct;
                                 int n_out_cts = div_ceil(n_out_channel, output_n_channel_per_ct) * prod(stride_next);
                                 for (int i = 0; i < n_out_cts; i++) {
-                                    output_feature.data.push_back(
-                                        this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                                    output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+                                    output_feature.data.back().set_scale(this->param.default_scale());
                                 }
 
                                 vector<CxxVectorArgument> cxx_args;
@@ -3154,7 +3187,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv_repack", "", HeteroP
                         Array<double, 3> input_array =
                             gen_random_array<3>({n_in_channel, input_shape[0], input_shape[1]}, 1.0);
 
-                        InverseMultiplexedConv2DLayer conv_layer(this->context.get_parameter(), input_shape,
+                        InverseMultiplexedConv2DLayer conv_layer(this->context.parameter(), input_shape,
                                                                  move(conv0_weight), move(conv0_bias), padding, stride,
                                                                  block_shape, init_level, 1.0);
                         conv_layer.prepare_weight();
@@ -3162,8 +3195,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv_repack", "", HeteroP
                         Feature2DEncrypted input_feature(&this->context, init_level, skip);
                         Duo effective_stride = input_shape / block_shape;
                         Duo total_stride = effective_stride;
-                        input_feature.pack_interleaved(input_array, block_shape, total_stride, false,
-                                                       this->context.get_parameter().get_default_scale());
+                        input_feature.pack_interleaved(input_array, block_shape, total_stride,
+                                                       this->context.parameter().default_scale());
 
                         Duo output_shape = input_shape / stride;
                         Duo out_skip = block_shape / output_shape;
@@ -3176,8 +3209,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv_repack", "", HeteroP
                         output_feature.n_channel_per_ct = output_n_channel_per_ct;
                         int n_out_cts = div_ceil(n_out_channel, output_n_channel_per_ct);
                         for (int i = 0; i < n_out_cts; i++) {
-                            output_feature.data.push_back(
-                                this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+                            output_feature.data.emplace_back(this->context.parameter(), init_level - 2);
+                            output_feature.data.back().set_scale(this->param.default_scale());
                         }
 
                         vector<CxxVectorArgument> cxx_args;
@@ -3190,7 +3223,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_conv_repack", "", HeteroP
                             ("level_" + to_string(init_level)) / "server";
 
                         // Generate repack mask for CxxVectorArgument
-                        vector<CkksPlaintextRingt> repack_mask_vec;
+                        vector<CkksPlaintext> repack_mask_vec;
                         repack_mask_vec.push_back(conv_layer.generate_repack_mask_pt(this->context));
 
                         auto arg_names = read_arg_names(project_path);
@@ -3262,15 +3295,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_dw_conv", "", HeteroProce
                                 gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
 
                             InverseMultiplexedConv2DLayerDepthwise conv_layer(
-                                this->context.get_parameter(), input_shape, move(conv0_weight), move(conv0_bias),
+                                this->context.parameter(), input_shape, move(conv0_weight), move(conv0_bias),
                                 padding, stride, block_shape, init_level, 1.0);
                             conv_layer.prepare_weight();
 
                             // Pack input using interleaved packing
                             Feature2DEncrypted input_feature(&this->context, init_level, skip);
                             Duo total_stride = stride * stride_next;
-                            input_feature.pack_interleaved(input_array, block_shape, total_stride, false,
-                                                           this->context.get_parameter().get_default_scale());
+                            input_feature.pack_interleaved(input_array, block_shape, total_stride,
+                                                           this->context.parameter().default_scale());
 
                             Duo output_shape = input_shape / stride;
                             uint32_t output_total = prod(output_shape);
@@ -3288,8 +3321,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "inv_mux_dw_conv", "", HeteroProce
                             output_feature.n_channel_per_ct = output_n_channel_per_ct;
                             int n_out_cts = div_ceil(n_channel, output_n_channel_per_ct) * prod(stride_next);
                             for (int i = 0; i < n_out_cts; i++) {
-                                output_feature.data.push_back(
-                                    this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                                output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+                                output_feature.data.back().set_scale(this->param.default_scale());
                             }
 
                             vector<CxxVectorArgument> cxx_args;
@@ -3355,9 +3388,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip_feature0d", "", HeteroPro
         uint32_t n_packed_out = div_ceil(n_out_channel, n_channel_per_ct);
 
         Feature0DEncrypted input_feature(&this->context, init_level);
-        input_feature.pack(input_1d, false, this->param.get_default_scale(), skip_0d);
+        input_feature.pack(input_1d, this->param.default_scale(), skip_0d);
 
-        DensePackedLayer dense(this->context.get_parameter(), move(weight), move(bias), n_channel_per_ct, init_level,
+        DensePackedLayer dense(this->context.parameter(), move(weight), move(bias), n_channel_per_ct, init_level,
                                0);
         dense.prepare_weight_0d_skip(skip_0d);
 
@@ -3366,8 +3399,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_skip_feature0d", "", HeteroPro
         output_feature.n_channel_per_ct = n_channel_per_ct;
         output_feature.skip = skip_0d;
         for (uint32_t i = 0; i < n_packed_out; i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path /
@@ -3425,7 +3458,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed_feature2d", "", He
         auto input_1d = Array<double, 1>::from_array_1d(input_3d.to_array_1d());
 
         Feature2DEncrypted input_feature(&this->context, init_level, cfg.skip, cfg.invalid_fill);
-        input_feature.pack_multiplexed(input_3d, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_3d, this->param.default_scale());
 
         ReshapeLayer reshape(this->param);
         Feature0DEncrypted input_0d = reshape.call(this->context, input_feature);
@@ -3433,7 +3466,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed_feature2d", "", He
         uint32_t block_size = prod(cfg.shape * cfg.skip);
         uint32_t n_blocks_per_ct = div_ceil((uint32_t)this->n_slot, block_size);
 
-        DensePackedLayer dense(this->context.get_parameter(), move(weight), move(bias), n_blocks_per_ct, init_level, 0);
+        DensePackedLayer dense(this->context.parameter(), move(weight), move(bias), n_blocks_per_ct, init_level, 0);
         dense.prepare_weight_for_2d_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
 
         uint32_t n_packed_out = div_ceil(n_out_channel, n_blocks_per_ct);
@@ -3442,8 +3475,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_multiplexed_feature2d", "", He
         output_feature.n_channel_per_ct = n_blocks_per_ct;
         output_feature.skip = input_0d.skip;
         for (uint32_t i = 0; i < n_packed_out; i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path =
@@ -3503,17 +3536,17 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc_feature0d", "", HeteroProce
     // Input: direct 0D pack — ceil(1024/8192)=1 CT, skip=1 (matches Python)
     Array<double, 1> input_1d = gen_random_array<1>({input_channel}, 0.1);
     Feature0DEncrypted input_feature(&this->context, init_level);
-    input_feature.pack(input_1d, false, this->param.get_default_scale(), /*skip=*/1);
+    input_feature.pack(input_1d, this->param.default_scale(), /*skip=*/1);
 
     // fc0: multiplexed — block=[4*1]*[4*1]=16 slots, n_num_pre_ct=ceil(8192/16)=512
     uint32_t block_size0 = prod(dense_shape * skip0);
     uint32_t n_num_pre_ct0 = div_ceil((uint32_t)this->n_slot, block_size0);
-    DensePackedLayer dense0(this->context.get_parameter(), move(weight0), move(bias0), n_num_pre_ct0, init_level, 0);
+    DensePackedLayer dense0(this->context.parameter(), move(weight0), move(bias0), n_num_pre_ct0, init_level, 0);
     dense0.prepare_weight_for_2d_multiplexed(dense_shape, skip0);
 
     uint32_t skip_0d1 = prod(skip1);
     uint32_t n_channel_per_ct1 = this->n_slot / skip_0d1;
-    DensePackedLayer dense1(this->context.get_parameter(), move(weight1), move(bias1), n_channel_per_ct1,
+    DensePackedLayer dense1(this->context.parameter(), move(weight1), move(bias1), n_channel_per_ct1,
                             init_level - 1, 0);
     dense1.prepare_weight_0d_skip(skip_0d1);
 
@@ -3524,7 +3557,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_fc_feature0d", "", HeteroProce
     output_feature.n_channel_per_ct = n_channel_per_ct1;
     output_feature.skip = skip_0d1;
     for (uint32_t i = 0; i < n_out1; i++) {
-        output_feature.data.push_back(this->context.new_ciphertext(init_level - 2, this->param.get_default_scale()));
+        output_feature.data.emplace_back(this->context.parameter(), init_level - 2);
+        output_feature.data.back().set_scale(this->param.default_scale());
     }
 
     // mega_ag execution
@@ -3577,9 +3611,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature2d", "", HeteroP
         auto weight = gen_random_array<2>({order + 1, n_channel}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->context.parameter().default_scale());
 
-        PolyRelu2D polyx(this->context.get_parameter(), {input_shape[0], input_shape[1]}, order, move(weight), skip,
+        PolyRelu2D polyx(this->context.parameter(), {input_shape[0], input_shape[1]}, order, move(weight), skip,
                          n_channel_per_ct, init_level);
         polyx.prepare_weight_bsgs();
 
@@ -3590,7 +3624,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature2d", "", HeteroP
         output_feature.n_channel = n_channel;
         output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
         for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
-            output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), output_level);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path /
@@ -3642,10 +3677,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
                 // Pack into Feature0DEncrypted
                 Feature0DEncrypted input_feature(&this->context, init_level);
                 input_feature.n_channel = n_channel;
-                input_feature.pack(input_array, false, this->param.get_default_scale(), skip_val);
+                input_feature.pack(input_array, this->param.default_scale(), skip_val);
 
                 // Create PolyRelu0D for Feature0D
-                PolyRelu0D polyx(this->context.get_parameter(), move(weight), init_level, order, skip_val);
+                PolyRelu0D polyx(this->context.parameter(), move(weight), init_level, order, skip_val);
                 polyx.prepare_weight_0d_skip();
 
                 int output_level = init_level - level_cost;
@@ -3656,8 +3691,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature0d", "", HeteroP
                 output_feature.n_channel = n_channel;
                 output_feature.n_channel_per_ct = n_channel_per_ct;
                 for (uint32_t i = 0; i < n_packed_ct; i++) {
-                    output_feature.data.push_back(
-                        this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                    output_feature.data.emplace_back(this->context.parameter(), output_level);
+                    output_feature.data.back().set_scale(this->param.default_scale());
                 }
 
                 fs::path project_path = base_path /
@@ -3719,9 +3754,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_skip", "", He
                         auto weight = gen_random_array<2>({(uint64_t)order + 1, n_channel}, 0.5);
 
                         Feature1DEncrypted input_feature(&this->context, init_level, skip_val);
-                        input_feature.pack(input_array, false, this->param.get_default_scale());
+                        input_feature.pack(input_array, this->param.default_scale());
 
-                        PolyRelu1D polyx(this->context.get_parameter(), move(weight), init_level, order, skip_val,
+                        PolyRelu1D polyx(this->context.parameter(), move(weight), init_level, order, skip_val,
                                          shape);
                         polyx.prepare_weight_bsgs();
 
@@ -3734,8 +3769,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_skip", "", He
                         output_feature.n_channel = n_channel;
                         output_feature.n_channel_per_ct = n_channel_per_ct;
                         for (uint32_t i = 0; i < n_packed_ct; i++) {
-                            output_feature.data.push_back(
-                                this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                            output_feature.data.emplace_back(this->context.parameter(), output_level);
+                            output_feature.data.back().set_scale(this->param.default_scale());
                         }
 
                         fs::path project_path =
@@ -3799,9 +3834,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_mux", "", Het
                         auto weight = gen_random_array<2>({(uint64_t)order + 1, n_channel}, 0.5);
 
                         Feature1DEncrypted input_feature(&this->context, init_level, skip_val);
-                        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+                        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
-                        PolyRelu1D polyx(this->context.get_parameter(), move(weight), init_level, order, skip_val,
+                        PolyRelu1D polyx(this->context.parameter(), move(weight), init_level, order, skip_val,
                                          shape);
                         polyx.prepare_weight_bsgs_mux();
 
@@ -3814,8 +3849,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_bsgs_feature1d_mux", "", Het
                         output_feature.n_channel = n_channel;
                         output_feature.n_channel_per_ct = n_channel_per_ct;
                         for (uint32_t i = 0; i < n_packed_ct; i++) {
-                            output_feature.data.push_back(
-                                this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                            output_feature.data.emplace_back(this->context.parameter(), output_level);
+                            output_feature.data.back().set_scale(this->param.default_scale());
                         }
 
                         fs::path project_path =
@@ -3869,11 +3904,9 @@ static double e2e_max_rel_error(const Array<double, 2>& expected, const Array<do
 }
 
 static ExecutorFunc make_block_col_major_encode_pt_executor() {
-    return [](ExecutionContext& exec_ctx, const std::unordered_map<NodeIndex, std::any>& inputs, std::any& output,
+    return [](ExecutionContext& exec_ctx, std::unordered_map<NodeId, std::any>& local_data,
               const ComputeNode& self) -> void {
         CkksContext* ctx_ptr = exec_ctx.get_arithmetic_context<CkksContext>();
-        if (!ctx_ptr)
-            ctx_ptr = exec_ctx.get_arithmetic_context<CkksBtpContext>();
         if (!ctx_ptr)
             throw std::runtime_error("encode_pt: cannot get CkksContext");
         if (!self.custom_prop.has_value())
@@ -3886,11 +3919,11 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             return attrs.contains(key) ? attrs.at(key).get<uint32_t>() : fallback;
         };
 
-        NodeIndex in_idx = self.input_nodes[0]->index;
-        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(inputs.at(in_idx));
+        const NodeId& in_id = self.input_nodes[0]->id;
+        auto cd_ptr = std::any_cast<std::shared_ptr<CustomData>>(local_data.at(in_id));
         void* layer_ptr = cd_ptr->get_typed_data<void>();
 
-        CkksPlaintextRingt pt = [&]() -> CkksPlaintextRingt {
+        CkksPlaintext pt = [&]() -> CkksPlaintext {
             if (op_class == "ParBlockColMajorCPMM") {
                 auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
                 if (type == "diag_pt")
@@ -4023,7 +4056,7 @@ static ExecutorFunc make_block_col_major_encode_pt_executor() {
             throw std::runtime_error("encode_pt: unknown op_class: " + op_class);
         }();
 
-        output = std::make_shared<CkksPlaintextRingt>(std::move(pt));
+        local_data[self.output_nodes[0]->id] = std::make_shared<CkksPlaintext>(std::move(pt));
     };
 }
 
@@ -4095,7 +4128,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
 
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
@@ -4106,7 +4139,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int output_level = init_level - MatPolyBase::compute_stockmeyer_level_cost(static_cast<int>(order));
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), output_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4146,8 +4180,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted half_tanh_enc(&context, init_level);
     FeatureMatEncrypted X_enc(&context, init_level);
-    half_tanh_enc.par_diagonal_pack(half_tanh, n_heads, head_shape, false, false, false, param.get_default_scale());
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    half_tanh_enc.par_diagonal_pack(half_tanh, n_heads, head_shape, false, false, param.default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
 
     vector<CkksCiphertext> half_tanh_cts, x_cts, out_cts;
     vector<CustomData> layer_data;
@@ -4160,7 +4194,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int output_level = init_level - 2;
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), output_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"half_tanh_input", &half_tanh_cts},
@@ -4195,7 +4230,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : X_enc.data)
@@ -4203,7 +4238,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     layer_data.emplace_back(static_cast<void*>(layer.get()));
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(init_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), init_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4235,7 +4271,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : X_enc.data)
@@ -4244,7 +4280,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int output_level = init_level - 2;
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), output_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4277,7 +4314,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, false, param.get_default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : X_enc.data)
@@ -4286,7 +4323,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int output_level = init_level - 1;
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), output_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4319,7 +4357,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(B);
 
     FeatureMatEncrypted B_enc(&context, init_level);
-    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : B_enc.data)
@@ -4327,7 +4365,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     layer_data.emplace_back(static_cast<void*>(layer.get()));
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(init_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), init_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4362,8 +4401,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&context, init_level);
     FeatureMatEncrypted B_enc(&context, init_level);
-    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, false, param.get_default_scale());
-    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, param.default_scale());
     vector<CkksCiphertext> a_cts, b_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : A_enc.data)
@@ -4374,7 +4413,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int output_level = init_level - 2;
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), output_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"a_input", &a_cts},
@@ -4410,8 +4450,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&context, init_level);
     FeatureMatEncrypted B_enc(&context, init_level);
-    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, false, param.get_default_scale());
-    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, false, param.get_default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, param.default_scale());
     vector<CkksCiphertext> a_cts, b_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : A_enc.data)
@@ -4422,7 +4462,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     const int output_level = init_level - 2;
     uint32_t n_out = par_diagonal_total_cts(param, shape, head_shape, n_heads, false);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(output_level, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), output_level);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"a_input", &a_cts},
@@ -4516,7 +4557,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
         auto ref_output = layer_ptr->run_plaintext(A);
 
         FeatureMatEncrypted A_enc(&res.context, cfg.level);
-        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, false, res.param.get_default_scale());
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, res.param.default_scale());
 
         static vector<CkksCiphertext> in_cts, out_cts;
         static vector<CustomData> layer_data;
@@ -4532,7 +4573,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
         uint32_t n_h_padded = 1;
         while (n_h_padded < cfg.n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t n_slot = res.param.max_slots();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = cfg.n_heads;
         }
@@ -4540,7 +4581,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_cpmm_square", "[block_
         uint32_t n_out = num_block_rows_A * G;
 
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(res.context.new_ciphertext(cfg.level - 2, res.param.get_default_scale()));
+            out_cts.emplace_back(res.context.parameter(), cfg.level - 2);
+            out_cts.back().set_scale(res.param.default_scale());
 
         vector<CxxVectorArgument> cxx_args = {
             {"input", &in_cts},
@@ -4589,7 +4631,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         auto ref_output = layer_ptr->run_plaintext(A);
 
         FeatureMatEncrypted A_enc(&res.context, cfg.level);
-        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, false, res.param.get_default_scale());
+        A_enc.par_block_col_major_pack(A, d, cfg.n_heads, d, res.param.default_scale());
 
         static vector<CkksCiphertext> in_cts, out_cts;
         static vector<CustomData> layer_data;
@@ -4605,7 +4647,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < cfg.n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t n_slot = res.param.max_slots();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = cfg.n_heads;
         }
@@ -4613,7 +4655,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_out = num_block_rows_A * G;
 
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(res.context.new_ciphertext(cfg.level - 2, res.param.get_default_scale()));
+            out_cts.emplace_back(res.context.parameter(), cfg.level - 2);
+            out_cts.back().set_scale(res.param.default_scale());
 
         vector<CxxVectorArgument> cxx_args = {
             {"input", &in_cts},
@@ -4655,7 +4698,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, res.param.default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -4671,7 +4714,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t n_slot = res.param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -4679,7 +4722,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_out = K_col * num_block_rows_A * G;
 
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), level - 2);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4720,7 +4764,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, head_dim, res.param.default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -4736,7 +4780,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t n_slot = res.param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -4744,7 +4788,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_out = num_block_rows_A * G;  // REDUCE: single output megablock
 
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), level - 2);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -4797,11 +4842,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_attention", "[block_co
 
     // Pack Q, K, V
     FeatureMatEncrypted Q_enc(&res.context, init_level);
-    Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, d, false, res.param.get_default_scale());
+    Q_enc.par_block_col_major_pack(Q_mat, d, n_heads, d, res.param.default_scale());
     FeatureMatEncrypted K_enc(&res.context, init_level);
-    K_enc.par_block_col_major_pack(K_mat, d, n_heads, d, false, res.param.get_default_scale());
+    K_enc.par_block_col_major_pack(K_mat, d, n_heads, d, res.param.default_scale());
     FeatureMatEncrypted V_enc(&res.context, init_level);
-    V_enc.par_block_col_major_pack(V_mat, d, n_heads, d, false, res.param.get_default_scale());
+    V_enc.par_block_col_major_pack(V_mat, d, n_heads, d, res.param.default_scale());
 
     static vector<CkksCiphertext> Q_cts, K_cts, V_cts, out_cts;
     static vector<CustomData> kt_data, qkt_data, attnv_data;
@@ -4827,7 +4872,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_attention", "[block_co
     // Output: seq_len × head_dim per head, level = init_level - 7 = 0
     uint32_t n_out = div_ceil(seq_len, d) * div_ceil(head_dim, d);
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(init_level - 7, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), init_level - 7);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"Q", &Q_cts},
@@ -4902,7 +4948,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
 
     // Pack input X
     FeatureMatEncrypted X_enc(&res.context, init_level);
-    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, res.param.get_default_scale());
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, res.param.default_scale());
 
     static vector<CkksCiphertext> X_cts, out_cts;
     static vector<CustomData> q_data, k_data, v_data, kt_data, qkt_data, attnv_data;
@@ -4930,14 +4976,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "single_par_full_attention", "[blo
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t n_slot = res.param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows_out * G;
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(0, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), 0);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"X", &X_cts},
@@ -4999,7 +5046,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     // Pack input
     FeatureMatEncrypted A_enc(&this->context, init_level);
-    A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, false, this->param.get_default_scale());
+    A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, this->param.default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> expand_data, reduce_data;
@@ -5018,7 +5065,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = this->param.get_n() / 2;
+    uint32_t n_slot = this->param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -5026,7 +5073,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_out = num_block_rows_A * G;
 
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(this->context.new_ciphertext(init_level - 4, this->param.get_default_scale()));
+        out_cts.emplace_back(this->context.parameter(), init_level - 4);
+        out_cts.back().set_scale(this->param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -5068,15 +5116,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs_feature2d", "", He
         {0.0, 2.40085652217597, 0.0, -2.63125454261783, 0.0, 1.54912674773593, 0.0, -3.31172956504304e-1}, n_channel);
 
     Feature2DEncrypted input_feature(&this->context, init_level, skip);
-    input_feature.pack_multiplexed(input_array, false, this->context.get_parameter().get_default_scale());
+    input_feature.pack_multiplexed(input_array, this->context.parameter().default_scale());
 
     // Layer 0: p0(x)
-    PolyRelu2D poly0(this->context.get_parameter(), input_shape, order0, move(weight0), skip, n_channel_per_ct,
+    PolyRelu2D poly0(this->context.parameter(), input_shape, order0, move(weight0), skip, n_channel_per_ct,
                      init_level);
     poly0.prepare_weight_bsgs();
 
     // Layer 1: sign(x) ≈ p1(p0(x))
-    PolyRelu2D poly1(this->context.get_parameter(), input_shape, order1, move(weight1), skip, n_channel_per_ct,
+    PolyRelu2D poly1(this->context.parameter(), input_shape, order1, move(weight1), skip, n_channel_per_ct,
                      init_level - level_cost0);
     poly1.prepare_weight_bsgs();
 
@@ -5088,7 +5136,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "poly_relu_bsgs_feature2d", "", He
     output_feature.n_channel = n_channel;
     output_feature.n_channel_per_ct = input_feature.n_channel_per_ct;
     for (int i = 0; i < div_ceil(n_channel, n_channel_per_ct); i++) {
-        output_feature.data.push_back(this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+        output_feature.data.emplace_back(this->context.parameter(), output_level);
+        output_feature.data.back().set_scale(this->param.default_scale());
     }
 
     fs::path project_path = base_path /
@@ -5161,7 +5210,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
 
                     Feature1DEncrypted input_feature(&this->context, init_level, skip);
                     input_feature.pack(input_array);
-                    Conv1DPackedLayer conv0_layer(this->context.get_parameter(), input_shape, move(conv0_weight),
+                    Conv1DPackedLayer conv0_layer(this->context.parameter(), input_shape, move(conv0_weight),
                                                   move(conv0_bias), stride, skip, n_channel_per_ct, init_level);
                     conv0_layer.prepare_weight();
 
@@ -5171,8 +5220,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "conv1d", "", HeteroProcessors) {
                     output_feature.n_channel = n_out_channel;
                     output_feature.n_channel_per_ct = n_channel_per_ct;
                     for (int i = 0; i < div_ceil(n_out_channel, n_channel_per_ct); i++) {
-                        output_feature.data.push_back(
-                            this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+                        output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+                        output_feature.data.back().set_scale(this->param.default_scale());
                     }
 
                     fs::path project_path =
@@ -5227,8 +5276,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                     Array<double, 2> input_array = gen_random_array<2>({n_in_channel, input_shape}, 1.0);
 
                     Feature1DEncrypted input_feature(&this->context, init_level, skip);
-                    input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
-                    MultiplexedConv1DPackedLayer conv0_layer(this->context.get_parameter(), input_shape,
+                    input_feature.pack_multiplexed(input_array, this->param.default_scale());
+                    MultiplexedConv1DPackedLayer conv0_layer(this->context.parameter(), input_shape,
                                                              move(conv0_weight), move(conv0_bias), stride, skip,
                                                              n_channel_per_ct, init_level);
                     conv0_layer.prepare_weight();
@@ -5245,12 +5294,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_conv1d", "", HeteroPr
                     output_feature.n_channel = n_out_channel;
                     output_feature.n_channel_per_ct = n_channel_per_ct;
                     for (uint32_t i = 0; i < n_output_cts; i++) {
-                        output_feature.data.push_back(
-                            this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                        output_feature.data.emplace_back(this->context.parameter(), output_level);
+                        output_feature.data.back().set_scale(this->param.default_scale());
                     }
 
                     uint32_t n_select_pt = min(n_block_per_ct, n_out_channel);
-                    vector<CkksPlaintextRingt> select_pt_subset;
+                    vector<CkksPlaintext> select_pt_subset;
                     for (int i = 0; i < n_select_pt; i++) {
                         select_pt_subset.push_back(move(conv0_layer.block_select_pt[i]));
                     }
@@ -5301,15 +5350,16 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "add_layer", "", HeteroProcessors)
         Array<double, 3> input_x1 = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted x0_enc(&this->context, init_level, skip);
-        x0_enc.pack_multiplexed(input_x0, false, this->param.get_default_scale());
+        x0_enc.pack_multiplexed(input_x0, this->param.default_scale());
 
         Feature2DEncrypted x1_enc(&this->context, init_level, skip);
-        x1_enc.pack_multiplexed(input_x1, false, this->param.get_default_scale());
+        x1_enc.pack_multiplexed(input_x1, this->param.default_scale());
 
         // Pre-allocate output (add doesn't consume levels)
         Feature2DEncrypted output_feature(&this->context, init_level);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path =
@@ -5377,9 +5427,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto x1 = gen_random_array<2>({m, total_dim}, 1.0);
 
     FeatureMatEncrypted x0_enc(&res.context, init_level);
-    x0_enc.par_block_col_major_pack(x0, d, n_heads, d, false, res.param.get_default_scale());
+    x0_enc.par_block_col_major_pack(x0, d, n_heads, d, res.param.default_scale());
     FeatureMatEncrypted x1_enc(&res.context, init_level);
-    x1_enc.par_block_col_major_pack(x1, d, n_heads, d, false, res.param.get_default_scale());
+    x1_enc.par_block_col_major_pack(x1, d, n_heads, d, res.param.default_scale());
 
     ParBlockColMajorAdd add_layer(res.param);
     auto expected = add_layer.run_plaintext(x0, x1);
@@ -5390,7 +5440,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     for (auto& ct : x1_enc.data)
         x1_cts.push_back(ct.copy());
     for (size_t i = 0; i < x0_enc.data.size(); i++)
-        out_cts.push_back(res.context.new_ciphertext(init_level, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), init_level);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input0", &x0_cts},
@@ -5421,7 +5472,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto expected = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, init_level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, d, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, d, res.param.default_scale());
 
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
@@ -5429,7 +5480,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         in_cts.push_back(ct.copy());
     layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
     for (size_t i = 0; i < A_enc.data.size(); i++)
-        out_cts.push_back(res.context.new_ciphertext(init_level, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), init_level);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input0", &in_cts},
@@ -5451,7 +5503,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProce
         Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
         // Prepare select_tensor_pt via Avgpool2DLayer
         Avgpool2DLayer avgpool(input_shape, stride);
@@ -5462,8 +5514,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "avgpool2d_layer", "", HeteroProce
         uint32_t n_packed_out_channel = div_ceil(n_channel, out_channels_per_ct);
         Feature2DEncrypted output_feature(&this->context, init_level - 1);
         for (uint32_t i = 0; i < n_packed_out_channel; i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path /
@@ -5526,7 +5578,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
         Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
         // No prepare_weight needed for adaptive avgpool
         Avgpool2DLayer avgpool(input_shape, stride);
@@ -5534,7 +5586,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
         // Pre-allocate output — NO level consumed (no mult/rescale), same number of CTs
         Feature2DEncrypted output_feature(&this->context, init_level);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path /
@@ -5645,7 +5698,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "",
 
         Feature2DEncrypted input_feature(&this->context, init_level);
         Duo total_stride = block_expansion;
-        input_feature.pack_interleaved(input_array, block_shape, total_stride, false, this->param.get_default_scale());
+        input_feature.pack_interleaved(input_array, block_shape, total_stride, this->param.default_scale());
 
         Avgpool2DLayer avgpool(block_shape, stride);
 
@@ -5653,7 +5706,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "",
         uint32_t out_size = input_feature.data.size() / prod(stride);
         Feature2DEncrypted output_feature(&this->context, init_level);
         for (uint32_t i = 0; i < out_size; i++) {
-            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path =
@@ -5717,13 +5771,14 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", He
         Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
 
         Feature1DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
         Avgpool1DLayer avgpool(s, stride);
 
         Feature1DEncrypted output_feature(&this->context, init_level, skip * stride, stride);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.push_back(this->context.new_ciphertext(init_level, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path / ("CKKS_adaptive_avgpool1d/stride_" + to_string(stride)) /
@@ -5780,7 +5835,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
         Array<double, 2> input_array = gen_random_array<2>({n_channel, s}, 1.0);
 
         Feature1DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
         Avgpool1DLayer avgpool(s, stride);
         avgpool.prepare_weight(this->param, n_channel_per_ct, n_channel, init_level, skip, s);
@@ -5789,8 +5844,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "multiplexed_avgpool1d_layer", "",
         uint32_t n_packed_out_channel = div_ceil(n_channel, out_channels_per_ct);
         Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride);
         for (uint32_t i = 0; i < n_packed_out_channel; i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path = base_path / ("CKKS_avgpool1d/stride_" + to_string(stride)) /
@@ -5849,10 +5904,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "concat_layer", "", HeteroProcesso
         Array<double, 3> input_x2 = gen_random_array<3>({n_channel_2, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted x1_enc(&this->context, init_level, skip);
-        x1_enc.pack_multiplexed(input_x1, false, this->param.get_default_scale());
+        x1_enc.pack_multiplexed(input_x1, this->param.default_scale());
 
         Feature2DEncrypted x2_enc(&this->context, init_level, skip);
-        x2_enc.pack_multiplexed(input_x2, false, this->param.get_default_scale());
+        x2_enc.pack_multiplexed(input_x2, this->param.default_scale());
 
         ConcatLayer concat;
         Feature2DEncrypted result_enc = concat.run(this->context, x1_enc, x2_enc);
@@ -5889,7 +5944,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mult_scalar_layer", "", HeteroPro
         Array<double, 1> weight = gen_random_array<1>({n_channel}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
         // Prepare weight plaintexts
         MultScalarLayer mult_layer(this->param, input_shape, move(weight), skip, n_channel_per_ct, init_level);
@@ -5898,8 +5953,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mult_scalar_layer", "", HeteroPro
         // Pre-allocate output (mult_scalar consumes one level due to rescale)
         Feature2DEncrypted output_feature(&this->context, init_level - 1);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.push_back(
-                this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
+            output_feature.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path =
@@ -5964,9 +6019,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_conv1d", "", HeteroProcess
                         Array<double, 2> input_array = gen_random_array<2>({n_channel, input_shape}, 1.0);
 
                         Feature1DEncrypted input_feature(&this->context, init_level, skip);
-                        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+                        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
-                        MultiplexedDWConv1DPackedLayer conv_layer(this->context.get_parameter(), input_shape,
+                        MultiplexedDWConv1DPackedLayer conv_layer(this->context.parameter(), input_shape,
                                                                   move(weight), move(bias), stride, skip,
                                                                   n_channel_per_ct, init_level);
                         conv_layer.prepare_weight();
@@ -5983,12 +6038,12 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "mux_dw_conv1d", "", HeteroProcess
                         output_feature.n_channel = n_channel;
                         output_feature.n_channel_per_ct = n_channel_per_ct;
                         for (uint32_t i = 0; i < n_output_cts; i++) {
-                            output_feature.data.push_back(
-                                this->context.new_ciphertext(output_level, this->param.get_default_scale()));
+                            output_feature.data.emplace_back(this->context.parameter(), output_level);
+                            output_feature.data.back().set_scale(this->param.default_scale());
                         }
 
                         uint32_t n_select_pt = min(n_channel_per_ct, n_channel);
-                        vector<CkksPlaintextRingt> select_pt_subset;
+                        vector<CkksPlaintext> select_pt_subset;
                         for (uint32_t i = 0; i < n_select_pt; i++) {
                             select_pt_subset.push_back(move(conv_layer.block_select_pt[i]));
                         }
@@ -6073,7 +6128,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
 
         // Pack input into Feature1DEncrypted
         Feature1DEncrypted input_feature(&this->context, init_level, cfg.skip, cfg.invalid_fill);
-        input_feature.pack_multiplexed(input_2d, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_2d, this->param.default_scale());
 
         // Wrap as Feature0DEncrypted (run_1d_multiplexed only uses .data)
         Feature0DEncrypted input_0d(&this->context, init_level);
@@ -6083,7 +6138,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         input_0d.skip = 1;
 
         // Layer
-        DensePackedLayer dense(this->context.get_parameter(), move(weight), move(bias), n_block_per_ct, init_level, 0);
+        DensePackedLayer dense(this->context.parameter(), move(weight), move(bias), n_block_per_ct, init_level, 0);
         dense.prepare_weight_for_1d_multiplexed(cfg.shape, cfg.skip, cfg.invalid_fill);
 
         Feature0DEncrypted output(&this->context, init_level - 1);
@@ -6091,7 +6146,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "fc_1d_multiplexed", "", HeteroPro
         output.n_channel = cfg.n_out;
         output.n_channel_per_ct = n_block_per_ct;
         for (uint32_t i = 0; i < n_packed_out; i++) {
-            output.data.push_back(this->context.new_ciphertext(init_level - 1, this->param.get_default_scale()));
+            output.data.emplace_back(this->context.parameter(), init_level - 1);
+            output.data.back().set_scale(this->param.default_scale());
         }
 
         fs::path project_path =
@@ -6141,7 +6197,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_layer", "", HeteroProces
 
         Feature2DEncrypted input_feature(&this->context, init_level);
         Duo block_shape = input_shape / stride;
-        input_feature.pack_interleaved(input_array, block_shape, stride, false, this->param.get_default_scale());
+        input_feature.pack_interleaved(input_array, block_shape, stride, this->param.default_scale());
 
         UpsampleLayer upsample(this->param, stride, upsample_factor, init_level, n_channel, n_channel_per_ct);
         upsample.prepare_data();
@@ -6180,7 +6236,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
         Array<double, 3> input_array = gen_random_array<3>({n_channel, input_shape[0], input_shape[1]}, 1.0);
 
         Feature2DEncrypted input_feature(&this->context, init_level, skip);
-        input_feature.pack_multiplexed(input_array, false, this->param.get_default_scale());
+        input_feature.pack_multiplexed(input_array, this->param.default_scale());
 
         UpsampleNearestLayer upsample_nearest(this->param, input_shape, skip, upsample_factor, n_channel_per_ct,
                                               init_level);
@@ -6206,10 +6262,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "upsample_nearest_layer", "", Hete
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", HeteroProcessors) {
     // LayerNorm needs higher levels; use local context with N=32768
     const int N = 32768;
-    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksParameter param = CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant);
     CkksContext context = CkksContext::create_random_context(param);
     context.gen_rotation_keys();
-    double default_scale = param.get_default_scale();
+    double default_scale = param.default_scale();
 
     auto run_ln_test = [&](uint32_t d, uint32_t m, uint32_t n, uint32_t num_iters, int init_level) {
         double eps = 1e-5;
@@ -6227,7 +6283,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_layernorm", "", H
         FeatureMatEncrypted X_enc(&context, init_level);
         X_enc.shape = {m, n};
         X_enc.matmul_block_size = d;
-        X_enc.block_col_major_pack(X_mat, d, false, default_scale);
+        X_enc.block_col_major_pack(X_mat, d, default_scale);
 
         // Phase 1a: Stats (a_cts only)
         BlockColMajorLNStats stats(param, {m, n}, d, init_level, eps, inv_var);
@@ -6310,7 +6366,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         return;
 
     const int N = 32768;
-    CkksParameter param = CkksParameter::create_parameter(N);
+    CkksParameter param = CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant);
     CkksContext context = CkksContext::create_random_context(param);
     context.gen_rotation_keys();
 
@@ -6360,7 +6416,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     FeatureMatEncrypted X_enc(&context, init_level);
     X_enc.shape = {seq_len, head_dim};
     X_enc.matmul_block_size = d;
-    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, param.get_default_scale());
+    X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, param.default_scale());
 
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> stats_data, xcenter_data, minimax_data, gold_data, affine_data;
@@ -6377,14 +6433,15 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = param.get_n() / 2;
+    uint32_t n_slot = param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
     uint32_t G = (n_slot >= n_h_padded * d * d) ? 1 : n_h_padded / (n_slot / (d * d));
     uint32_t n_out = num_block_rows * num_block_cols * G;
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(context.new_ciphertext(0, param.get_default_scale()));
+        out_cts.emplace_back(context.parameter(), 0);
+        out_cts.back().set_scale(param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -6439,7 +6496,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "block_col_major_polyactrn", "", H
         FeatureMatEncrypted X_enc(&this->context, init_level);
         X_enc.shape = {m, n};
         X_enc.matmul_block_size = d;
-        X_enc.block_col_major_pack(X_mat, d, false, this->default_scale);
+        X_enc.block_col_major_pack(X_mat, d, this->default_scale);
 
         // Phase 1: Gamma scaling
         BlockColMajorPolyActRNGamma gamma_layer(this->param, {m, n}, d, init_level, gamma.copy());
@@ -6529,7 +6586,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         FeatureMatEncrypted X_enc(&res.context, init_level);
         X_enc.shape = {seq_len, head_dim};
         X_enc.matmul_block_size = d;
-        X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, false, res.param.get_default_scale());
+        X_enc.par_block_col_major_pack(X_mat, d, n_heads, d, res.param.default_scale());
 
         vector<CkksCiphertext> in_cts, out_cts;
         vector<CustomData> gamma_data, poly_data;
@@ -6543,7 +6600,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t n_slot = res.param.max_slots();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = n_heads;
         }
@@ -6551,7 +6608,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_out = num_block_rows * num_block_cols * G;
         int out_level = init_level - 1 - (degree == 4 ? 3 : 2);
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+            out_cts.emplace_back(res.context.parameter(), out_level);
+            out_cts.back().set_scale(res.param.default_scale());
 
         string gamma_layer_id = "_gamma_layer_deg" + to_string(degree);
         string poly_layer_id = "_poly_layer_deg" + to_string(degree);
@@ -6647,7 +6705,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         FeatureMatEncrypted A_enc(&res.context, init_level);
         A_enc.shape = {seq_len, head_dim};
         A_enc.matmul_block_size = d;
-        A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, false, res.param.get_default_scale());
+        A_enc.par_block_col_major_pack(A_mat, d, n_heads, d, res.param.default_scale());
 
         vector<CkksCiphertext> in_cts, out_cts;
         vector<CustomData> expand_data, gamma_data, poly_data, reduce_data;
@@ -6662,7 +6720,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t n_slot = res.param.max_slots();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = n_heads;
         }
@@ -6670,7 +6728,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_out = num_block_rows_A * G;
         int out_level = reduce_level - 2;
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+            out_cts.emplace_back(res.context.parameter(), out_level);
+            out_cts.back().set_scale(res.param.default_scale());
 
         vector<CxxVectorArgument> cxx_args = {
             {"input", &in_cts},          {"_expand_cpmm", &expand_data}, {"_gamma_layer", &gamma_data},
@@ -6709,7 +6768,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, d, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, d, res.param.default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -6725,7 +6784,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t n_slot = res.param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -6733,7 +6792,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_out = num_block_rows_A * G;
 
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 2, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), level - 2);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -6761,7 +6821,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, K, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, K, res.param.default_scale());
 
     static vector<CkksCiphertext> in_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -6774,7 +6834,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     layer_data.emplace_back(static_cast<void*>(layer_ptr.get()));
 
     for (uint32_t i = 0; i < in_cts.size(); i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 1, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), level - 1);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"input", &in_cts},
@@ -6804,9 +6865,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     auto ref_output = layer_ptr->run_plaintext(A, B);
 
     FeatureMatEncrypted A_enc(&res.context, level);
-    A_enc.par_block_col_major_pack(A, d, n_heads, N_dim, false, res.param.get_default_scale());
+    A_enc.par_block_col_major_pack(A, d, n_heads, N_dim, res.param.default_scale());
     FeatureMatEncrypted B_enc(&res.context, level);
-    B_enc.par_block_col_major_pack(B, d, n_heads, P, false, res.param.get_default_scale());
+    B_enc.par_block_col_major_pack(B, d, n_heads, P, res.param.default_scale());
 
     static vector<CkksCiphertext> A_cts, B_cts, out_cts;
     static vector<CustomData> layer_data;
@@ -6825,7 +6886,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     uint32_t n_h_padded = 1;
     while (n_h_padded < n_heads)
         n_h_padded <<= 1;
-    uint32_t n_slot = res.param.get_n() / 2;
+    uint32_t n_slot = res.param.max_slots();
     if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
         n_h_padded = n_heads;
     }
@@ -6833,7 +6894,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     n_out *= G;
 
     for (uint32_t i = 0; i < n_out; i++)
-        out_cts.push_back(res.context.new_ciphertext(level - 3, res.param.get_default_scale()));
+        out_cts.emplace_back(res.context.parameter(), level - 3);
+        out_cts.back().set_scale(res.param.default_scale());
 
     vector<CxxVectorArgument> cxx_args = {
         {"A_input", &A_cts},
@@ -6881,7 +6943,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         FeatureMatEncrypted X_enc(&res.context, level);
         X_enc.shape = {seq_len, head_dim};
         X_enc.matmul_block_size = d;
-        X_enc.par_block_col_major_pack(X, d, n_heads, d, false, res.param.get_default_scale());
+        X_enc.par_block_col_major_pack(X, d, n_heads, d, res.param.default_scale());
 
         static vector<CkksCiphertext> in_cts, out_cts;
         static vector<CustomData> layer_data;
@@ -6898,7 +6960,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         uint32_t n_h_padded = 1;
         while (n_h_padded < n_heads)
             n_h_padded <<= 1;
-        uint32_t n_slot = res.param.get_n() / 2;
+        uint32_t n_slot = res.param.max_slots();
         if (n_slot < n_h_padded * d * d && n_slot / (d * d) == 1) {
             n_h_padded = n_heads;
         }
@@ -6907,7 +6969,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
         int out_level = level - (degree == 4 ? 3 : 2);
 
         for (uint32_t i = 0; i < n_out; i++)
-            out_cts.push_back(res.context.new_ciphertext(out_level, res.param.get_default_scale()));
+            out_cts.emplace_back(res.context.parameter(), out_level);
+            out_cts.back().set_scale(res.param.default_scale());
 
         string layer_id = "_poly_layer_deg" + to_string(degree);
         vector<CxxVectorArgument> cxx_args = {
@@ -6935,8 +6998,8 @@ TEST_CASE("batch_dense_packed_layer/correctness", "[fhe_layers][batch_dense_pack
     constexpr uint32_t block_size = 4;
     constexpr int level = 5;
 
-    auto param = CkksParameter::create_parameter(N);
-    auto context = CkksContext::create_random_context(param, level);
+    auto param = CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant);
+    auto context = CkksContext::create_random_context(param);
     context.gen_rotation_keys();
 
     Array<double, 2> input({batch, input_dim});
@@ -6952,7 +7015,7 @@ TEST_CASE("batch_dense_packed_layer/correctness", "[fhe_layers][batch_dense_pack
         bias.set(h, -0.01 * static_cast<double>(h + 1));
 
     Feature0DEncrypted input_enc(&context, level);
-    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
+    input_enc.batch_pack(input, block_size, param.default_scale());
 
     BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
                                 bias.copy());
@@ -6981,8 +7044,8 @@ TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][
     constexpr uint32_t block_size = 32;
     constexpr int level = 5;
 
-    auto param = CkksParameter::create_parameter(N);
-    auto context = CkksContext::create_random_context(param, level);
+    auto param = CkksParameter::create_parameter(static_cast<int>(std::log2(N)), RingType::ConjugateInvariant);
+    auto context = CkksContext::create_random_context(param);
     context.gen_rotation_keys();
 
     Array<double, 2> input({batch, input_dim});
@@ -6998,7 +7061,7 @@ TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][
         bias.set(h, 0.001 * static_cast<double>(h + 1));
 
     Feature0DEncrypted input_enc(&context, level);
-    input_enc.batch_pack(input, block_size, false, param.get_default_scale());
+    input_enc.batch_pack(input, block_size, param.default_scale());
 
     BatchDensePackedLayer layer(param, Duo{batch, input_dim}, Duo{input_dim, output_dim}, weight, block_size, level,
                                 bias.copy());
@@ -7015,8 +7078,8 @@ TEST_CASE("batch_dense_packed_layer/multiple_groups_and_padding", "[fhe_layers][
 
     CAPTURE(max_error);
     REQUIRE(max_error < 1.0e-2);
-    // N/2=8192, d*d=1024, so one ciphertext has 8 chunks. B=2049 needs
-    // ceil(ceil(2049/32)/8)=9 batch ciphertext groups.
-    REQUIRE(input_enc.data.size() == 288);
-    REQUIRE(output_enc.data.size() == 18);
+    // N=16384 (CI), d*d=1024, so one ciphertext has 16 chunks. B=2049 needs
+    // ceil(ceil(2049/32)/16)=5 batch ciphertext groups.
+    REQUIRE(input_enc.data.size() == 160);
+    REQUIRE(output_enc.data.size() == 10);
 }
