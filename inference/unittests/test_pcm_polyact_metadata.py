@@ -5,6 +5,7 @@ import unittest
 
 from frontend import custom_task as task
 from inference.model_generator.layers.par_block_col_major_polyactrn import ParBlockColMajorPolyActRNPoly
+from inference.model_generator.layers.par_upper_diagonal_softmax import ParUpperDiagonalGELU
 
 
 class PCMPolyActMetadataTest(unittest.TestCase):
@@ -45,6 +46,20 @@ class PCMPolyActMetadataTest(unittest.TestCase):
             layer.call_custom_compute([x], task.CustomDataNode(type='poly_data_source', id=name))
         ids = [node.id for node in task.g_dag.nodes if isinstance(node, task.DataNode)]
         self.assertEqual(len(ids), len(set(ids)))
+
+    def test_pdm_gelu_mask_matches_native_natural_product_scale(self):
+        param = task.CkksParam.create_default_param(15, task.RingType.ConjugateInvariant)
+        task.set_fhe_param(param)
+        layer = ParUpperDiagonalGELU((256, 256), (256, 256), 1, 1 << param.log_max_slots())
+        left = [task.CkksCiphertextNode(level=6, id=f'a{i}') for i in range(layer.total_cts)]
+        right = [task.CkksCiphertextNode(level=6, id=f'b{i}') for i in range(layer.total_cts)]
+        outputs = layer.call_custom_compute(left, right, task.CustomDataNode(type='gelu', id='gelu'))
+        self.assertTrue(all(node.metadata.level == 4 for node in outputs))
+        encoders = [node for node in task.g_dag.nodes if getattr(node, 'type', None) == 'encode_pt']
+        for encoder in encoders:
+            mask, = task.g_dag.successors(encoder)
+            expected = param.q[6] / param.default_scale * param.q[5]
+            self.assertAlmostEqual(mask.metadata.scale / expected, 1.0)
 
 
 if __name__ == '__main__':

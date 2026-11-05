@@ -42,7 +42,7 @@ def pcm_parameter_scale(attributes, input_levels, parameter):
     if op == 'ParBlockColMajorLNGoldschmidt':
         return [scale/q[level]*scale/q[level-1]*scale,
                 q[level]/scale*q[level]/scale*q[level-1]/scale*q[level-2]][int(attributes['pt_idx'])]
-    if op in {'ParBlockColMajorMultipleSquare', 'ParBlockColMajorCtMul'}:
+    if op in {'ParBlockColMajorMultipleSquare', 'ParBlockColMajorCtMul', 'ParBlockColMajorGELU'}:
         return float(q[level]/scale*q[level-1])
     if op == 'ParBlockColMajorHeadColSum':
         return float(q[level-int(kind == 'mask_pt')]) if attributes['op_class'].startswith('ParBlock') else float(q[level])
