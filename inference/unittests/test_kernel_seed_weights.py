@@ -25,6 +25,36 @@ class KernelSeedWeightsTest(unittest.TestCase):
     def setUp(self):
         task.set_fhe_param(task.CkksParam.create_default_param(14))
 
+    def test_encrypted_inverse_repack_uses_full_real_slot_capacity(self):
+        param = task.CkksParam.create_default_param(15, task.RingType.ConjugateInvariant)
+        task.set_fhe_param(param)
+        slots = 1 << param.log_max_slots()
+        for cls, channels in ((InverseMultiplexedConv2DLayer, (2, 1)),
+                              (InverseMultiplexedDepthwiseConv2DLayer, (2,))):
+            with self.subTest(layer=cls.__name__):
+                task.g_dag.clear()
+                task.g_evk_node_dict.clear()
+                layer = cls(*channels, [128, 256], [-1, -1], [3, 3], [2, 2], [128, 256])
+                self.assertTrue(layer.need_repack)
+                weights, biases, mask = layer.make_param_ct_nodes('repack', 3)
+                x = [task.CkksCiphertextNode(level=3, id=f'x{i}') for i in range(layer.n_in_channel)]
+                output = layer.call_param_ct(x, weights, biases, slots, repack_mask_pt=mask)
+                self.assertEqual(len(output), 1)
+                self.assertEqual(output[0].metadata.level, 1)
+
+    def test_inverse_lazy_bias_ids_are_unique_for_all_output_blocks(self):
+        for cls, channels in ((InverseMultiplexedConv2DLayer, (2, 1)),
+                              (InverseMultiplexedDepthwiseConv2DLayer, (2,))):
+            with self.subTest(layer=cls.__name__):
+                task.g_dag.clear()
+                task.g_evk_node_dict.clear()
+                layer = cls(*channels, [16, 16], [-1, -1], [3, 3], [2, 2], [4, 4])
+                count = layer.n_in_channel * math.prod(layer.stride) * math.prod(layer.output_step)
+                x = [task.CkksCiphertextNode(level=3, id=f'x{i}') for i in range(count)]
+                layer.call_custom_compute(x, task.CustomDataNode(type='conv_data_source', id='source'), 8192)
+                ids = [node.id for node in task.g_dag.nodes if isinstance(node, task.DataNode)]
+                self.assertEqual(len(ids), len(set(ids)))
+
     def test_selection_uses_bytes_at_seed_level_and_chain_availability(self):
         def layer():
             return MultiplexedConv2DPackedLayerDepthwise(

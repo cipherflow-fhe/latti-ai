@@ -181,7 +181,7 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
                     w_pt_list = []
                     # Depthwise: no inner j loop over n_in_channel, only kernel positions
                     for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                        w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{k + base_idx}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
+                        w_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_{ct_idx}_{k + base_idx}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
                         custom_compute(
                             inputs=[conv_data_source],
                             output=w_pt,
@@ -197,7 +197,7 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
                         w_pt_list.append(w_pt)
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
-                    b_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
+                    b_pt = CkksPlaintextNode(f'{conv_data_source.id}/bias_{out_ct_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                     custom_compute(
                         inputs=[conv_data_source],
                         output=b_pt,
@@ -232,7 +232,7 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
             # Shared mask: select row%output_skip==0 && col%output_skip==0
-            repack_mask = CkksPlaintextNode('repack_mask', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level - 1]), level=0)
+            repack_mask = CkksPlaintextNode(f'{conv_data_source.id}/repack_mask', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level - 1]), level=0)
             custom_compute(
                 inputs=[conv_data_source],
                 output=repack_mask,
@@ -658,8 +658,8 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
                                     rotated_x[out_channel_idx].append(res_temp)
 
         n_channel_per_ct_out = 1
-        if 2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
-            n_channel_per_ct_out = N / (2 * self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
+        if self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1] < N:
+            n_channel_per_ct_out = N / (self.input_shape[0] / self.stride[0] * self.input_shape[1] / self.stride[1])
         else:
             n_channel_per_ct_out = 1
 
@@ -723,7 +723,7 @@ class InverseMultiplexedDepthwiseConv2DLayer(KernelSeedPacking):
             out_skip0 = self.block_shape[0] // output_shape0
             out_skip1 = self.block_shape[1] // output_shape1
             n_channel_per_block = out_skip0 * out_skip1
-            n_block_per_ct = (N // 2) // (self.block_shape[0] * self.block_shape[1])
+            n_block_per_ct = N // (self.block_shape[0] * self.block_shape[1])
             n_channel_per_ct_out_repack = n_channel_per_block * n_block_per_ct
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
