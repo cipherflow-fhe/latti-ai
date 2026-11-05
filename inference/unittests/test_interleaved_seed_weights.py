@@ -21,14 +21,14 @@ from unittest.mock import patch
 import numpy as np
 import networkx as nx
 
-from inference.lattisense.frontend import custom_task as task
+from frontend import custom_task as task
 from inference.model_generator.layers import multiplexed_conv2d_pack_layer as conv
 
 
 class InterleavedSeedWeightsTest(unittest.TestCase):
     def tearDown(self):
         task.g_dag.clear()
-        task.g_swk_node_dict.clear()
+        task.g_evk_node_dict.clear()
 
     def test_expansion_preserves_channel_blocks_and_skip_positions(self):
         # Different values in every block/skip position expose rotations that
@@ -70,8 +70,8 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                 for level in (1, 4):
                     with self.subTest(kernel=kernel, plaintext_input=plaintext_input, level=level):
                         task.g_dag.clear()
-                        task.g_swk_node_dict.clear()
-                        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                        task.g_evk_node_dict.clear()
+                        task.set_fhe_param(task.CkksParam.create_default_param(14, task.RingType.ConjugateInvariant))
                         layer = conv.MultiplexedConv2DPackedLayer(
                             4, 3, [4, 4], kernel, [1, 1], [1, 1], 4, 1, 1,
                             seed_weight_subgrid_stride=[2, 2],
@@ -83,31 +83,30 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                             param.encrypted_parameter_store_node = store
                             param.encrypted_parameter_arg_id = 'params'
                             param.encrypted_parameter_flat_index = i
-                        x = (task.CkksPlaintextRingtNode('input') if plaintext_input
-                             else task.CkksCiphertextNode('input', level=level))
+                        x = (task.CkksPlaintextNode('input') if plaintext_input
+                             else task.CkksCiphertextNode(id='input', level=level))
                         seed_masks = layer.make_seed_mask_pt_nodes('seed', level)
                         outputs = layer.call_param_ct(
                             [x], weights, biases, masks, input_is_plaintext=plaintext_input,
                             seed_mask_pt=seed_masks,
                         )
-                        self.assertEqual([out.level for out in outputs], [level - 1])
+                        self.assertEqual([out.metadata.level for out in outputs], [level - 1])
                         for param in params:
                             producers = list(task.g_dag.predecessors(param))
                             self.assertEqual(len(producers), 1)
                             producer = producers[0]
                             self.assertEqual(producer.type, 'load_encrypted_param_ct')
-                            self.assertEqual(producer.attributes['expected_level'], param.level)
+                            self.assertEqual(producer.attributes['expected_level'], param.metadata.level)
                             self.assertEqual(len(list(task.g_dag.predecessors(producer))), 2)
-                            self.assertEqual(producer.wait_inputs, [])
-                        self.assertEqual(weights[0][0][0].level, level + layer.seed_weight_level_cost)
+                        self.assertEqual(weights[0][0][0].metadata.level, level + layer.seed_weight_level_cost)
 
     def test_lazy_seed_loads_wait_for_previous_accumulation(self):
         for layout in ('input_blocks', 'joint'):
             for plaintext_input in (False, True):
                 with self.subTest(layout=layout, plaintext_input=plaintext_input):
                     task.g_dag.clear()
-                    task.g_swk_node_dict.clear()
-                    task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                    task.g_evk_node_dict.clear()
+                    task.set_fhe_param(task.CkksParam.create_default_param(14, task.RingType.ConjugateInvariant))
                     layer = conv.MultiplexedConv2DPackedLayer(
                         8, 8, [4, 4], [3, 3], [1, 1], [1, 1], 4, 2, 2,
                         seed_weight_subgrid_stride=[2, 2], seed_weight_layout=layout,
@@ -119,8 +118,8 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                         param.encrypted_parameter_store_node = store
                         param.encrypted_parameter_arg_id = 'params'
                         param.encrypted_parameter_flat_index = i
-                    inputs = [(task.CkksPlaintextRingtNode(f'x{i}') if plaintext_input
-                               else task.CkksCiphertextNode(f'x{i}', level=4)) for i in range(2)]
+                    inputs = [(task.CkksPlaintextNode(f'x{i}') if plaintext_input
+                               else task.CkksCiphertextNode(id=f'x{i}', level=4)) for i in range(2)]
                     layer.call_param_ct(inputs, weights, biases, masks,
                                         input_is_plaintext=plaintext_input,
                                         seed_mask_pt=layer.make_seed_mask_pt_nodes('lazy', 4))
@@ -140,7 +139,7 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
         for layout in ('input_blocks', 'joint'):
             with self.subTest(layout=layout):
                 task.g_dag.clear()
-                task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                task.set_fhe_param(task.CkksParam.create_default_param(14, task.RingType.ConjugateInvariant))
                 layer = conv.MultiplexedConv2DPackedLayer(
                     8, 8, [4, 4], [3, 3], [1, 1], [1, 1], 4, 2, 2,
                     seed_weight_subgrid_stride=[2, 2], seed_weight_layout=layout,
@@ -164,7 +163,7 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                 self.assertNotIn(other_first, subgrids)
 
     def test_seed_expansion_restores_weight_level_zero(self):
-        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+        task.set_fhe_param(task.CkksParam.create_default_param(14, task.RingType.ConjugateInvariant))
         for kernel in ([1, 1], [3, 3], [1, 5]):
             with self.subTest(kernel=kernel):
                 layer = conv.MultiplexedConv2DPackedLayer(
@@ -174,7 +173,7 @@ class InterleavedSeedWeightsTest(unittest.TestCase):
                 weights, _, _ = layer.make_param_ct_nodes('seed', 0)
                 masks = layer.make_seed_mask_pt_nodes('seed', 0)
                 expanded = layer._expand_seed_weight(weights[0][0][0], 0, 0, masks[0][0])
-                self.assertEqual(expanded.level, 0)
+                self.assertEqual(expanded.metadata.level, 0)
 
     def test_seed_recovery_operations_use_public_masks_and_post_rescale_levels(self):
         for kernel in ([1, 1], [3, 3], [1, 5]):

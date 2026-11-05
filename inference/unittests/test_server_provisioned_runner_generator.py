@@ -20,7 +20,7 @@ import unittest
 from pathlib import Path
 
 from inference.model_generator.deploy_cmds import gen_custom_task
-from training.model_compiler.components import PN13QP218
+from training.model_compiler.components import PN13Default
 
 
 def _feature(level: int):
@@ -29,7 +29,7 @@ def _feature(level: int):
         'channel': 1,
         'scale': 1.0,
         'ckks_scale': 1,
-        'skip': 4096,
+        'skip': 8192,
         'ckks_parameter_id': 'param0',
         'level': level,
         'depth': -1,
@@ -77,7 +77,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                           task_output_param={'output': features['output']}, use_btp=False)
             (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
             (server / 'task_config.json').write_text(json.dumps(config))
-            gen_custom_task(str(server), param_name='PN13QP218', style='multiplexed',
+            gen_custom_task(str(server), param_name='PN13Default', style='multiplexed',
                             parameter_mode='encrypted_offline', input_mode='plaintext',
                             deployment_mode='server_provisioned_runner', parameter_loading_mode='runtime_lazy',
                             output_dir=str(runner))
@@ -102,7 +102,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                 layers = {}
                 for name, pack in [('a', 4), ('b', second_pack)]:
                     for fid, level in [(name, 3), (name + '_hidden', 2)]:
-                        features[fid] = dict(_feature(level), channel=3, pack_num=pack, skip=4096 // pack)
+                        features[fid] = dict(_feature(level), channel=3, pack_num=pack, skip=8192 // pack)
                     layers[name + '_fc'] = dict(type='fc0', feature_input=[name],
                         feature_output=[name + '_hidden'], channel_input=3, channel_output=3)
                 features['output'] = dict(_feature(1), channel=6, pack_num=4, skip=1024)
@@ -115,7 +115,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                     task_output_param={'output': features['output']}, use_btp=False)
                 (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
                 (server / 'task_config.json').write_text(json.dumps(config))
-                gen_custom_task(str(server), param_name='PN13QP218', style='multiplexed',
+                gen_custom_task(str(server), param_name='PN13Default', style='multiplexed',
                     parameter_mode='encrypted_offline', input_mode='plaintext',
                     deployment_mode='server_provisioned_runner',
                     parameter_loading_mode='runtime_lazy', output_dir=str(runner))
@@ -127,7 +127,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                          if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'ConcatLayer']
                 self.assertEqual(len(masks), 6)
                 self.assertEqual([m['attributes']['slot'] for m in masks],
-                                 [0, 1024, 2048, 0, 4096 // second_pack, 8192 // second_pack])
+                                 [0, 2048, 4096, 0, 8192 // second_pack, 16384 // second_pack])
                 self.assertTrue(all(m['attributes']['level'] == 2 for m in masks))
                 self.assertTrue(all(m['inputs'] == [] and m.get('wait_inputs', []) == [] for m in masks))
                 self.assertEqual(_data_with_missing_source(mega), [])
@@ -186,7 +186,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             gen_custom_task(
                 str(server_dir),
-                param_name='PN13QP218',
+                param_name='PN13Default',
                 style='ordinary',
                 parameter_mode='encrypted_offline',
                 input_mode='plaintext',
@@ -201,7 +201,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             online = signature['online']
             offline = signature['offline']
             self.assertEqual(online[0]['id'], 'input')
-            self.assertEqual(online[0]['type'], 'pt_ringt')
+            self.assertEqual(online[0]['type'], 'pt')
             self.assertEqual(online[0]['phase'], 'in')
             self.assertEqual(online[-1]['id'], 'output')
             self.assertEqual(online[-1]['type'], 'ct')
@@ -214,7 +214,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             self.assertEqual(offline_by_id['densew_fc2']['type'], 'ct')
             self.assertEqual(offline_by_id['densew_fc2']['level'], 1)
             self.assertEqual(offline_by_id['denseb_fc2']['level'], 0)
-            self.assertGreaterEqual(len(mega_ag['offline_inputs']), 4)
+            self.assertGreaterEqual(len(mega_ag['inputs']), 5)
 
             compute_types = {node['type'] for node in mega_ag['compute'].values()}
             self.assertIn('mult', compute_types)
@@ -275,7 +275,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             gen_custom_task(
                 str(server_dir),
-                param_name='PN13QP218',
+                param_name='PN13Default',
                 style='ordinary',
                 parameter_mode='encrypted_offline',
                 input_mode='plaintext',
@@ -289,10 +289,10 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             offline_by_id = {arg['id']: arg for arg in signature['offline']}
             self.assertEqual(offline_by_id['mult_scalar_scale']['type'], 'ct')
-            self.assertEqual(offline_by_id['mult_scalar_scale']['phase'], 'offline')
+            self.assertEqual(offline_by_id['mult_scalar_scale']['phase'], 'in')
             self.assertEqual(offline_by_id['mult_scalar_scale']['level'], 1)
             self.assertEqual(offline_by_id['mult_scalar_scale']['size'], [1])
-            self.assertEqual(offline_by_id['mult_scalar_scale']['scale'], PN13QP218.q[1])
+            self.assertEqual(offline_by_id['mult_scalar_scale']['scale'], PN13Default.q[1])
 
             compute_types = {node['type'] for node in mega_ag['compute'].values()}
             self.assertIn('mult', compute_types)
@@ -355,7 +355,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             gen_custom_task(
                 str(server_dir),
-                param_name='PN13QP218',
+                param_name='PN13Default',
                 style='ordinary',
                 parameter_mode='encrypted_offline',
                 input_mode='plaintext',
@@ -376,9 +376,9 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
             self.assertEqual(len(load_nodes), 4)
-            store_indices = {idx for idx, node in mega_ag['data'].items() if node['id'] == 'encrypted_parameter_store'}
+            store_indices = {idx for idx in mega_ag['data'] if idx == 'encrypted_parameter_store'}
             self.assertEqual(len(store_indices), 1)
-            store_idx = int(next(iter(store_indices)))
+            store_idx = next(iter(store_indices))
             for node in load_nodes:
                 self.assertEqual(node['inputs'][0], store_idx)
                 self.assertEqual(len(node['inputs']), 2)
@@ -389,7 +389,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             # The C++ scheduler only inspects inputs, not wait_inputs. A second
             # layer load must be blocked when only graph inputs are available.
-            initial = set(mega_ag['inputs']) | set(mega_ag['offline_inputs'])
+            initial = set(mega_ag['inputs'])
             second_load = next(n for n in load_nodes if n['attributes']['arg_id'] == 'densew_fc2')
             self.assertNotIn(second_load['inputs'][1], initial)
             self.assertTrue(any(second_load['inputs'][1] in n['outputs'] for n in mega_ag['compute'].values()))
@@ -473,7 +473,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                 runner_dir = root / f'runner_{loading_mode}'
                 gen_custom_task(
                     str(server_dir),
-                    param_name='PN13QP218',
+                    param_name='PN13Default',
                     style='multiplexed',
                     parameter_mode='encrypted_offline',
                     input_mode='plaintext',
@@ -499,7 +499,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             client_dir = root / 'client_runner'
             gen_custom_task(
                 str(server_dir),
-                param_name='PN13QP218',
+                param_name='PN13Default',
                 style='multiplexed',
                 parameter_mode='encrypted_offline',
                 input_mode='plaintext',
@@ -567,7 +567,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             gen_custom_task(
                 str(server_dir),
-                param_name='PN13QP218',
+                param_name='PN13Default',
                 style='ordinary',
                 parameter_mode='encrypted_offline',
                 input_mode='plaintext',
@@ -654,7 +654,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
 
             gen_custom_task(
                 str(server_dir),
-                param_name='PN13QP218',
+                param_name='PN13Default',
                 style='ordinary',
                 parameter_mode='encrypted_offline',
                 input_mode='plaintext',
@@ -672,7 +672,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
             self.assertEqual(encrypted_param_ids, {'densew_fc1', 'denseb_fc1', 'mult_scalar_scale'})
             scalar = next(arg for arg in signature['encrypted_parameters'] if arg['id'] == 'mult_scalar_scale')
-            self.assertEqual(scalar['scale'], PN13QP218.q[1])
+            self.assertEqual(scalar['scale'], PN13Default.q[1])
             load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
             loaded_arg_ids = {node['attributes']['arg_id'] for node in load_nodes}
             self.assertEqual(loaded_arg_ids, encrypted_param_ids)

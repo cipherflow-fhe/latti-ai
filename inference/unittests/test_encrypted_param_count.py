@@ -34,11 +34,15 @@ def flatten(nodes):
 
 
 class EncryptedParamCountTest(unittest.TestCase):
+    def setUp(self):
+        from frontend import custom_task as task
+        task.set_fhe_param(task.CkksParam.create_default_param(15, task.RingType.ConjugateInvariant))
+
     def assert_counts(self, counts, groups):
         actual = defaultdict(Counter)
         for kind, nodes in groups.items():
             for node in flatten(nodes):
-                actual[node.level][kind] += 1
+                actual[node.metadata.level][kind] += 1
         self.assertEqual(counts, dict(actual))
 
     def test_conv_layouts(self):

@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-from inference.lattisense.frontend import custom_task as task
+from frontend import custom_task as task
 from inference.model_generator.layers import kernel_seed_packing as seed
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import InverseMultiplexedConv2DLayer
 from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import InverseMultiplexedDepthwiseConv2DLayer
@@ -22,6 +22,9 @@ def flatten(items):
 
 
 class KernelSeedWeightsTest(unittest.TestCase):
+    def setUp(self):
+        task.set_fhe_param(task.CkksParam.create_default_param(14))
+
     def test_selection_uses_bytes_at_seed_level_and_chain_availability(self):
         def layer():
             return MultiplexedConv2DPackedLayerDepthwise(
@@ -51,7 +54,7 @@ class KernelSeedWeightsTest(unittest.TestCase):
 
     def tearDown(self):
         task.g_dag.clear()
-        task.g_swk_node_dict.clear()
+        task.g_evk_node_dict.clear()
 
     @staticmethod
     def layers(kernel, subgrid):
@@ -109,15 +112,15 @@ class KernelSeedWeightsTest(unittest.TestCase):
             for layer in self.layers(kernel, [2, 2]):
                 for level in (2, 4):
                     task.g_dag.clear()
-                    task.g_swk_node_dict.clear()
-                    task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                    task.g_evk_node_dict.clear()
+                    task.set_fhe_param(task.CkksParam.create_default_param(14))
                     weights, biases, masks = layer.make_param_ct_nodes('seed', level)
                     params = flatten(weights) + flatten(biases)
                     if isinstance(layer, MultiplexedConv2DPackedLayerDepthwise):
                         masks = layer.make_runner_mask_pt_nodes('seed', level)
-                        inputs = [task.CkksCiphertextNode('x', level=level)]
+                        inputs = [task.CkksCiphertextNode(id='x', level=level)]
                     else:
-                        inputs = [task.CkksCiphertextNode(f'x{i}', level=level)
+                        inputs = [task.CkksCiphertextNode(id=f'x{i}', level=level)
                                   for i in range(layer.n_in_channel * math.prod(layer.input_shape) // math.prod(layer.block_shape))]
                     store = task.CustomDataNode(type='encrypted_parameter_store', id='store')
                     for i, node in enumerate(params):
@@ -136,29 +139,28 @@ class KernelSeedWeightsTest(unittest.TestCase):
                         expected_level = level - 1 - int(repack)
                         self.assertTrue(output)
                         self.assertTrue(all(isinstance(x, task.CkksCiphertextNode) for x in output))
-                        self.assertTrue(all(x.level == expected_level for x in output))
+                        self.assertTrue(all(x.metadata.level == expected_level for x in output))
                         actual = {}
                         for node in params:
-                            actual[node.level] = actual.get(node.level, 0) + 1
+                            actual[node.metadata.level] = actual.get(node.metadata.level, 0) + 1
                             producers = list(task.g_dag.predecessors(node))
                             self.assertEqual(len(producers), 1)
                             self.assertEqual(producers[0].type, 'load_encrypted_param_ct')
-                            self.assertEqual(producers[0].attributes['expected_level'], node.level)
+                            self.assertEqual(producers[0].attributes['expected_level'], node.metadata.level)
                             self.assertEqual(len(list(task.g_dag.predecessors(producers[0]))), 2)
-                            self.assertEqual(producers[0].wait_inputs, [])
                         expected = {lv: sum(counts.values())
                                     for lv, counts in layer.get_encrypted_param_count(level).items()}
                         self.assertEqual(actual, expected)
-                        self.assertEqual(flatten(weights)[0].level, level + layer.seed_weight_level_cost)
+                        self.assertEqual(flatten(weights)[0].metadata.level, level + layer.seed_weight_level_cost)
 
     def test_level_zero_recovery_and_invalid_layout_fallback(self):
-        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+        task.set_fhe_param(task.CkksParam.create_default_param(14))
         for kernel in ([1, 1], [3, 3]):
             for layer in self.layers(kernel, [2, 2]):
                 weights, _, _ = layer.make_param_ct_nodes('seed', 0)
                 masks = layer.make_seed_mask_pt_nodes('seed', 0)
                 row = weights[0][0] if isinstance(layer, InverseMultiplexedConv2DLayer) else weights[0]
-                self.assertEqual(layer.kernel_weight(row, 0, masks).level, 0)
+                self.assertEqual(layer.kernel_weight(row, 0, masks).metadata.level, 0)
         for stride in ([1, 1], [3, 2], [16, 2], [0, 2], [-2, 2]):
             for layer in self.layers([3, 3], stride):
                 self.assertFalse(layer.use_seed_weight_pack)
@@ -201,7 +203,7 @@ class KernelSeedWeightsTest(unittest.TestCase):
                     stack.enter_context(patch.object(seed, name, fn))
                 for k in range(36):
                     np.testing.assert_array_equal(layer.kernel_weight(packed, k, masks), expected[k])
-            task.set_fhe_param(task.CkksParam.create_default_param(16384))
+            task.set_fhe_param(task.CkksParam.create_default_param(14))
             graph_masks = layer.make_seed_mask_pt_nodes('inverse', 2)
             for k, pair in enumerate(graph_masks):
                 select, = task.g_dag.predecessors(pair[0])
@@ -209,30 +211,30 @@ class KernelSeedWeightsTest(unittest.TestCase):
                 self.assertEqual(select.attributes['subgrid'], layer.seed_request_index(k) % 4)
                 self.assertEqual(boundary.attributes['seed_step'], positions[k][1])
             task.g_dag.clear()
-            task.g_swk_node_dict.clear()
+            task.g_evk_node_dict.clear()
 
     def test_depthwise_public_mask_graph_and_legacy_signature(self):
         for plaintext_input in (False, True):
             for public_mask in (False, True):
                 with self.subTest(plaintext_input=plaintext_input, public_mask=public_mask):
                     task.g_dag.clear()
-                    task.g_swk_node_dict.clear()
-                    task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                    task.g_evk_node_dict.clear()
+                    task.set_fhe_param(task.CkksParam.create_default_param(14))
                     layer = MultiplexedConv2DPackedLayerDepthwise(
                         3, 3, [8, 8], [3, 3], [2, 2], [1, 2], 2, 2, 1)
                     weights, bias, legacy_masks = layer.make_param_ct_nodes('dw', 4)
                     masks = layer.make_runner_mask_pt_nodes('dw', 4) if public_mask else legacy_masks
                     self.assertTrue(all(isinstance(m, task.CkksCiphertextNode) for m in legacy_masks))
-                    node_type = task.CkksPlaintextRingtNode if plaintext_input else task.CkksCiphertextNode
-                    inputs = [node_type(f'x{i}', **({} if plaintext_input else {'level': 4})) for i in range(2)]
+                    node_type = task.CkksPlaintextNode if plaintext_input else task.CkksCiphertextNode
+                    inputs = [node_type(id=f'x{i}', **({} if plaintext_input else {'level': 4})) for i in range(2)]
                     outputs = layer.call_param_ct(inputs, weights, bias, masks, input_is_plaintext=plaintext_input)
-                    self.assertEqual([o.level for o in outputs], [2])
+                    self.assertEqual([o.metadata.level for o in outputs], [2])
                     for channel, mask in enumerate(masks):
                         consumers = list(task.g_dag.successors(mask))
                         self.assertEqual(len(consumers), 1)
                         self.assertEqual(consumers[0].type, task.OperationType.Mult)
                         product, = task.g_dag.successors(consumers[0])
-                        self.assertEqual(product.degree, 1 if public_mask else 2)
+                        self.assertEqual(product.metadata.degree, 1 if public_mask else 2)
                         if public_mask:
                             producer, = task.g_dag.predecessors(mask)
                             self.assertEqual(producer.type, 'encode_pt')
@@ -283,8 +285,8 @@ class KernelSeedWeightsTest(unittest.TestCase):
         for plaintext in (False, True):
             for kernel in ([1, 1], [3, 3]):
                 task.g_dag.clear()
-                task.g_swk_node_dict.clear()
-                task.set_fhe_param(task.CkksParam.create_default_param(16384))
+                task.g_evk_node_dict.clear()
+                task.set_fhe_param(task.CkksParam.create_default_param(14))
                 layer = MultiplexedConv2DPackedLayerDepthwise(
                     5, 5, [8, 8], kernel, [1, 1], [1, 2], 2, 3, 3,
                     seed_weight_subgrid_stride=[2, 2], seed_weight_layout='joint')
@@ -294,11 +296,11 @@ class KernelSeedWeightsTest(unittest.TestCase):
                     node.encrypted_parameter_store_node = store
                     node.encrypted_parameter_arg_id = 'params'
                     node.encrypted_parameter_flat_index = i
-                inputs = [(task.CkksPlaintextRingtNode(f'x{i}') if plaintext else task.CkksCiphertextNode(f'x{i}', level=3))
+                inputs = [(task.CkksPlaintextNode(f'x{i}') if plaintext else task.CkksCiphertextNode(id=f'x{i}', level=3))
                           for i in range(3)]
                 masks = layer.make_seed_mask_pt_nodes('joint', 3)
                 outputs = layer.call_param_ct(inputs, weights, bias, [], input_is_plaintext=plaintext, seed_mask_pt=masks)
-                self.assertEqual([x.level for x in outputs], [2, 2, 2])
+                self.assertEqual([x.metadata.level for x in outputs], [2, 2, 2])
                 self.assertEqual(len(flatten(weights)), math.ceil(3 * math.prod(kernel) / 4))
                 for node in flatten(weights):
                     producer, = task.g_dag.predecessors(node)

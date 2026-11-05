@@ -10,21 +10,24 @@ from unittest.mock import patch
 
 import numpy as np
 
-from inference.lattisense.frontend import custom_task as task
+from frontend import custom_task as task
 from inference.model_generator.layers import dense_packed_layer as dense
 
 
 class DenseSeedTileTest(unittest.TestCase):
+    def setUp(self):
+        task.set_fhe_param(task.CkksParam.create_default_param(14))
+
     def tearDown(self):
         task.g_dag.clear()
-        task.g_swk_node_dict.clear()
+        task.g_evk_node_dict.clear()
 
     def test_restore_distinct_spatial_values_blocks_bias_and_tail(self):
         for shape, skip, fill in [([2, 2], [4, 4], [2, 2]), ([1, 1], [16, 16], [4, 4]),
                                    ([2, 1], [8, 4], [4, 2])]:
             slots = 2 * math.prod(a * b for a, b in zip(shape, skip))
             layer = dense.DensePackedLayer(5, 3 * math.prod(shape), shape, skip, 2, 1, 1, invalid_fill=fill)
-            layout = layer.choose_seed_tile_layout(slots * 2, 3, lambda level: (level + 1) * 100)
+            layout = layer.choose_seed_tile_layout(slots, 3, lambda level: (level + 1) * 100)
             self.assertIsNotNone(layout)
             block = slots // 2
             width = shape[1] * skip[1]
@@ -55,7 +58,7 @@ class DenseSeedTileTest(unittest.TestCase):
 
                 with ExitStack() as stack:
                     for name, fn in {
-                        'CkksPlaintextRingtNode': lambda name: SimpleNamespace(id=name),
+                        'CkksPlaintextNode': lambda name, **kwargs: SimpleNamespace(id=name),
                         'custom_compute': encode, 'materialize_encrypted_param': lambda x, _: x,
                         'mult': lambda x, y: x.values * y.values, 'rescale': lambda x: x,
                         'rotate_cols': lambda x, steps: [np.roll(x, -s) for s in steps],
@@ -69,15 +72,15 @@ class DenseSeedTileTest(unittest.TestCase):
                     np.testing.assert_array_equal(seeds[-1].values * mask, np.zeros(slots))
 
     def test_graph_levels_and_one_lazy_load_per_canonical_seed(self):
-        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+        task.set_fhe_param(task.CkksParam.create_default_param(14))
         layer = dense.DensePackedLayer(5, 1025, [1, 1], [64, 64], 2, 1, 1, invalid_fill=[4, 4])
-        layout = layer.choose_seed_tile_layout(16384, 3, lambda lv: (lv + 1) * 100)
-        weights, biases = layer.make_param_ct_nodes_multiplexed('tiles', 16384, 3)
+        layout = layer.choose_seed_tile_layout(8192, 3, lambda lv: (lv + 1) * 100)
+        weights, biases = layer.make_param_ct_nodes_multiplexed('tiles', 8192, 3)
         params = weights[0] + biases
         self.assertEqual(len(weights[0]), 2)
         self.assertEqual(len(biases), 1)
-        self.assertEqual(Counter(p.level for p in params), {4: 2, 3: 1})
-        self.assertEqual(layer.get_encrypted_param_count_multiplexed(16384, 3),
+        self.assertEqual(Counter(p.metadata.level for p in params), {4: 2, 3: 1})
+        self.assertEqual(layer.get_encrypted_param_count_multiplexed(8192, 3),
                          {4: {'weight': 2}, 3: {'bias': 1}})
         store = task.CustomDataNode(type='encrypted_parameter_store', id='store')
         for i, param in enumerate(params):
@@ -85,26 +88,26 @@ class DenseSeedTileTest(unittest.TestCase):
             param.encrypted_parameter_arg_id = 'parameters'
             param.encrypted_parameter_flat_index = i
         outputs = layer.call_param_ct_multiplexed(
-            [task.CkksCiphertextNode(f'x_{i}', level=3) for i in range(3)], weights, biases, 16384)
-        self.assertEqual([o.level for o in outputs], [2, 2, 2])
+            [task.CkksCiphertextNode(id=f'x_{i}', level=3) for i in range(3)], weights, biases, 8192)
+        self.assertEqual([o.metadata.level for o in outputs], [2, 2, 2])
         loads = [node for node in task.g_dag.nodes if getattr(node, 'type', None) == 'load_encrypted_param_ct']
         self.assertEqual(len(loads), len(params))
         layout['slots'] //= 2
         with self.assertRaisesRegex(ValueError, 'metadata'):
-            layer.make_param_ct_nodes_multiplexed('tiles', 16384, 3)
+            layer.make_param_ct_nodes_multiplexed('tiles', 8192, 3)
 
     def test_geometry_and_negative_byte_benefit_disable_tiles(self):
         for shape, skip, fill in [([1, 1], [4, 4], [1, 1]), ([1, 1], [4, 4], [3, 2]),
                                    ([128, 128], [4, 4], [2, 2])]:
             layer = dense.DensePackedLayer(1, 1, shape, skip, 1, 1, 1, invalid_fill=fill)
-            self.assertIsNone(layer.choose_seed_tile_layout(16384, 3, lambda lv: (lv + 1) * 100))
+            self.assertIsNone(layer.choose_seed_tile_layout(8192, 3, lambda lv: (lv + 1) * 100))
 
     def test_concat_0d_uses_tiles_without_folding_invalid_slots(self):
-        task.set_fhe_param(task.CkksParam.create_default_param(16384))
+        task.set_fhe_param(task.CkksParam.create_default_param(14))
         slots, inputs, outputs, level = 8192, 3, 5, 1
         layer = dense.DensePackedLayer(outputs, inputs, [1, 1], [1, slots], 1, inputs, outputs,
                                        invalid_fill=[1, slots])
-        layout = layer.choose_seed_tile_layout(2 * slots, level, lambda lv: (lv + 1) * 100)
+        layout = layer.choose_seed_tile_layout(slots, level, lambda lv: (lv + 1) * 100)
         self.assertEqual(layout['weight_shape'], [outputs, inputs])
         weights, biases = layer.make_param_ct_nodes_skip_0d('concat', level)
         self.assertEqual([len(weights), len(weights[0]), len(biases)], [1, 1, 1])
@@ -112,16 +115,16 @@ class DenseSeedTileTest(unittest.TestCase):
         for plaintext in (False, True):
             task.g_dag.clear()
             node_type = task.CkksPlaintextNode if plaintext else task.CkksCiphertextNode
-            x = [node_type(f'x{i}', level=level) for i in range(inputs)]
+            x = [node_type(id=f'x{i}', level=0 if plaintext else level) for i in range(inputs)]
             with patch.object(dense, 'rotate_cols', wraps=dense.rotate_cols) as rotate:
                 result = layer.call_param_ct_skip_0d(x, weights, biases, slots, input_is_plaintext=plaintext)
-            self.assertEqual([node.level for node in result], [0] * outputs)
+            self.assertEqual([node.metadata.level for node in result], [0] * outputs)
             # Only restoration rotates; no spatial fold can broadcast a 0D result into invalid slots.
             self.assertEqual([call.args[1][0] for call in rotate.call_args_list],
                              [step for out in range(outputs)
                               for step in [*(out * inputs + i for i in range(inputs)), out] if step])
         layer = dense.DensePackedLayer(1, 1, [1, 1], [64, 64], 2, 1, 1, invalid_fill=[4, 4])
-        self.assertIsNone(layer.choose_seed_tile_layout(16384, 3, lambda lv: 100 ** lv))
+        self.assertIsNone(layer.choose_seed_tile_layout(8192, 3, lambda lv: 100 ** lv))
 
 
 if __name__ == '__main__':

@@ -16,9 +16,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'inference' / 'lattisense'))
 
-from inference.lattisense.frontend.custom_task import (
+from frontend.custom_task import (
     Argument, CkksCiphertextNode, CustomDataNode, custom_compute,
-    drop_level, process_custom_task,
+    drop_level, process_custom_task, Processor,
 )
 from inference.model_generator.deploy_cmds import set_param
 from inference.model_generator.layers.matrix_param_ops import _resolve
@@ -39,7 +39,8 @@ def instrument():
 
             def checked(a, b, *args, _op=operation, _original=original, **kwargs):
                 rhs = _resolve(b, a)
-                checked_a = CkksCiphertextNode(level=a.level)
+                checked_a = CkksCiphertextNode(level=a.metadata.level)
+                checked_a.metadata = a.metadata.copy()
                 custom_compute([a] if a is rhs else [a, rhs], checked_a, 'check_contract',
                                {'operation': _op, 'plaintext': not isinstance(rhs, CkksCiphertextNode)})
                 return _original(checked_a, b, *args, **kwargs)
@@ -53,10 +54,12 @@ def parameter_source(name, encrypted):
         def build(attrs, parameter_name, level, trigger):
             secret = resolve_pcm_parameter_source({}, attrs)['visibility'] == 'secret'
             if secret:
-                output = CkksCiphertextNode(parameter_name + '_ct', level=level)
+                output = CkksCiphertextNode(id=parameter_name + '_ct', level=level)
+                output.metadata.scale = attrs['parameter_scale']
             else:
-                from inference.lattisense.frontend.custom_task import CkksPlaintextRingtNode
-                output = CkksPlaintextRingtNode(parameter_name + '_pt')
+                from frontend.custom_task import CkksPlaintextNode
+                output = CkksPlaintextNode(parameter_name + '_pt', level=0, is_ringt=True,
+                                          scale=attrs['parameter_scale'])
             custom_compute([source, trigger], output, 'encode_secret' if secret else 'encode_pt',
                            dict(attrs, parameter_level=level))
             return output
@@ -64,16 +67,16 @@ def parameter_source(name, encrypted):
     return source
 
 
-def generate(root, check_contracts=True, encrypted=False):
+def generate(root, check_contracts=True, encrypted=False, processor=Processor.CPU):
     if check_contracts:
         instrument()
     softmax, polynomial, gelu, ln = MODULES
     for cfg, (rows, heads, cols, block, k) in enumerate(((35, 12, 37, 32, 1), (11, 3, 9, 8, 2))):
         for name in ('square', 'headsum', 'invinit', 'inviter', 'ctmul', 'gelumult',
                      'poly1', 'poly2', 'poly3', 'poly7', 'poly15', 'gelu_composition'):
-            set_param('PN14QP438')
+            set_param('PN14Default')
             shape, head = (rows, heads * cols * k), (rows, cols)
-            common = dict(shape=shape, head_shape=head, n_heads=heads, n_slot=8192, block_size=block)
+            common = dict(shape=shape, head_shape=head, n_heads=heads, n_slot=16384, block_size=block)
             if name.startswith('poly'):
                 layer = polynomial.ParBlockColMajorPoly(**common, order=int(name[4:]))
             elif name == 'gelu_composition':
@@ -105,7 +108,7 @@ def generate(root, check_contracts=True, encrypted=False):
             else:
                 output = layer.call_custom_compute(a, source)
             process_custom_task(inputs, [Argument('output', output)],
-                                output_instruction_path=root / str(cfg) / name, fpga_acc=False)
+                                output_instruction_path=root / str(cfg) / name, processor=processor)
 
         # LayerNorm's statistics use one broadcast ciphertext per token block.
         shape = (rows, heads * 2 * block)
@@ -114,13 +117,13 @@ def generate(root, check_contracts=True, encrypted=False):
                           ('lninit', ln.ParBlockColMajorLNMinimaxInit),
                           ('lngs', ln.ParBlockColMajorLNGoldschmidt),
                           ('lnaffine', ln.ParBlockColMajorLNAffine)):
-            set_param('PN14QP438')
+            set_param('PN14Default')
             compact = (rows + block - 1) // block
             if name in ('lninit', 'lngs'):
-                layer = cls(block, 8192)
+                layer = cls(block, 16384)
                 count = compact
             else:
-                layer = cls(shape, block, heads, 8192)
+                layer = cls(shape, block, heads, 16384)
                 count = layer.total_cts
             a = [CkksCiphertextNode(level=6) for _ in range(count)]
             b = [CkksCiphertextNode(level=6) for _ in range(compact)]
@@ -132,7 +135,7 @@ def generate(root, check_contracts=True, encrypted=False):
             else:
                 output = layer.call_custom_compute(a, source)
             process_custom_task(inputs, [Argument('output', output)],
-                                output_instruction_path=root / str(cfg) / name, fpga_acc=False)
+                                output_instruction_path=root / str(cfg) / name, processor=processor)
 
 
 if __name__ == '__main__':
@@ -140,7 +143,9 @@ if __name__ == '__main__':
     parser.add_argument('output', type=Path)
     parser.add_argument('--without-contract-checks', action='store_true')
     parser.add_argument('--encrypted-parameters', action='store_true')
+    parser.add_argument('--gpu', action='store_true')
     args = parser.parse_args()
     if not args.output.resolve().is_relative_to('/tmp'):
         parser.error('output must be under /tmp')
-    generate(args.output, not args.without_contract_checks, args.encrypted_parameters)
+    generate(args.output, not args.without_contract_checks, args.encrypted_parameters,
+             Processor.GPU if args.gpu else Processor.CPU)
