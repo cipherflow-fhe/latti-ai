@@ -194,7 +194,6 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str | list[
         'bert_layernorm_inverse_btp_scale',
         'bert_softmax_initial_denominator_scale',
         'bert_softmax_wide_initial_denominator_scale',
-        'bert_softmax_use_wide_inverse_epsilon',
         'bert_softmax_first_refinement_denominator_scale',
         'bert_softmax_later_refinement_denominator_scale',
     ):
@@ -377,7 +376,6 @@ Examples:
             bert_softmax_wide_initial_denominator_scale=compile_config.get(
                 'bert_softmax_wide_initial_denominator_scale'
             ),
-            bert_softmax_use_wide_inverse_epsilon=compile_config.get('bert_softmax_use_wide_inverse_epsilon'),
             bert_softmax_first_refinement_denominator_scale=compile_config.get(
                 'bert_softmax_first_refinement_denominator_scale'
             ),

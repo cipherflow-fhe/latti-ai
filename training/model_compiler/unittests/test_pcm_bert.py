@@ -11,14 +11,61 @@ import tempfile
 import unittest
 
 import numpy as np
+import networkx as nx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from components import ComputeNode, FeatureNode, LayerAbstractGraph
+from components import ComputeNode, FeatureNode, LayerAbstractGraph, config
+from transforms import _append_softmax_normalize
 from training.nn_tools.feature_mat_h5 import _export_add_pt, _export_parcpmm, _export_pdmupperpoly
 
 
 class TestPcmBert(unittest.TestCase):
+    def test_scaled_softmax_preserves_fixed_newton_iterations(self):
+        previous = config.__dict__.copy()
+        self.addCleanup(lambda: (config.__dict__.clear(), config.__dict__.update(previous)))
+        for style in ('par_block_col_major', 'par_diagonal_pack'):
+            config.mat_pack_style = style
+            for signal_scale, values_scale in ((1, 1), (2, 1), (512, 1), (512, 512), (65536, 65536)):
+                with self.subTest(style=style, signal_scale=signal_scale):
+                    # Tiny thor-wide denominators do not converge to 1/b in
+                    # 15 iterations. Compare with those exact finite iterations.
+                    values = np.array([[1e-8, 2e-8, 4e-8], [0.01, 0.02, 0.03]])
+                    graph = LayerAbstractGraph()
+                    x = FeatureNode('x', 2, 1, shape=[2, 3])
+                    graph.dag.add_node(x, level=12)
+                    output = _append_softmax_normalize(
+                        graph, 'normalize', x, signal_scale, 15, values_scale=values_scale)
+                    actual = {x: values * values_scale}
+                    for node in nx.topological_sort(graph.dag):
+                        if node is x:
+                            continue
+                        inputs = sorted(graph.dag.predecessors(node),
+                                        key=lambda p: graph.dag.edges[p, node].get('input_index', 0))
+                        args = [actual[p] for p in inputs]
+                        if isinstance(node, FeatureNode):
+                            result = args[0]
+                        elif node.layer_type.endswith('headcolsum'):
+                            result = np.repeat(args[0].sum(axis=-1, keepdims=True), 3, axis=-1)
+                        elif node.layer_type.endswith('gamma'):
+                            result = args[0] * node.scalar_value
+                        elif node.layer_type.endswith('invinit'):
+                            result = 2 - args[0]
+                        elif node.layer_type in ('pcmgeneralpoly', 'pdmupperpoly'):
+                            result = np.polynomial.polynomial.polyval(args[0], node.coefficients)
+                        elif node.layer_type.endswith('inviter'):
+                            result = args[0] * (2 - args[1] * args[0])
+                        elif node.layer_type.endswith('ctmul'):
+                            result = args[0] * args[1]
+                        else:
+                            self.fail(node.layer_type)
+                        actual[node] = result
+                    denominator = values.sum(axis=-1, keepdims=True)
+                    inverse = np.ones_like(denominator)
+                    for _ in range(15):
+                        inverse *= 2 - denominator * inverse
+                    np.testing.assert_allclose(actual[output], values * inverse, rtol=2e-14, atol=1e-16)
+
     def test_bert_weight_direction_and_single_q_scaling(self):
         # Include a nonsymmetric square Q, actual FFN expansion and two logits.
         for n_in, n_out, multiplier in ((64, 64, 1 / math.sqrt(64)), (768, 3072, 1), (768, 2, 1)):

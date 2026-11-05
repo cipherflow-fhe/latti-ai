@@ -1301,20 +1301,6 @@ def _bert_softmax_denominator_scale(attn_node: ComputeNode, attr_name: str, conf
     return scale
 
 
-def _bert_softmax_denominator_guard(attn_node: ComputeNode, attr_name: str) -> float:
-    # Compiler-side stabilization changes the approximation. The original
-    # exporter's epsilon/alpha control convergence, so reference evaluation
-    # must not add these guards to its denominators.
-    if _node_str_attr(attn_node, 'softmax_profile').lower() != 'thor-wide':
-        return 0.0
-    if float(getattr(config, 'bert_softmax_use_wide_inverse_epsilon', 1.0)) == 0.0:
-        return 0.0
-    guard = _float_attr(attn_node, attr_name, 0.0)
-    if guard < 0:
-        raise ValueError(f'BERT softmax {attr_name} cannot be negative for {attn_node.layer_id}: {guard}')
-    return guard
-
-
 def _layernorm_iterations(node: ComputeNode, default: int) -> int:
     return _int_attr(
         node,
@@ -1451,7 +1437,7 @@ def _append_softmax_normalize(
     values: FeatureNode,
     denominator_scale: float,
     max_inverse_iterations: int,
-    denominator_epsilon: float = 0.0,
+    values_scale: float = 1.0,
 ) -> FeatureNode:
     denom = _append_unary_compute(
         graph,
@@ -1460,34 +1446,29 @@ def _append_softmax_normalize(
         f'{base_id}_denominator',
         1 if _is_diagonal_mat_pack() else 2,
     )
-    if denominator_epsilon != 0.0:
-        add_epsilon = ComputeNode(f'{base_id}_denominator_epsilon', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
-        add_epsilon.value = denominator_epsilon
-        add_epsilon.path = f'{add_epsilon.layer_id}.weight'
-        add_epsilon.parameter_sources = {'add_pt': public_source(
-            'math_constant', {'value': float(denominator_epsilon)})}
+    scale_ratio = denominator_scale / values_scale
+    if scale_ratio != 1.0:
         denom = _append_unary_compute(
             graph,
             denom,
-            add_epsilon,
-            f'{base_id}_denominator_epsilon_added',
-            0,
-        )
-    if denominator_scale != 1.0:
-        denom = _append_unary_compute(
-            graph,
-            denom,
-            _make_scalar_gamma(f'{base_id}_denominator_scale', denominator_scale),
+            _make_scalar_gamma(f'{base_id}_denominator_scale', scale_ratio),
             f'{base_id}_denominator_scaled',
             1,
         )
 
+    # If b is scaled by s, carry a/s throughout Newton's iteration. Scaling
+    # b alone changes the result of the exporter's fixed iteration count.
+    inverse_init = (
+        ComputeNode(f'{base_id}_inverse_init', _pack_pcm_type('pcminvinit'), 1, 1)
+        if denominator_scale == 1.0 else
+        _make_upper_poly(f'{base_id}_inverse_init', [2.0 / denominator_scale, -1.0 / denominator_scale**2])
+    )
     inv = _append_unary_compute(
         graph,
         denom,
-        ComputeNode(f'{base_id}_inverse_init', _pack_pcm_type('pcminvinit'), 1, 1),
+        inverse_init,
         f'{base_id}_inverse_init_out',
-        0,
+        0 if denominator_scale == 1.0 else 1,
     )
     for idx in range(1, max_inverse_iterations):
         inv = _append_binary_compute(
@@ -1500,7 +1481,7 @@ def _append_softmax_normalize(
         )
 
     probabilities_output_id = (
-        f'{base_id}_probabilities_unscaled' if denominator_scale != 1.0 else f'{base_id}_probabilities'
+        f'{base_id}_probabilities_unscaled' if scale_ratio != 1.0 else f'{base_id}_probabilities'
     )
     probabilities = _append_binary_compute(
         graph,
@@ -1510,11 +1491,11 @@ def _append_softmax_normalize(
         probabilities_output_id,
         2,
     )
-    if denominator_scale != 1.0:
+    if scale_ratio != 1.0:
         probabilities = _append_unary_compute(
             graph,
             probabilities,
-            _make_scalar_gamma(f'{base_id}_probabilities_scale', denominator_scale),
+            _make_scalar_gamma(f'{base_id}_probabilities_scale', scale_ratio),
             f'{base_id}_probabilities',
             1,
         )
@@ -1554,7 +1535,6 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         'bert_softmax_later_refinement_denominator_scale',
         1.0,
     )
-    initial_denominator_guard = _bert_softmax_denominator_guard(attn_node, 'inverse_epsilon')
 
     add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
     add_mid_node.value = -mid
@@ -1579,7 +1559,11 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
     exp_poly = _append_unary_compute(
         graph,
         exp_arg,
-        _make_upper_poly(f'{base_id}_softmax_exp_poly', coefficients),
+        # Fold the signal scale into the polynomial before squaring. A large
+        # scalar plaintext (65536 for thor-wide) overflows native ring-T encoding.
+        _make_upper_poly(f'{base_id}_softmax_exp_poly', [
+            c * initial_denominator_scale ** (1.0 / max(1, delta_1)) for c in coefficients
+        ]),
         f'{base_id}_softmax_exp_poly_out',
         MatPolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
     )
@@ -1604,36 +1588,40 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         values,
         initial_denominator_scale,
         max_inverse_iterations,
-        initial_denominator_guard,
+        values_scale=initial_denominator_scale,
     )
 
     refinement_idx = 0
     delta = max(1, delta_2)
-    refinement_steps = 0
-    refinement_delta = delta
-    while refinement_delta > 1:
-        refinement_steps += 1
-        refinement_delta >>= 1
     while delta > 1:
+        denominator_scale = (
+            first_refinement_denominator_scale if refinement_idx == 0 else later_refinement_denominator_scale
+        )
+        # Scale before squaring: amplifying the small squared ciphertext later
+        # also amplifies its rescaling error by the full denominator scale.
+        square_input = probabilities
+        if denominator_scale != 1.0:
+            square_input = _append_unary_compute(
+                graph,
+                probabilities,
+                _make_scalar_gamma(f'{base_id}_softmax_refine_scale_{refinement_idx}', math.sqrt(denominator_scale)),
+                f'{base_id}_softmax_refine_scaled_{refinement_idx}',
+                1,
+            )
         squared = _append_unary_compute(
             graph,
-            probabilities,
+            square_input,
             ComputeNode(f'{base_id}_softmax_refine_square_{refinement_idx}', _pack_pcm_type('pcmmulsquare'), 1, 1),
             f'{base_id}_softmax_refine_square_{refinement_idx}_out',
             2,
         )
-        denominator_scale = (
-            first_refinement_denominator_scale if refinement_idx == 0 else later_refinement_denominator_scale
-        )
-        is_final_refinement = refinement_idx == refinement_steps - 1
-        guard_attr = 'final_inverse_alpha' if is_final_refinement else 'inverse_alpha'
         probabilities = _append_softmax_normalize(
             graph,
             f'{base_id}_softmax_normalize_refine_{refinement_idx}',
             squared,
             denominator_scale,
             max_inverse_iterations,
-            _bert_softmax_denominator_guard(attn_node, guard_attr),
+            values_scale=denominator_scale,
         )
         delta >>= 1
         refinement_idx += 1

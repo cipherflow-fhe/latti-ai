@@ -164,19 +164,18 @@ class GlobalConfig:
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.set_btp_scale = None
-            cls._instance.bert_softmax_values_btp_scale = 512.0
-            cls._instance.bert_softmax_denominator_btp_scale = 16.0
-            cls._instance.bert_softmax_scaled_denominator_btp_scale = 16.0
-            cls._instance.bert_softmax_inverse_btp_scale = 0.125
+            cls._instance.bert_softmax_values_btp_scale = 1.0
+            cls._instance.bert_softmax_denominator_btp_scale = 1.0
+            cls._instance.bert_softmax_scaled_denominator_btp_scale = 1.0
+            cls._instance.bert_softmax_inverse_btp_scale = 1.0
             cls._instance.bert_layernorm_inverse_btp_scale = config_dict.get(
                 'BERT_LAYERNORM_INVERSE_BTP_SCALE',
                 config_dict.get('bert_layernorm_inverse_btp_scale', 0.125),
             )
             cls._instance.bert_softmax_initial_denominator_scale = 512.0
             cls._instance.bert_softmax_wide_initial_denominator_scale = 65536.0
-            cls._instance.bert_softmax_use_wide_inverse_epsilon = 1.0
-            cls._instance.bert_softmax_first_refinement_denominator_scale = 2.0
-            cls._instance.bert_softmax_later_refinement_denominator_scale = 1.0
+            cls._instance.bert_softmax_first_refinement_denominator_scale = 512.0
+            cls._instance.bert_softmax_later_refinement_denominator_scale = 512.0
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = 1
