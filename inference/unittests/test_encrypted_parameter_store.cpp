@@ -14,7 +14,7 @@ namespace fs = std::filesystem;
 using namespace fhe_ops_lib;
 
 TEST_CASE("lazy store evicts safely and supports containers without an index", "[parameter_store]") {
-    const auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    const auto param = CkksParameter::create_parameter(14, RingType::ConjugateInvariant);
     auto ctx = CkksContext::create_random_context(param);
     const int level = 1;
     const double scale = param.default_scale() * 0.625;
