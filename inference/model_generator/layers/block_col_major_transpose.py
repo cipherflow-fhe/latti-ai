@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 op_class = 'BlockColMajorTranspose'
 
@@ -44,7 +44,7 @@ class BlockColMajorTranspose:
         Args:
             shape:      (m, n) -- shape of the input matrix.
             block_size: d, block size (must satisfy d^2 | n_slot).
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
         """
         m, n = shape
         self.m = m
@@ -75,7 +75,7 @@ class BlockColMajorTranspose:
     #  Plaintext node creation                                            #
     # ------------------------------------------------------------------ #
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Create pre-declared plaintext nodes for transpose diagonals.
 
         Returns:
@@ -83,7 +83,7 @@ class BlockColMajorTranspose:
                                indexed by k_idx = 0..2d-2 (maps to k = k_idx-(d-1)).
         """
         d = self.d
-        transpose_diag_pt = [CkksPlaintextNode(f'transpose_diag_{layer_id}_{k_idx}', is_ringt=True) for k_idx in range(2 * d - 1)]
+        transpose_diag_pt = [CkksPlaintextNode(f'transpose_diag_{layer_id}_{k_idx}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for k_idx in range(2 * d - 1)]
         return transpose_diag_pt
 
     # ------------------------------------------------------------------ #
@@ -172,7 +172,7 @@ class BlockColMajorTranspose:
         d = self.d
         transpose_diag_pt = []
         for k_idx in range(2 * d - 1):
-            node = CkksPlaintextNode(f'encode_pt_transpose_diag_{k_idx}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_transpose_diag_{k_idx}', is_ringt=True, scale=float(get_fhe_param().q[input_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,

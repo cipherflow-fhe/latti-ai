@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
 
 
 op_class = 'ParUpperDiagonalPolyMultCt'
@@ -81,12 +82,12 @@ class ParUpperDiagonalPolyMultCt:
             result[idx] = rescale(relin(mult(x_scaled, half_plus)))
         return result
 
-    def _make_pt_per_ct(self, data_source, pt_type: str) -> list:
+    def _make_pt_per_ct(self, data_source, pt_type: str, *, level: int) -> list:
         pts = [None] * self.total_cts
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_type}_{mb}_{ct_local}', is_ringt=True)
+                node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_type}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': op_class, 'type': pt_type}, [level, level], get_fhe_param()), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,
@@ -104,8 +105,8 @@ class ParUpperDiagonalPolyMultCt:
         return pts
 
     def call_custom_compute(self, half_tanh_cts: list, x_cts: list, data_source) -> list:
-        one_pt = self._make_pt_per_ct(data_source, 'one_pt')
-        half_pt = self._make_pt_per_ct(data_source, 'half_pt')
+        one_pt = self._make_pt_per_ct(data_source, 'one_pt', level=x_cts[0].metadata.level)
+        half_pt = self._make_pt_per_ct(data_source, 'half_pt', level=x_cts[0].metadata.level)
         return self.call(half_tanh_cts, x_cts, one_pt, half_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:

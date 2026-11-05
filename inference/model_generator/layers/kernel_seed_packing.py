@@ -3,8 +3,8 @@
 
 import math
 
-from inference.lattisense.frontend.custom_task import (
-    CkksPlaintextRingtNode, add, custom_compute, mult, rescale, rotate_cols,
+from frontend.custom_task import (
+    CkksPlaintextNode, get_fhe_param, add, custom_compute, mult, rescale, rotate_cols,
 )
 from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
@@ -108,7 +108,7 @@ class KernelSeedPacking:
     def make_runner_repack_mask_pt_node(self, layer_id, level):
         if not self.need_repack:
             return None
-        mask = CkksPlaintextRingtNode(f'repack_mask_{layer_id}')
+        mask = CkksPlaintextNode(f'repack_mask_{layer_id}', is_ringt=True, scale=float(get_fhe_param().q[level - 1]), level=0)
         custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
             'op_class': self.seed_op_class, 'type': 'repack_mask',
             'block_shape': self.block_shape, 'stride': self.orig_stride,
@@ -134,11 +134,11 @@ class KernelSeedPacking:
                 'seed_step': step, 'subgrid': self.seed_request_index(request) % self.seed_weight_group_size,
                 'kernel_index': k, 'level': level + self.seed_weight_level_cost,
             }
-            first = CkksPlaintextRingtNode(f'convseedm_{layer_id}_{request}_0')
+            first = CkksPlaintextNode(f'convseedm_{layer_id}_{request}_0', is_ringt=True, scale=float(get_fhe_param().q[attrs['level']]), level=0)
             custom_compute(inputs=[], output=first, type='encode_pt', attributes=attrs)
             second = first
             if self.seed_requires_boundary_mask:
-                second = CkksPlaintextRingtNode(f'convseedm_{layer_id}_{request}_1')
+                second = CkksPlaintextNode(f'convseedm_{layer_id}_{request}_1', is_ringt=True, scale=float(get_fhe_param().q[attrs['level'] - 1]), level=0)
                 custom_compute(inputs=[], output=second, type='encode_pt',
                                attributes=dict(attrs, mask_kind='kernel', level=attrs['level'] - 1))
             masks.append([first, second])

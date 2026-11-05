@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 import numpy as np
 
@@ -285,7 +285,7 @@ class Avgpool2DLayer:
                     packed_res[pack_out_ct_idx] = add(packed_res[pack_out_ct_idx], s_rot)
             return packed_res
 
-    def make_pt_nodes_multiplexed_avgpool(self, layer_id, n_channel, n):
+    def make_pt_nodes_multiplexed_avgpool(self, layer_id, n_channel, n, *, level: int):
         """Return (select_tensor_pt, n_channel_per_ct) for call_multiplexed_avgpool().
 
         select_tensor_pt[i]: i in min(n_channel, n_channel_per_ct * stride[0] * stride[1])
@@ -294,7 +294,7 @@ class Avgpool2DLayer:
         n_channel_per_ct = int(math.ceil(n / (self.shape[0] * self.shape[1])))
         out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
         n_select_pt = min(n_channel, out_channels_per_ct)
-        select_tensor_pt = [CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True) for i in range(n_select_pt)]
+        select_tensor_pt = [CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for i in range(n_select_pt)]
         return select_tensor_pt, n_channel_per_ct
 
     def call_custom_compute_multiplexed_avgpool(self, x: list, avg_data_source, n_channel: int, n: int) -> list:
@@ -305,7 +305,7 @@ class Avgpool2DLayer:
 
         select_tensor_pt = []
         for i in range(n_select_pt):
-            w_pt = CkksPlaintextNode(f'encode_pt_select_{i}', is_ringt=True)
+            w_pt = CkksPlaintextNode(f'encode_pt_select_{i}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[avg_data_source],
                 output=w_pt,

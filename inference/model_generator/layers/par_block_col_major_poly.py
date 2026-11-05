@@ -22,7 +22,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add
 from inference.model_generator.layers.mat_poly_base import MatPolyBase
 
@@ -81,12 +81,12 @@ class ParBlockColMajorPoly(MatPolyBase):
     def _drop_to_level(self, ct, target_level: int, label: str):
         if target_level < 0:
             raise ValueError(f'ParBlockColMajorPoly Stockmeyer {label}: negative target level')
-        if ct.level < target_level:
+        if ct.metadata.level < target_level:
             raise ValueError(
-                f'ParBlockColMajorPoly Stockmeyer {label}: cannot raise level from {ct.level} to {target_level}'
+                f'ParBlockColMajorPoly Stockmeyer {label}: cannot raise level from {ct.metadata.level} to {target_level}'
             )
-        if ct.level > target_level:
-            return drop_level(ct, ct.level - target_level)
+        if ct.metadata.level > target_level:
+            return drop_level(ct, ct.metadata.level - target_level)
         return ct
 
     def call(self, input_cts: list, stockmeyer_weight_pt: list) -> list:
@@ -100,9 +100,9 @@ class ParBlockColMajorPoly(MatPolyBase):
         if not input_cts:
             return []
         for ct in input_cts:
-            assert ct.level == input_cts[0].level
+            assert ct.metadata.level == input_cts[0].metadata.level
 
-        self.init_stockmeyer(input_cts[0].level)
+        self.init_stockmeyer(input_cts[0].metadata.level)
         if self.order <= 0 or self.order >= 64:
             raise ValueError('ParBlockColMajorPoly Stockmeyer supports only 1 <= order < 64')
 
@@ -257,7 +257,7 @@ class ParBlockColMajorPoly(MatPolyBase):
             for mb in range(self.n_mb):
                 for ct_local in range(self.cts_per_mb):
                     ct_idx = self._ct_index(mb, ct_local)
-                    node = CkksPlaintextRingtNode(f'encode_pt_{source_id}_c{coeff_idx}_{mb}_{ct_local}')
+                    node = CkksPlaintextNode(f'encode_pt_{source_id}_c{coeff_idx}_{mb}_{ct_local}', scale=self.cached_stockmeyer_coeff_scale[coeff_idx], level=0, is_ringt=True)
                     custom_compute(
                         inputs=[data_source],
                         output=node,
@@ -278,7 +278,7 @@ class ParBlockColMajorPoly(MatPolyBase):
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
         if input_cts:
-            self.init_stockmeyer(input_cts[0].level)
+            self.init_stockmeyer(input_cts[0].metadata.level)
         return self.call_stockmeyer(input_cts, self._make_stockmeyer_weight_pts(data_source))
 
     def get_fhe_op_count(self, n_ct: int | None = None, level: int | None = None) -> dict:

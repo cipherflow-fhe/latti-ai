@@ -20,7 +20,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 
 op_class = 'ParLowerDiagTranspose'
@@ -100,7 +100,7 @@ class ParLowerDiagTranspose:
         for out_diag_idx in range(self.m):
             row = []
             for mask_idx in range(2):
-                node = CkksPlaintextNode(f'encode_pt_transpose_mask_{out_diag_idx}_{mask_idx}', is_ringt=True)
+                node = CkksPlaintextNode(f'encode_pt_transpose_mask_{out_diag_idx}_{mask_idx}', is_ringt=True, scale=float(get_fhe_param().q[input_cts[0].metadata.level]), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,

@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add, ct_pt_mult_accumulate
 from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
@@ -63,7 +63,7 @@ class ParBlockColMajorCPMM:
             W_shape:    (W_rows, W_cols) — shape of the full weight matrix.
             block_size: d, block size for diagonal encoding.
             n_heads:    number of interleaved heads.
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
             has_bias:   whether to add bias after matrix multiplication.
         """
         self.m = shape_A[0]
@@ -123,7 +123,7 @@ class ParBlockColMajorCPMM:
     #  Plaintext node creation                                            #
     # ------------------------------------------------------------------ #
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Create pre-declared plaintext nodes for diagonals and the h=0 mask.
 
         Returns:
@@ -137,18 +137,18 @@ class ParBlockColMajorCPMM:
                 diag_pt_mbg = []
                 for bp in range(self.n_heads):
                     diag_pt_mbgbp = [
-                        CkksPlaintextNode(f'cpmm_diag_{layer_id}_{mb}_{g}_{bp}_{k}', is_ringt=True) for k in range(self.d)
+                        CkksPlaintextNode(f'cpmm_diag_{layer_id}_{mb}_{g}_{bp}_{k}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for k in range(self.d)
                     ]
                     diag_pt_mbg.append(diag_pt_mbgbp)
                 diag_pt_mb.append(diag_pt_mbg)
             diag_pt.append(diag_pt_mb)
 
-        mask_h0_pt = CkksPlaintextNode(f'cpmm_mask_h0_{layer_id}', is_ringt=True)
+        mask_h0_pt = CkksPlaintextNode(f'cpmm_mask_h0_{layer_id}', is_ringt=True, scale=float(get_fhe_param().q[level - 1]), level=0)
 
         bias_pt = None
         if self.has_bias:
             bias_pt = [
-                CkksPlaintextNode(f'cpmm_bias_{layer_id}_{mb}_{bi}_{g}', is_ringt=True)
+                CkksPlaintextNode(f'cpmm_bias_{layer_id}_{mb}_{bi}_{g}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                 for mb in range(self.n_out_mbs)
                 for bi in range(self.num_block_rows_A)
                 for g in range(self.G)
@@ -309,7 +309,7 @@ class ParBlockColMajorCPMM:
                 for bp in range(self.n_heads):
                     diag_pt_mbgbp = []
                     for k in range(self.d):
-                        w_pt = CkksPlaintextNode(f'encode_pt_{mb}_{g}_{bp}_{k}', is_ringt=True)
+                        w_pt = CkksPlaintextNode(f'encode_pt_{mb}_{g}_{bp}_{k}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=w_pt,
@@ -328,7 +328,7 @@ class ParBlockColMajorCPMM:
                 diag_pt_mb.append(diag_pt_mbg)
             diag_pt.append(diag_pt_mb)
 
-        mask_h0_pt = CkksPlaintextNode('encode_pt_mask_h0', is_ringt=True)
+        mask_h0_pt = CkksPlaintextNode('encode_pt_mask_h0', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
         custom_compute(
             inputs=[data_source],
             output=mask_h0_pt,
@@ -342,7 +342,7 @@ class ParBlockColMajorCPMM:
             for mb in range(self.n_out_mbs):
                 for bi in range(self.num_block_rows_A):
                     for g in range(self.G):
-                        bp_node = CkksPlaintextNode(f'encode_pt_bias_{mb}_{bi}_{g}', is_ringt=True)
+                        bp_node = CkksPlaintextNode(f'encode_pt_bias_{mb}_{bi}_{g}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=bp_node,
@@ -372,7 +372,7 @@ class ParBlockColMajorCPMM:
 
     def _call_row_chunk_seeds(self, A_cts, source):
         """Consume one baby group across all token blocks before restoring the next."""
-        level = A_cts[0].level
+        level = A_cts[0].metadata.level
         layout = self.seed_layout(level, source.pcm_seed_scale)
         source.pcm_seed_layout = layout
         source_id = source.id
@@ -405,7 +405,7 @@ class ParBlockColMajorCPMM:
                                     attrs, f'pcm_seed_{sid}', level+1)
                             seed = materialize_encrypted_param(seeds[sid], previous[0],
                                                                dependencies=previous[1:])
-                            mask = CkksPlaintextRingtNode(f'pcm_select_{source_id}_{ridx}')
+                            mask = CkksPlaintextNode(f'pcm_select_{source_id}_{ridx}', scale=float(get_fhe_param().q[A_cts[0].metadata.level + 1]), level=0, is_ringt=True)
                             custom_compute(inputs=previous, output=mask, type='encode_pt',
                                            attributes=dict(op_class=op_class, type='row_chunk_selection',
                                                            layer_id=source_id, position=position,
@@ -434,7 +434,7 @@ class ParBlockColMajorCPMM:
                         full_sums[key] = total if key not in full_sums else add(full_sums[key], total)
                     previous = [full_sums[(out_mb, bi, bp)] for bi in range(self.num_block_rows_A)]
 
-        mask = CkksPlaintextRingtNode(f'pcm_head0_{source_id}')
+        mask = CkksPlaintextNode(f'pcm_head0_{source_id}', scale=float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0, is_ringt=True)
         custom_compute(inputs=[source], output=mask, type='encode_pt',
                        attributes=dict(op_class=op_class, type='mask_h0_pt'))
         result = [None]*(self.n_out_mbs*cts_per_mb)
@@ -452,7 +452,7 @@ class ParBlockColMajorCPMM:
                 for bi in range(self.num_block_rows_A):
                     for g in range(self.G):
                         idx = mb*cts_per_mb+bi*self.G+g
-                        bias = CkksPlaintextRingtNode(f'pcm_bias_{source_id}_{idx}')
+                        bias = CkksPlaintextNode(f'pcm_bias_{source_id}_{idx}', scale=float(get_fhe_param().default_scale), level=0, is_ringt=True)
                         custom_compute(inputs=[source], output=bias, type='encode_pt',
                                        attributes=dict(op_class=op_class, type='bias_pt', mb=mb, bi=bi, g=g))
                         result[idx] = add(result[idx], bias)

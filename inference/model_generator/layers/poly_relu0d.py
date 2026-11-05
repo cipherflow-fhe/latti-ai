@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
 op_class = 'PolyRelu0D'
@@ -29,7 +29,7 @@ class PolyRelu0D(PolyReluBase):
     """PolyRelu for Feature0DEncrypted.
 
     Slot layout: channel ch at slot ch * skip (remaining slots zero-padded).
-      n_channel_per_ct = N/2 / skip
+      n_channel_per_ct = n_real_num_slot / skip
     """
 
     def __init__(self, order: int, skip: int, n_channel_per_ct: int):
@@ -66,7 +66,7 @@ class PolyRelu0D(PolyReluBase):
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextNode(f'encode_pt_0d_{layer_id}_{idx}_{x_idx}', is_ringt=True)
+                w_pt = CkksPlaintextNode(f'encode_pt_0d_{layer_id}_{idx}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[idx], level=0)
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,

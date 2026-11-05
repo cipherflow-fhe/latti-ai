@@ -22,7 +22,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
 from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 from inference.model_generator.layers.kernel_seed_packing import restore_subgrid
@@ -139,7 +139,7 @@ class PolyRelu2D(PolyReluBase):
         seed_shape = [self.block_shape[i] // self.skip[i] for i in range(2)]
         if (stride == [1, 1] or self.upsample_factor != [1, 1]
                 or any(a <= 0 or a & (a - 1) or h % a for h, a in zip(seed_shape, stride))
-                or (n // 2) % math.prod(self.block_shape)):
+                or n % math.prod(self.block_shape)):
             return None
         capacity = math.prod(stride)
         levels = self._bsgs_encrypted_coeff_levels(level)
@@ -152,7 +152,7 @@ class PolyRelu2D(PolyReluBase):
         if any(packed):
             self.poly_seed_layout = {
                 'input_shape': seed_shape, 'skip': list(self.skip),
-                'blocks': math.ceil(self.n_channel_per_ct / math.prod(self.skip)), 'slots': n // 2,
+                'blocks': math.ceil(self.n_channel_per_ct / math.prod(self.skip)), 'slots': n,
                 'stride': list(stride), 'group_size': capacity, 'channel_groups': n_ct,
                 'use_site_levels': levels, 'packed_degrees': packed,
             }
@@ -176,7 +176,7 @@ class PolyRelu2D(PolyReluBase):
                 or layout['input_shape'] != [self.block_shape[i] // self.skip[i] for i in range(2)]
                 or layout['skip'] != list(self.skip) or self.upsample_factor != [1, 1]):
             raise ValueError('polynomial seed metadata does not match graph')
-        return [[CkksCiphertextNode(f'poly_reluw_{layer_id}_{degree}_{j}', level=target + packed)
+        return [[CkksCiphertextNode(id=f'poly_reluw_{layer_id}_{degree}_{j}', level=target + packed)
                  for j in range(math.ceil(n_pack_in_channel / layout['group_size']) if packed else n_pack_in_channel)]
                 for degree, (target, packed) in enumerate(zip(levels, layout['packed_degrees']))]
 
@@ -190,7 +190,7 @@ class PolyRelu2D(PolyReluBase):
                 return materialize_encrypted_param(weight_ct[degree][channel_group], x[channel_group])
             q, s = divmod(channel_group, layout['group_size'])
             seed = materialize_encrypted_param(weight_ct[degree][q], x[channel_group])
-            mask = CkksPlaintextRingtNode(f'{seed.id}_mask_{s}')
+            mask = CkksPlaintextNode(f'{seed.id}_mask_{s}', is_ringt=True, scale=float(get_fhe_param().q[layout['use_site_levels'][degree] + 1]), level=0)
             custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
                 'op_class': op_class, 'type': 'seed_mask_pt', 'mask_kind': 'subgrid',
                 'seed_shape': layout['input_shape'], 'seed_skip': self.skip, 'seed_blocks': layout['blocks'],
@@ -391,7 +391,10 @@ class PolyRelu2D(PolyReluBase):
                 res = x[i]
                 for order_idx in range(self.order - 1, 0, -1):
                     w_pt = CkksPlaintextNode(
-                        f'encode_pt_{lid}_{order_idx}_{i}', is_ringt=True, scale=scales[order_idx]
+                        f'encode_pt_{lid}_{order_idx}_{i}',
+                        is_ringt=True,
+                        scale=scales[order_idx],
+                        level=0,
                     )
                     custom_compute(
                         inputs=[poly_data_source],
@@ -410,7 +413,7 @@ class PolyRelu2D(PolyReluBase):
                     if res.metadata.level < x[i].metadata.level:
                         x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
-                w_pt = CkksPlaintextNode(f'encode_pt_{lid}_{0}_{i}', is_ringt=True, scale=scales[0])
+                w_pt = CkksPlaintextNode(f'encode_pt_{lid}_{0}_{i}', is_ringt=True, scale=scales[0], level=0)
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,
@@ -428,7 +431,7 @@ class PolyRelu2D(PolyReluBase):
             result = [0 for i in range(len(x))]
             for x_idx in range(len(x)):
                 if self.order <= 1:
-                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}', is_ringt=True)
+                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[1], level=0)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_1,
@@ -441,7 +444,7 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = rescale(mult(x[x_idx], w_pt_1))
-                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}', is_ringt=True)
+                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[0], level=0)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_0,
@@ -490,7 +493,10 @@ class PolyRelu2D(PolyReluBase):
                             if baby_step == 0:
                                 has_coeff0 = True
                                 w_pt = CkksPlaintextNode(
-                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}', is_ringt=True, scale=scales[coeff_idx]
+                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}',
+                                    is_ringt=True,
+                                    scale=scales[coeff_idx],
+                                    level=0,
                                 )
                                 custom_compute(
                                     inputs=[poly_data_source],
@@ -512,7 +518,10 @@ class PolyRelu2D(PolyReluBase):
                                     x_copy = drop_level(x_copy, x_copy.metadata.level - target_level)
 
                                 w_pt = CkksPlaintextNode(
-                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}', is_ringt=True, scale=scales[coeff_idx]
+                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}',
+                                    is_ringt=True,
+                                    scale=scales[coeff_idx],
+                                    level=0,
                                 )
                                 custom_compute(
                                     inputs=[poly_data_source],
@@ -579,7 +588,10 @@ class PolyRelu2D(PolyReluBase):
             if key not in weight_cache:
                 scales = coeff_scales(x[x_idx].metadata.level)
                 w_pt = CkksPlaintextNode(
-                    f'encode_pt_{lid}_{idx}_{x_idx}', is_ringt=True, scale=scales[idx]
+                    f'encode_pt_{lid}_{idx}_{x_idx}',
+                    is_ringt=True,
+                    scale=scales[idx],
+                    level=0,
                 )
                 custom_compute(
                     inputs=[poly_data_source],

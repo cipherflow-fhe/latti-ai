@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
 from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add
 
 op_class = 'ParBlockColMajorPolyActRNPoly'
@@ -99,7 +100,7 @@ class ParBlockColMajorPolyActRNGamma:
                 for bj in range(self.num_block_cols):
                     gamma_row = []
                     for g in range(self.G):
-                        gamma_node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        gamma_node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': gamma_op_class, 'type': 'gamma_pt'}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=gamma_node,
@@ -136,7 +137,7 @@ class ParBlockColMajorPolyActRNPoly:
             shape:      (m, total_dim), where total_dim = K * n_heads * cols_per_head.
             block_size: d, block size.
             n_heads:    number of interleaved heads.
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
             degree:     polynomial degree, only 2 or 4.
             K:          megablock count.
         """
@@ -249,7 +250,7 @@ class ParBlockColMajorPolyActRNPoly:
                     c4_row = []
                     c3_row = []
                     for g in range(self.G):
-                        c2_node = CkksPlaintextNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        c2_node = CkksPlaintextNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': 2}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=c2_node,
@@ -266,7 +267,7 @@ class ParBlockColMajorPolyActRNPoly:
                         )
                         c2_row.append(c2_node)
 
-                        c1_node = CkksPlaintextNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        c1_node = CkksPlaintextNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': 1}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=c1_node,
@@ -284,7 +285,7 @@ class ParBlockColMajorPolyActRNPoly:
                         c1_row.append(c1_node)
 
                         if self.degree == 4:
-                            c4_node = CkksPlaintextNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                            c4_node = CkksPlaintextNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': 4}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                             custom_compute(
                                 inputs=[data_source],
                                 output=c4_node,
@@ -301,7 +302,7 @@ class ParBlockColMajorPolyActRNPoly:
                             )
                             c4_row.append(c4_node)
 
-                            c3_node = CkksPlaintextNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                            c3_node = CkksPlaintextNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': 3}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                             custom_compute(
                                 inputs=[data_source],
                                 output=c3_node,
@@ -342,7 +343,7 @@ class ParBlockColMajorPolyActRNPoly:
                 for bj in range(self.num_block_cols):
                     c0_bibj = []
                     for g in range(self.G):
-                        c0_node = CkksPlaintextNode(f'encode_pt_poly_c0_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        c0_node = CkksPlaintextNode(f'encode_pt_poly_c0_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': 0}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=c0_node,

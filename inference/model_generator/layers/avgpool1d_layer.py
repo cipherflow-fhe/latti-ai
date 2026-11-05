@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 import numpy as np
 
@@ -219,7 +219,7 @@ class Avgpool1DLayer:
 
         select_tensor_pt = []
         for i in range(n_select_pt):
-            w_pt = CkksPlaintextNode(f'encode_pt_select_1d_{i}', is_ringt=True)
+            w_pt = CkksPlaintextNode(f'encode_pt_select_1d_{i}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[avg_data_source],
                 output=w_pt,

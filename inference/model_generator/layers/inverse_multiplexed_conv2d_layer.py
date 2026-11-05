@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
@@ -319,7 +319,7 @@ class InverseMultiplexedConv2DLayer(KernelSeedPacking):
                     w_pt_list = []
                     for j in range(0, self.n_in_channel):
                         for k in range(0, self.kernel_shape[0] * self.kernel_shape[1]):
-                            w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}_{k + base_idx}', is_ringt=True)
+                            w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}_{k + base_idx}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
                             custom_compute(
                                 inputs=[conv_data_source],  # All nodes reference the same data source
                                 output=w_pt,
@@ -336,7 +336,7 @@ class InverseMultiplexedConv2DLayer(KernelSeedPacking):
                             w_pt_list.append(w_pt)
                     partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
                     s = rescale(partial_sum)
-                    b_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}', is_ringt=True)
+                    b_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                     custom_compute(
                         inputs=[conv_data_source],  # Reference same data source
                         output=b_pt,
@@ -371,7 +371,7 @@ class InverseMultiplexedConv2DLayer(KernelSeedPacking):
             n_out_ct = math.ceil(self.n_out_channel / n_channel_per_ct_out_repack)
 
             # Shared mask: select row%out_skip==0 && col%out_skip==0
-            repack_mask = CkksPlaintextNode('repack_mask', is_ringt=True)
+            repack_mask = CkksPlaintextNode('repack_mask', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level - 1]), level=0)
             custom_compute(
                 inputs=[conv_data_source],
                 output=repack_mask,
@@ -436,7 +436,7 @@ class InverseMultiplexedConv2DLayer(KernelSeedPacking):
                     res[pack_out_ct_idx] = add(res[pack_out_ct_idx], s_rot)
         return res
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Return (weight_pt, bias_pt, repack_mask_pt).
 
         weight_pt[k][n][i]: k in n_out_channel, n in n_in_channel,
@@ -447,13 +447,13 @@ class InverseMultiplexedConv2DLayer(KernelSeedPacking):
         inner = self.seed_weight_kernel_count
         weight_pt = [
             [
-                [CkksPlaintextNode(f'convw_{layer_id}_{k}_{n}_{i}', is_ringt=True) for i in range(inner)]
+                [CkksPlaintextNode(f'convw_{layer_id}_{k}_{n}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for i in range(inner)]
                 for n in range(self.n_in_channel)
             ]
             for k in range(self.n_out_channel)
         ]
-        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(self.n_out_channel)]
-        repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}', is_ringt=True) if self.need_repack else None
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}', is_ringt=True, scale=float(get_fhe_param().q[level - 1]), level=0) if self.need_repack else None
         return weight_pt, bias_pt, repack_mask_pt
 
     def get_encrypted_param_count(self, level):
@@ -467,13 +467,13 @@ class InverseMultiplexedConv2DLayer(KernelSeedPacking):
         inner = self.seed_weight_kernel_count
         weight_ct = [
             [
-                [CkksCiphertextNode(f'convw_{layer_id}_{k}_{n}_{i}', level=level + self.seed_weight_level_cost) for i in range(inner)]
+                [CkksCiphertextNode(id=f'convw_{layer_id}_{k}_{n}_{i}', level=level + self.seed_weight_level_cost) for i in range(inner)]
                 for n in range(self.n_in_channel)
             ]
             for k in range(self.n_out_channel)
         ]
-        bias_ct = [CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_out_channel)]
-        repack_mask_pt = CkksPlaintextRingtNode(f'repack_mask_{layer_id}') if self.need_repack else None
+        bias_ct = [CkksCiphertextNode(id=f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_out_channel)]
+        repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}', scale=float(get_fhe_param().q[level - 1]), level=0, is_ringt=True) if self.need_repack else None
         return weight_ct, bias_ct, repack_mask_pt
 
     def call(

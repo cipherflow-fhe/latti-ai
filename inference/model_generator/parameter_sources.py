@@ -30,8 +30,28 @@ def parameter_key(attributes):
 def pcm_parameter_scale(attributes, input_levels, parameter):
     """Match the private C++ generators, including non-default intermediate scales."""
     op, kind = attributes['op_class'], attributes['type']
-    level, scale = input_levels[0], float(parameter.scale)
+    level, scale = input_levels[0], float(parameter.default_scale)
     q = parameter.q
+    # These rules are the same scale contracts used by the C++ RingT encoders.
+    if op == 'ParUpperDiagonalLNStats':
+        return [q[level], q[level], q[level-1]/scale*q[level-2], scale][int(attributes['pt_idx'])]
+    if op.startswith('ParUpperDiagonal'):
+        op = op.replace('ParUpperDiagonal', 'ParBlockColMajor', 1)
+    if op == 'ParBlockColMajorLNXCentered':
+        return float(q[level-int(attributes['pt_idx'])])
+    if op == 'ParBlockColMajorLNGoldschmidt':
+        return [scale/q[level]*scale/q[level-1]*scale,
+                q[level]/scale*q[level]/scale*q[level-1]/scale*q[level-2]][int(attributes['pt_idx'])]
+    if op in {'ParBlockColMajorMultipleSquare', 'ParBlockColMajorCtMul'}:
+        return float(q[level]/scale*q[level-1])
+    if op == 'ParBlockColMajorHeadColSum':
+        return float(q[level-int(kind == 'mask_pt')]) if attributes['op_class'].startswith('ParBlock') else float(q[level])
+    if op in {'ParBlockColMajorAddPt', 'ParBlockColMajorInverseInit'}:
+        return scale
+    if op == 'ParBlockColMajorInverseIter':
+        return float(q[level]) if kind == 'two_pt' else float((q[level]/scale)**2*q[level-1])
+    if op == 'ParBlockColMajorPolyMultCt':
+        return scale if kind == 'half_pt' else float(q[level-1]/scale*q[level])
     if kind == 'row_chunk_seed':
         return float(q[level])
     if kind in {'bias_pt', 'add_pt'}:

@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
@@ -243,7 +243,7 @@ class Conv2DPackedDepthwiseLayer:
                 for j in range(self.kernel_shape[1]):
                     index = i * self.kernel_shape[1] + j
                     x_ct = rotated_x_2d[packed_out_channel_idx][index]
-                    w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{index}', is_ringt=True)
+                    w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{index}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
                     custom_compute(
                         inputs=[conv_data_source],
                         output=w_pt,
@@ -259,7 +259,7 @@ class Conv2DPackedDepthwiseLayer:
                     w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True)
+            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,
@@ -270,25 +270,25 @@ class Conv2DPackedDepthwiseLayer:
             result.append(result_ct)
         return result
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Return (weight_pt, bias_pt) with shapes matching call()."""
         index = self.kernel_shape[0] * self.kernel_shape[1]
         weight_pt = [
-            [CkksPlaintextNode(f'convw_{layer_id}_{n}_{i}', is_ringt=True) for i in range(index)]
+            [CkksPlaintextNode(f'convw_{layer_id}_{n}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for i in range(index)]
             for n in range(self.n_packed_out_channel)
         ]
-        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(self.n_packed_out_channel)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes(self, layer_id, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes()."""
         index = self.kernel_shape[0] * self.kernel_shape[1]
         weight_ct = [
-            [CkksCiphertextNode(f'convw_{layer_id}_{n}_{i}', level=level) for i in range(index)]
+            [CkksCiphertextNode(id=f'convw_{layer_id}_{n}_{i}', level=level) for i in range(index)]
             for n in range(self.n_packed_out_channel)
         ]
         bias_ct = [
-            CkksCiphertextNode(f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_channel)
+            CkksCiphertextNode(id=f'convb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_channel)
         ]
         return weight_ct, bias_ct
 

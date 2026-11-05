@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add, ct_pt_mult_accumulate
 
 op_class = 'ParBlockColMajorCCMM'
@@ -56,7 +56,7 @@ class ParBlockColMajorCCMM:
             shape_B:    (n, p) -- per-head shape of matrix B.
             block_size: d, block size (must satisfy d^2 * S | n_slot).
             n_heads:    number of interleaved heads.
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
         """
         m, n = shape_A
         n2, p = shape_B
@@ -269,7 +269,7 @@ class ParBlockColMajorCCMM:
         # sigma: d nodes
         sigma_pt = []
         for k in range(d):
-            node = CkksPlaintextNode(f'encode_pt_sigma_{k}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_sigma_{k}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -281,7 +281,7 @@ class ParBlockColMajorCCMM:
         # tau: (2d-1) nodes
         tau_pt = []
         for idx in range(2 * d - 1):
-            node = CkksPlaintextNode(f'encode_pt_tau_{idx}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_tau_{idx}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -291,7 +291,7 @@ class ParBlockColMajorCCMM:
             tau_pt.append(node)
 
         # psi_k0: single all-ones node
-        psi_k0_pt = CkksPlaintextNode('encode_pt_psi_k0', is_ringt=True)
+        psi_k0_pt = CkksPlaintextNode('encode_pt_psi_k0', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
         custom_compute(
             inputs=[data_source],
             output=psi_k0_pt,
@@ -302,7 +302,7 @@ class ParBlockColMajorCCMM:
         # psi_wk / psi_wkd: (d-1) nodes each
         psi_wk_pt, psi_wkd_pt = [], []
         for i in range(1, d):
-            node_k = CkksPlaintextNode(f'encode_pt_psi_wk_{i}', is_ringt=True)
+            node_k = CkksPlaintextNode(f'encode_pt_psi_wk_{i}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node_k,
@@ -311,7 +311,7 @@ class ParBlockColMajorCCMM:
             )
             psi_wk_pt.append(node_k)
 
-            node_kd = CkksPlaintextNode(f'encode_pt_psi_wkd_{i}', is_ringt=True)
+            node_kd = CkksPlaintextNode(f'encode_pt_psi_wkd_{i}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node_kd,

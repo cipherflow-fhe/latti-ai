@@ -14,11 +14,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from inference.lattisense.frontend.custom_task import (
+from frontend.custom_task import (
     CkksCiphertextNode,
-    CkksPlaintextMulNode,
     CkksPlaintextNode,
-    CkksPlaintextRingtNode,
     add,
     custom_compute,
     mult,
@@ -26,12 +24,12 @@ from inference.lattisense.frontend.custom_task import (
 )
 
 
-PlainInputNode = CkksPlaintextNode | CkksPlaintextRingtNode | CkksPlaintextMulNode
+PlainInputNode = CkksPlaintextNode
 ParamInputNode = CkksCiphertextNode | PlainInputNode
 
 
 def is_plaintext_input(node: ParamInputNode) -> bool:
-    return isinstance(node, (CkksPlaintextNode, CkksPlaintextRingtNode, CkksPlaintextMulNode))
+    return isinstance(node, CkksPlaintextNode)
 
 
 def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInputNode,
@@ -53,7 +51,7 @@ def materialize_encrypted_param(param_ct: CkksCiphertextNode, trigger: ParamInpu
         attributes={
             'arg_id': arg_id,
             'flat_index': flat_index,
-            'expected_level': param_ct.level,
+            'expected_level': param_ct.metadata.level,
         },
     )
     param_ct.encrypted_parameter_materialized = True

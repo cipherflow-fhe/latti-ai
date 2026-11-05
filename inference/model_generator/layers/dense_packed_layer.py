@@ -22,7 +22,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.encrypted_param_ops import (
     add_encrypted_param_bias,
     accumulate_encrypted_param_terms,
@@ -67,7 +67,7 @@ class DensePackedLayer:
         self.seed_tile_layout = seed_tile_layout
 
     def multiplexed_weight_shape(self, n):
-        blocks = (n // 2) // math.prod(s * k for s, k in zip(self.input_shape, self.skip))
+        blocks = (n) // math.prod(s * k for s, k in zip(self.input_shape, self.skip))
         channels_per_block = math.prod(s // f for s, f in zip(self.skip, self.invalid_fill))
         channels = self.n_in_channel // math.prod(self.input_shape)
         return [math.ceil(self.n_out_channel / blocks),
@@ -77,7 +77,7 @@ class DensePackedLayer:
         """Choose disjoint residue tiles from public invalid-fill geometry."""
         self.seed_tile_layout = None
         if (len(self.input_shape) != 2 or any(s <= 0 or f <= 0 or s % f for s, f in zip(self.skip, self.invalid_fill))
-                or (n // 2) % math.prod(s * k for s, k in zip(self.input_shape, self.skip))):
+                or (n) % math.prod(s * k for s, k in zip(self.input_shape, self.skip))):
             return None
         capacity = math.prod(self.invalid_fill)
         if capacity <= 1:
@@ -96,7 +96,7 @@ class DensePackedLayer:
         self.seed_tile_layout = {
             'tile_grid': list(self.invalid_fill), 'group_size': capacity,
             'input_shape': list(self.input_shape), 'skip': list(self.skip),
-            'invalid_fill': list(self.invalid_fill), 'slots': n // 2,
+            'invalid_fill': list(self.invalid_fill), 'slots': n,
             'weight_shape': [rows, columns], 'use_site_level': level,
             **enabled,
         }
@@ -108,7 +108,7 @@ class DensePackedLayer:
         seed = parameters[group] if kind == 'bias' else parameters[0][group]
         seed = materialize_encrypted_param(seed, trigger)
         level = layout['use_site_level'] + (kind == 'weight')
-        mask = CkksPlaintextRingtNode(f'{seed.id}_{kind}_tile_{sub}')
+        mask = CkksPlaintextNode(f'{seed.id}_{kind}_tile_{sub}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0)
         custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
             'op_class': op_class, 'type': 'tile_mask_pt', 'param_kind': kind,
             'input_shape': self.input_shape, 'skip': self.skip, 'invalid_fill': self.invalid_fill,
@@ -288,7 +288,7 @@ class DensePackedLayer:
             result += rotate_cols(x, steps)
         return result
 
-    def make_pt_nodes_skip_0d(self, layer_id):
+    def make_pt_nodes_skip_0d(self, layer_id, *, level: int):
         """Return (weight_pt, bias_pt) for call_skip_0d().
 
         weight_pt[m][i]: m in n_packed_out_feature, i in n_packed_in_feature * pack
@@ -296,15 +296,15 @@ class DensePackedLayer:
         """
         weight_pt_size = self.n_packed_in_feature * self.pack
         weight_pt = [
-            [CkksPlaintextNode(f'densew_{layer_id}_{m}_{i}', is_ringt=True) for i in range(weight_pt_size)]
+            [CkksPlaintextNode(f'densew_{layer_id}_{m}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for i in range(weight_pt_size)]
             for m in range(self.n_packed_out_feature)
         ]
-        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}', is_ringt=True) for i in range(self.n_packed_out_feature)]
+        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(self.n_packed_out_feature)]
         return weight_pt, bias_pt
 
     def get_encrypted_param_count_skip_0d(self, level: int) -> dict[int, dict[str, int]]:
         if self.seed_tile_layout:
-            return self.get_encrypted_param_count_multiplexed(self.seed_tile_layout['slots'] * 2, level)
+            return self.get_encrypted_param_count_multiplexed(self.seed_tile_layout['slots'], level)
         return {
             level: {'weight': self.n_packed_out_feature * self.n_packed_in_feature * self.pack},
             level - 1: {'bias': self.n_packed_out_feature},
@@ -319,7 +319,7 @@ class DensePackedLayer:
                 result[target + packed][kind] = math.ceil(count / self.seed_tile_layout['group_size']) if packed else count
             return dict(result)
         input_ct_shape = [int(self.input_shape[i] * self.skip[i]) for i in range(2)]
-        n_num_pre_ct = math.ceil((n // 2) / math.prod(input_ct_shape))
+        n_num_pre_ct = math.ceil((n) / math.prod(input_ct_shape))
         n_channel_per_block = math.prod(self.skip[i] // self.invalid_fill[i] for i in range(2))
         n_channel = self.n_in_channel // math.prod(self.input_shape)
         n_block_input = math.ceil(n_channel / (n_channel_per_block * n_num_pre_ct)) * n_num_pre_ct
@@ -327,7 +327,7 @@ class DensePackedLayer:
         return {level: {'weight': n_packed_out * n_block_input}, level - 1: {'bias': n_packed_out}}
 
     def get_encrypted_param_count_1d_multiplexed(self, n, level: int) -> dict[int, dict[str, int]]:
-        n_block_per_ct = (n // 2) // (int(self.input_shape[0]) * int(self.skip[0]))
+        n_block_per_ct = (n) // (int(self.input_shape[0]) * int(self.skip[0]))
         n_valid_per_ct = n_block_per_ct * (int(self.skip[0]) // int(self.invalid_fill[0]))
         n_actual_channels = self.n_in_channel // int(self.input_shape[0])
         n_block_input = math.ceil(n_actual_channels / n_valid_per_ct) * n_block_per_ct
@@ -339,18 +339,18 @@ class DensePackedLayer:
         if self.seed_tile_layout:
             if self.pack != 1:
                 raise ValueError('0D Dense tiles require one feature per ciphertext')
-            return self.make_param_ct_nodes_multiplexed(layer_id, self.seed_tile_layout['slots'] * 2, level)
+            return self.make_param_ct_nodes_multiplexed(layer_id, self.seed_tile_layout['slots'], level)
         weight_ct_size = self.n_packed_in_feature * self.pack
         weight_ct = [
-            [CkksCiphertextNode(f'densew_{layer_id}_{m}_{i}', level=level) for i in range(weight_ct_size)]
+            [CkksCiphertextNode(id=f'densew_{layer_id}_{m}_{i}', level=level) for i in range(weight_ct_size)]
             for m in range(self.n_packed_out_feature)
         ]
         bias_ct = [
-            CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_feature)
+            CkksCiphertextNode(id=f'denseb_{layer_id}_{i}', level=level - 1) for i in range(self.n_packed_out_feature)
         ]
         return weight_ct, bias_ct
 
-    def make_pt_nodes_multiplexed(self, layer_id, n):
+    def make_pt_nodes_multiplexed(self, layer_id, n, *, level: int):
         """Return (weight_pt, bias_pt) for call_multiplexed().
 
         weight_pt[i][j]: i in n_packed_out_feature_for_mult_pack, j in n_block_input
@@ -366,17 +366,17 @@ class DensePackedLayer:
         n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
         n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
         weight_pt = [
-            [CkksPlaintextNode(f'densew_{layer_id}_{i}_{j}', is_ringt=True) for j in range(n_block_input)]
+            [CkksPlaintextNode(f'densew_{layer_id}_{i}_{j}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for j in range(n_block_input)]
             for i in range(n_packed_out)
         ]
-        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}', is_ringt=True) for i in range(n_packed_out)]
+        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(n_packed_out)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes_multiplexed(self, layer_id, n, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_multiplexed()."""
         if self.seed_tile_layout:
             layout = self.seed_tile_layout
-            if (layout['weight_shape'] != self.multiplexed_weight_shape(n) or layout['slots'] != n // 2
+            if (layout['weight_shape'] != self.multiplexed_weight_shape(n) or layout['slots'] != n
                     or layout['use_site_level'] != level or layout['input_shape'] != self.input_shape
                     or layout['skip'] != self.skip or layout['invalid_fill'] != self.invalid_fill
                     or layout['tile_grid'] != self.invalid_fill or layout['group_size'] != math.prod(self.invalid_fill)):
@@ -384,14 +384,14 @@ class DensePackedLayer:
             rows, columns = layout['weight_shape']
             weight_rows, weight_cols = ((1, math.ceil(rows * columns / layout['group_size']))
                                         if layout['weight'] else (rows, columns))
-            weights = [[CkksCiphertextNode(f'densew_{layer_id}_{i}_{j}', level=level + layout['weight'])
+            weights = [[CkksCiphertextNode(id=f'densew_{layer_id}_{i}_{j}', level=level + layout['weight'])
                         for j in range(weight_cols)] for i in range(weight_rows)]
-            biases = [CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1 + layout['bias'])
+            biases = [CkksCiphertextNode(id=f'denseb_{layer_id}_{i}', level=level - 1 + layout['bias'])
                       for i in range(math.ceil(rows / layout['group_size']) if layout['bias'] else rows)]
             return weights, biases
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        n_real_num_slot = n
+        n_num_pre_ct = int(np.ceil(n_real_num_slot / (input_ct_shape[0] * input_ct_shape[1])))
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
         n_channel_per_block = valid_skip_0 * valid_skip_1
@@ -399,10 +399,10 @@ class DensePackedLayer:
         n_block_input = int(np.ceil(n_channel / (n_channel_per_block * n_num_pre_ct))) * n_num_pre_ct
         n_packed_out = int(np.ceil(self.n_out_channel / n_num_pre_ct))
         weight_ct = [
-            [CkksCiphertextNode(f'densew_{layer_id}_{i}_{j}', level=level) for j in range(n_block_input)]
+            [CkksCiphertextNode(id=f'densew_{layer_id}_{i}_{j}', level=level) for j in range(n_block_input)]
             for i in range(n_packed_out)
         ]
-        bias_ct = [CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1) for i in range(n_packed_out)]
+        bias_ct = [CkksCiphertextNode(id=f'denseb_{layer_id}_{i}', level=level - 1) for i in range(n_packed_out)]
         return weight_ct, bias_ct
 
     def call_skip_0d(self, x: list[CkksCiphertextNode], weight_pt, bias_pt, skip_0d: int):
@@ -565,7 +565,10 @@ class DensePackedLayer:
                         d = g * bsgs_bs + b
                         weight_idx = ct_in * self.pack + d
                         w_pt = CkksPlaintextNode(
-                            f'encode_pt_{layer_id}_{out_idx}_{weight_idx}', is_ringt=True, scale=weight_scale
+                            f'encode_pt_{layer_id}_{out_idx}_{weight_idx}',
+                            is_ringt=True,
+                            scale=weight_scale,
+                            level=0,
                         )
                         custom_compute(
                             inputs=[dense_data_source],
@@ -593,7 +596,7 @@ class DensePackedLayer:
                         total = add(total, inner)
 
             total = rescale(total)
-            b_pt = CkksPlaintextNode(f'encode_pt_bias_{layer_id}_{out_idx}', is_ringt=True)
+            b_pt = CkksPlaintextNode(f'encode_pt_bias_{layer_id}_{out_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
             custom_compute(
                 inputs=[dense_data_source],
                 output=b_pt,
@@ -663,8 +666,8 @@ class DensePackedLayer:
         """2D multiplexed dense path with encrypted offline parameters."""
         input_ct_shape = [int(self.input_shape[0] * self.skip[0]), int(self.input_shape[1] * self.skip[1])]
         x_size = len(x)
-        N_half = int(n / 2)
-        n_num_pre_ct = int(np.ceil(N_half / (input_ct_shape[0] * input_ct_shape[1])))
+        n_real_num_slot = n
+        n_num_pre_ct = int(np.ceil(n_real_num_slot / (input_ct_shape[0] * input_ct_shape[1])))
 
         valid_skip_0 = self.skip[0] // self.invalid_fill[0]
         valid_skip_1 = self.skip[1] // self.invalid_fill[1]
@@ -721,7 +724,7 @@ class DensePackedLayer:
             result.append(s)
         return result
 
-    def make_pt_nodes_1d_multiplexed(self, layer_id, n):
+    def make_pt_nodes_1d_multiplexed(self, layer_id, n, *, level: int):
         """Return (weight_pt, bias_pt) for call_1d_multiplexed().
 
         input_shape is 1D: [shape], skip is 1D: [skip_val].
@@ -754,20 +757,20 @@ class DensePackedLayer:
         n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
 
         weight_pt = [
-            [CkksPlaintextNode(f'densew_{layer_id}_{i}_{j}', is_ringt=True) for j in range(n_block_input)]
+            [CkksPlaintextNode(f'densew_{layer_id}_{i}_{j}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for j in range(n_block_input)]
             for i in range(n_packed_out)
         ]
-        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}', is_ringt=True) for i in range(n_packed_out)]
+        bias_pt = [CkksPlaintextNode(f'denseb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(n_packed_out)]
         return weight_pt, bias_pt
 
     def make_param_ct_nodes_1d_multiplexed(self, layer_id, n, level: int):
         """Return encrypted parameter nodes with the same IDs/shapes as make_pt_nodes_1d_multiplexed()."""
-        N_half = n // 2
+        n_real_num_slot = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_size = shape * skip_val
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = n_real_num_slot // block_size
         valid_sub = skip_val // invalid_fill_val
         n_valid_per_ct = n_block_per_ct * valid_sub
         n_actual_channels = self.n_in_channel // shape
@@ -775,10 +778,10 @@ class DensePackedLayer:
         n_packed_out = int(np.ceil(self.n_out_channel / n_block_per_ct))
 
         weight_ct = [
-            [CkksCiphertextNode(f'densew_{layer_id}_{i}_{j}', level=level) for j in range(n_block_input)]
+            [CkksCiphertextNode(id=f'densew_{layer_id}_{i}_{j}', level=level) for j in range(n_block_input)]
             for i in range(n_packed_out)
         ]
-        bias_ct = [CkksCiphertextNode(f'denseb_{layer_id}_{i}', level=level - 1) for i in range(n_packed_out)]
+        bias_ct = [CkksCiphertextNode(id=f'denseb_{layer_id}_{i}', level=level - 1) for i in range(n_packed_out)]
         return weight_ct, bias_ct
 
     def call_1d_multiplexed(self, x: list, weight_pt, bias_pt, n):
@@ -836,12 +839,12 @@ class DensePackedLayer:
 
     def call_param_ct_1d_multiplexed(self, x: list[DataNode], weight_ct, bias_ct, n, input_is_plaintext: bool = False):
         """1D multiplexed dense path with encrypted offline parameters."""
-        N_half = n // 2
+        n_real_num_slot = n
         shape = int(self.input_shape[0])
         skip_val = int(self.skip[0])
         invalid_fill_val = int(self.invalid_fill[0])
         block_size = shape * skip_val
-        n_block_per_ct = N_half // block_size
+        n_block_per_ct = n_real_num_slot // block_size
         valid_sub = skip_val // invalid_fill_val
         n_valid_per_ct = n_block_per_ct * valid_sub
         n_actual_channels = self.n_in_channel // shape
@@ -911,7 +914,10 @@ class DensePackedLayer:
                 offset = rot_idx % n_block_per_ct
                 x_ct_list.append(rotated_cts[group][offset])
                 w_pt = CkksPlaintextNode(
-                    f'encode_pt_{layer_id}_{out_group}_{rot_idx}', is_ringt=True, scale=weight_scale
+                    f'encode_pt_{layer_id}_{out_group}_{rot_idx}',
+                    is_ringt=True,
+                    scale=weight_scale,
+                    level=0,
                 )
                 custom_compute(
                     inputs=[dense_data_source],
@@ -923,7 +929,7 @@ class DensePackedLayer:
 
             s = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(s)
-            b_pt = CkksPlaintextNode(f'encode_pt_bias_{layer_id}_{out_group}', is_ringt=True)
+            b_pt = CkksPlaintextNode(f'encode_pt_bias_{layer_id}_{out_group}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
             custom_compute(
                 inputs=[dense_data_source],
                 output=b_pt,
@@ -991,6 +997,7 @@ class DensePackedLayer:
                     f'encode_pt_{layer_id}_{packed_out_feature_idx}_{in_feature_idx}',
                     is_ringt=True,
                     scale=weight_scale,
+                    level=0,
                 )
                 custom_compute(
                     inputs=[dense_data_source],
@@ -1008,7 +1015,10 @@ class DensePackedLayer:
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             s = rescale(partial_sum)
             b_pt = CkksPlaintextNode(
-                f'encode_pt_bias_{layer_id}_{packed_out_feature_idx}', is_ringt=True, scale=bias_scale
+                f'encode_pt_bias_{layer_id}_{packed_out_feature_idx}',
+                is_ringt=True,
+                scale=bias_scale,
+                level=0,
             )
             custom_compute(
                 inputs=[dense_data_source],
