@@ -380,7 +380,7 @@ class UpsampleNearestLayer:
 
                 # Generate select_tensor_pt on-demand and perform mask multiplication (C++ lines 108-111 - Lazy mode)
                 out_channel_pos = channel_id % out_channels_per_ct
-                select_pt = CkksPlaintextNode(f'select_pt_{idx}_{i}_{out_channel_pos}', is_ringt=True, scale=float(get_fhe_param().q[self.level]), level=0)
+                select_pt = CkksPlaintextNode(f'{data_source.id}/select_pt_{idx}_{i}_{out_channel_pos}', is_ringt=True, scale=float(get_fhe_param().q[self.level]), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=select_pt,

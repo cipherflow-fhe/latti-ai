@@ -305,7 +305,7 @@ class Avgpool2DLayer:
 
         select_tensor_pt = []
         for i in range(n_select_pt):
-            w_pt = CkksPlaintextNode(f'encode_pt_select_{i}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
+            w_pt = CkksPlaintextNode(f'{avg_data_source.id}/encode_pt_select_{i}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[avg_data_source],
                 output=w_pt,

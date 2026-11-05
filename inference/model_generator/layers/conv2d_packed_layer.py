@@ -149,7 +149,7 @@ class Conv2DPackedLayer:
                     for j in range(self.kernel_shape[1]):
                         index = i * self.kernel_shape[1] + j
                         x_ct = rotated_x_2d[in_channel_idx][index]
-                        w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{index}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
+                        w_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{index}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
                         custom_compute(
                             inputs=[conv_data_source],
                             output=w_pt,
@@ -166,7 +166,7 @@ class Conv2DPackedLayer:
                         w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
+            b_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_{packed_out_channel_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,

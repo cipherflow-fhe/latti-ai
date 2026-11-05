@@ -431,7 +431,7 @@ class PolyRelu2D(PolyReluBase):
             result = [0 for i in range(len(x))]
             for x_idx in range(len(x)):
                 if self.order <= 1:
-                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[1], level=0)
+                    w_pt_1 = CkksPlaintextNode(f'{poly_data_source.id}/encode_pt_{1}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[1], level=0)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_1,
@@ -444,7 +444,7 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = rescale(mult(x[x_idx], w_pt_1))
-                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[0], level=0)
+                    w_pt_0 = CkksPlaintextNode(f'{poly_data_source.id}/encode_pt_{0}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[0], level=0)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_0,

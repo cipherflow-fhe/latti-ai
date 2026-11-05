@@ -62,7 +62,7 @@ class _ParUpperDiagonalBase:
         return mb * self.cts_per_mb + ct_local
 
     def _make_pt(self, data_source, pt_idx: int, mb: int = 0, ct_local: int = 0, *, level: int):
-        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': 'pt', 'pt_idx': pt_idx}, [level, level], get_fhe_param()), level=0)
+        node = CkksPlaintextNode(f'{data_source.id}/encode_pt_{self.op_class}_{pt_idx}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': 'pt', 'pt_idx': pt_idx}, [level, level], get_fhe_param()), level=0)
         custom_compute(
             inputs=[data_source],
             output=node,

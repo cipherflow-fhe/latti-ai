@@ -79,7 +79,7 @@ class ParUpperDiagonalPolyActRNGamma(_ParUpperDiagonalPolyBase):
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': gamma_op_class, 'type': 'gamma_pt'}, [input_cts[0].metadata.level, input_cts[0].metadata.level], get_fhe_param()), level=0)
+                node = CkksPlaintextNode(f'{data_source.id}/encode_pt_gamma_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': gamma_op_class, 'type': 'gamma_pt'}, [input_cts[0].metadata.level, input_cts[0].metadata.level], get_fhe_param()), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,
@@ -149,7 +149,7 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextNode(f'encode_pt_poly_c{coeff_idx}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': coeff_idx}, [level, level], get_fhe_param()), level=0)
+                node = CkksPlaintextNode(f'{data_source.id}/encode_pt_poly_c{coeff_idx}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': coeff_idx}, [level, level], get_fhe_param()), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,

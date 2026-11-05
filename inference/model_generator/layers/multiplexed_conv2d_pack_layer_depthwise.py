@@ -572,7 +572,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             x_ct_list = list()
             w_pt_list = list()
             for j in range(k_size):
-                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{j}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0)
+                w_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_{ct_idx}_{j}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=w_pt,
@@ -619,7 +619,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
 
                 for i in range(self.n_channel_per_ct):
                     if (ct_idx * self.n_channel_per_ct + i) < self.n_out_channel:
-                        m_pt = CkksPlaintextNode(f'encode_pt_mask_{ct_idx}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level - 1]), level=0)
+                        m_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_mask_{ct_idx}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level - 1]), level=0)
                         custom_compute(
                             inputs=[conv_data_source],
                             output=m_pt,
@@ -631,7 +631,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
                         result_ct.append(rotate_cols(c_m, [steps[int(i / self.skip[1])]])[0])
         if self.stride[0] == 1:
             for i in range(len(res)):
-                b_pt = CkksPlaintextNode(f'encode_pt_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
+                b_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -647,7 +647,7 @@ class MultiplexedConv2DPackedLayerDepthwise(KernelSeedPacking):
             if p == 0:
                 sp = c_m_s
                 btp_idx = int(np.floor(i / (self.stride[0] * self.stride[1] * self.n_channel_per_ct)))
-                b_pt = CkksPlaintextNode(f'encode_pt_{btp_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
+                b_pt = CkksPlaintextNode(f'{conv_data_source.id}/encode_pt_{btp_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
