@@ -151,6 +151,41 @@ def main():
             else:
                 gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
 
+    if args.deployment_mode == 'client_encrypted_input':
+        # Export the actual graph's key requirements with the client task.
+        # Browser binding can then reject missing keys before encryption.
+        with open(os.path.join(output_dir, 'mega_ag.json'), encoding='utf-8') as f:
+            graph = json.load(f)
+        requirements = {}
+        for name, datum in graph['data'].items():
+            kind = datum.get('type')
+            if kind not in ('rlk', 'glk', 'evk'):
+                continue
+            role = datum.get('key_role', 'residual')
+            if kind == 'evk':
+                if name not in ('evk_ci_to_std', 'evk_std_to_ci', 'evk_n1_to_n2', 'evk_n2_to_n1',
+                                'evk_dense_to_sparse', 'evk_sparse_to_dense'):
+                    raise ValueError('Unknown evaluation-key role: ' + name)
+                kind = name
+            element = datum.get('galois_element', 0)
+            key = (role, kind, element)
+            requirement = {'role': role, 'kind': kind, 'levelQ': datum['level'],
+                           'levelP': datum.get('sp_level', -1),
+                           'baseTwoDecomposition': 0, 'compressed': False}
+            if element:
+                requirement['galoisElement'] = str(element)
+            if key in requirements:
+                requirement['levelQ'] = max(requirement['levelQ'], requirements[key]['levelQ'])
+                requirement['levelP'] = max(requirement['levelP'], requirements[key]['levelP'])
+            requirements[key] = requirement
+        client_path = os.path.join(task_dir, 'client', 'task_config.json')
+        with open(client_path, encoding='utf-8') as f:
+            client_config = json.load(f)
+        client_config['evaluation_keys'] = [requirements[key] for key in sorted(requirements)]
+        with open(client_path, 'w', encoding='utf-8') as f:
+            json.dump(client_config, f, indent=4, ensure_ascii=False)
+            f.write('\n')
+
     print(f'Done: mega_ag generated for {output_dir}.')
 
 

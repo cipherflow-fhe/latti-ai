@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Latti browser client</title>
+<style>body{font:16px system-ui;max-width:52rem;margin:3rem auto;padding:0 1rem}button,select{font:inherit;margin:.3rem;padding:.5rem}output{display:block;white-space:pre-wrap;margin:1rem 0}fieldset{margin:1rem 0}</style>
+<h1>Latti browser client</h1>
+<p>Keep your key directory private. Send the public evaluation file and encrypted input ZIP to your inference server.</p>
+<fieldset><legend>Keys</legend>
+<button id="keys">Choose key directory</button><button id="setup">Generate keys</button><button id="restore">Restore keys</button>
+</fieldset>
+<fieldset><legend>Task and CSV inputs</legend>
+<button id="task">Choose task client directory</button><div id="inputs"></div>
+<button id="encrypt">Encrypt CSV batch</button><button id="save">Save encrypted ZIP</button>
+</fieldset>
+<fieldset><legend>Server results</legend>
+<label>Classification task <select id="model"><option value="cifar10">CIFAR10</option><option value="retina">Retina</option></select></label>
+<button id="decrypt">Choose and decrypt result ZIP</button><button id="labels">Choose labels</button><button id="report">Save predictions</button>
+</fieldset>
+<button id="cancel">Cancel current operation</button><button id="close">Close client</button>
+<output id="status" aria-live="polite">Choose a key directory to begin.</output>
+<script type="module">
+import {openBrowserClient} from './index.js';
+let client,task,inputBatch,results,archive,lastRequest,labels;
+const directories={},status=document.querySelector('#status');
+const run=(id,action)=>document.querySelector('#'+id).addEventListener('click',async()=>{
+  try {await action();} catch(error) {status.textContent=error.message;}
+});
+const needClient=()=>{if(!client)throw new Error('Choose a key directory first.');return client;};
+run('keys',async()=>{
+  const keyDirectory=await showDirectoryPicker({mode:'readwrite'});
+  await client?.close();
+  client=await openBrowserClient({keyDirectory,onProgress:progress=>{
+    lastRequest=progress.requestId;status.textContent=progress.phase+' · '+progress.bytes+' bytes';
+  }});
+  status.textContent='Generate new keys or restore this directory.';
+});
+run('setup',async()=>{await needClient().setup();status.textContent='Keys saved. Choose a task client directory.';});
+run('restore',async()=>{await needClient().restore();status.textContent='Keys restored. Choose a task client directory.';});
+run('task',async()=>{
+  const directory=await showDirectoryPicker();await needClient().bindTask(directory);
+  task=JSON.parse(await(await(await directory.getFileHandle('task_config.json')).getFile()).text());
+  document.querySelector('#inputs').replaceChildren();
+  for(const name of Object.keys(directories))delete directories[name];
+  for(const name of task.task_input_id) {
+    const button=document.createElement('button');button.textContent='Choose '+name+' CSV directory';
+    button.addEventListener('click',async()=>{try{directories[name]=await showDirectoryPicker();button.textContent=name+': '+directories[name].name;}catch(error){status.textContent=error.message;}});
+    document.querySelector('#inputs').append(button);
+  }
+  inputBatch=results=archive=undefined;status.textContent='Choose one CSV directory for each input.';
+});
+run('encrypt',async()=>{inputBatch=await needClient().encryptBatch({mode:'server',inputDirectories:directories});archive=inputBatch.archive;status.textContent='Encrypted ZIP ready to save.';});
+run('save',async()=>{
+  if(!archive)throw new Error('Encrypt a batch first.');
+  const file=await showSaveFilePicker({suggestedName:'input.zip'});
+  await(await archive.file.getFile()).stream().pipeTo(await file.createWritable());status.textContent='Encrypted ZIP saved.';
+});
+run('decrypt',async()=>{
+  if(!inputBatch)throw new Error('Encrypt the matching input batch first.');
+  const [inputFile]=await showOpenFilePicker();
+  results=await needClient().decryptBatch({mode:'server',outputName:task.task_output_id[0],inputFile,inputBatch});
+  status.textContent='Results decrypted. Choose the independent JSONL labels to create predictions.';
+});
+run('labels',async()=>{const [file]=await showOpenFilePicker();labels=await file.getFile();status.textContent='Labels selected.';});
+run('report',async()=>{
+  if(!results||!labels)throw new Error('Decrypt the server results and choose labels first.');
+  const report=await showSaveFilePicker({suggestedName:'predictions.jsonl'});
+  const {postprocess}=await import('./tasks/'+document.querySelector('#model').value+'/postprocess.js');
+  const statistics=await postprocess({results,labels,report});
+  status.textContent=statistics.correct+' / '+statistics.total+' correct ('+(statistics.accuracy*100).toFixed(1)+'%).';
+});
+run('cancel',async()=>{await needClient().cancel(lastRequest);});
+run('close',async()=>{await client?.close();client=undefined;status.textContent='Client closed.';});
+</script>
+</html>

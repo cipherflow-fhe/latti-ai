@@ -1,6 +1,6 @@
 # TAA v6 浏览器客户端、参数与 Worker 协议设计
 
-日期：2026-11-06。状态：待实现。遵循[总则](taa_v6_adaptation_design.md)与[流式密钥规范](taa_v6_streaming_context_design.md)；归档细节见 [OPFS ZIP64](taa_v6_opfs_zip64_design.md)。本模块需在 `feat/taa-adapt` 分支中新增，`feat/streaming-key-generation` 分支只作行为参考。
+日期：2026-11-06。状态：已实现，浏览器客户端专项验收通过，证据见[验收记录第 2–4 节](../research/taa_v6_acceptance_report.md)；最终提交发布包核对见任务交付规范。遵循[总则](taa_v6_adaptation_design.md)与[流式密钥规范](taa_v6_streaming_context_design.md)；归档细节见 [OPFS ZIP64](taa_v6_opfs_zip64_design.md)。本模块在 `feat/taa-adapt` 分支新增，`feat/streaming-key-generation` 分支只作行为参考。
 
 ## 1. 模块边界
 
