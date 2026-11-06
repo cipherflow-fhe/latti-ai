@@ -1,5 +1,5 @@
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.poly2d import Poly2D
 from inference.model_generator.layers.mult_scaler import MultScalarLayer
 

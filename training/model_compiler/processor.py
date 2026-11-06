@@ -392,14 +392,14 @@ def update_level_cost_for_btp(graph: LayerAbstractGraph):
 
         elif compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
-                graph.dag.nodes[compute_node]['level_cost'] = 0
+                graph.dag.nodes[compute_node]['level_cost'] = 1
                 compute_node.is_big_size = True
                 compute_node.is_adaptive_avgpool = False
             else:
                 compute_node.is_big_size = False
                 succs_sub = list(graph.dag.successors(succs[0]))
                 if succs_sub and succs_sub[0].layer_type == 'reshape':
-                    graph.dag.nodes[compute_node]['level_cost'] = 0
+                    graph.dag.nodes[compute_node]['level_cost'] = 1
                     compute_node.is_adaptive_avgpool = True
                 else:
                     graph.dag.nodes[compute_node]['level_cost'] = 1

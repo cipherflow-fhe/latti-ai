@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add, ct_pt_mult_accumulate
 
 op_class = 'ParBlockColMajorTranspose'
 
@@ -55,7 +56,7 @@ class ParBlockColMajorTranspose:
             shape:      (m, n_per_head) -- per-head shape of the input matrix.
             block_size: d, block size (must satisfy d^2 * S | n_slot).
             n_heads:    number of interleaved heads.
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
         """
         m, n = shape
         self.m = m
@@ -195,7 +196,7 @@ class ParBlockColMajorTranspose:
         d = self.d
         transpose_diag_pt = []
         for k_idx in range(2 * d - 1):
-            node = CkksPlaintextNode(f'encode_pt_transpose_diag_{k_idx}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_transpose_diag_{k_idx}', is_ringt=True, scale=float(get_fhe_param().q[input_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,

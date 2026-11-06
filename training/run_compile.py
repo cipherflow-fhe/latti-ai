@@ -25,6 +25,7 @@ Supports both ONNX model files (.onnx) and pre-converted JSON files (pt.json)
 import argparse
 import json
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -43,9 +44,130 @@ log = logging.getLogger(__name__)
 
 
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
+DEPLOYMENT_MODES = {'client_encrypted_input', 'server_provisioned_runner'}
 
 
-def read_compile_config(config_path: str) -> dict[str, int | float | str]:
+def deployment_metadata(deployment_mode: str) -> dict[str, str]:
+    if deployment_mode == 'client_encrypted_input':
+        return {
+            'deployment_mode': 'client_encrypted_input',
+            'input_mode': 'client_ciphertext',
+            'parameter_mode': 'plaintext_lazy',
+            'decryptor': 'client',
+        }
+    if deployment_mode == 'server_provisioned_runner':
+        return {
+            'deployment_mode': 'server_provisioned_runner',
+            'input_mode': 'plaintext',
+            'parameter_mode': 'encrypted_offline',
+            'decryptor': 'provisioner',
+        }
+    raise ValueError(f'Unsupported deployment_mode: {deployment_mode!r}')
+
+
+def read_json_file(path: Path) -> dict:
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def write_json_file(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+
+def write_server_provisioned_runner_layout(task_dir: Path, runner_output_dir: Path | None = None) -> None:
+    server_dir = task_dir / 'server'
+    if not server_dir.exists():
+        raise FileNotFoundError(f'Cannot create runner layout: missing {server_dir}')
+
+    runner_dir = runner_output_dir if runner_output_dir is not None else task_dir / 'runner'
+    provisioner_dir = task_dir / 'provisioner'
+    runner_dir.mkdir(parents=True, exist_ok=True)
+    provisioner_dir.mkdir(parents=True, exist_ok=True)
+
+    mode_config = deployment_metadata('server_provisioned_runner')
+    provisioner_config = {**mode_config, 'deployment_role': 'provisioner'}
+    runner_config = {**mode_config, 'deployment_role': 'runner'}
+
+    server_task_config_path = server_dir / 'task_config.json'
+    server_task_config = read_json_file(server_task_config_path)
+    server_task_config.update(provisioner_config)
+    write_json_file(server_task_config_path, server_task_config)
+
+    provisioner_task_config = dict(server_task_config)
+    provisioner_task_config.update(provisioner_config)
+    write_json_file(provisioner_dir / 'task_config.json', provisioner_task_config)
+
+    runner_task_config = dict(server_task_config)
+    runner_task_config.update(runner_config)
+    write_json_file(runner_dir / 'task_config.json', runner_task_config)
+
+    for filename in ('ckks_parameter.json', 'nn_layers_ct_0.json'):
+        src = server_dir / filename
+        if src.exists():
+            shutil.copy2(src, runner_dir / filename)
+            shutil.copy2(src, provisioner_dir / filename)
+
+    h5_src = server_dir / 'model_parameters.h5'
+    if h5_src.exists():
+        shutil.copy2(h5_src, provisioner_dir / 'model_parameters.h5')
+
+
+def write_matrix_output_selections(onnx_path: Path, task_dir: Path) -> None:
+    """Defer CLS selection through tokenwise ops, retaining the packed geometry."""
+    import onnx
+    from onnx import helper
+    from model_export.operations import format_id
+
+    selected = set()
+    model = onnx.load(onnx_path)
+    tokenwise = {'Linear', 'CustomTanh', 'CustomGELU', 'CustomLayerNorm', 'PolyActRN'}
+    for node in model.graph.node:
+        attrs = {a.name: helper.get_attribute_value(a) for a in node.attribute}
+        if attrs.get('select_first_token'):
+            if node.op_type != 'Linear':
+                raise ValueError(f'Unsupported CLS selection at {node.name}')
+            selected.update(node.output)
+        elif selected.intersection(node.input):
+            if node.op_type not in tokenwise:
+                raise ValueError(f'Cannot defer CLS selection through {node.op_type}: {node.name}')
+            selected.update(node.output)
+    outputs = {format_id(o.name) for o in model.graph.output if o.name in selected}
+    if not outputs:
+        return
+    for path in task_dir.glob('*/task_config.json'):
+        config = read_json_file(path)
+        for name in outputs.intersection(config.get('task_output_param', {})):
+            param = config['task_output_param'][name]
+            if param.get('data_type') != 'feature_mat':
+                raise ValueError(f'CLS selection requires a feature_mat output: {name}')
+            param['select_first_token'] = True
+        write_json_file(path, config)
+
+
+def infer_model_type(input_path: Path) -> str:
+    """Identify the custom BERT operator variant from the graph itself."""
+    if input_path.suffix.lower() == '.onnx':
+        import onnx
+
+        model = onnx.load(str(input_path), load_external_data=False)
+        is_bert = any(
+            node.op_type in ('CustomGELU', 'CustomTanh') or
+            (node.op_type == 'CustomMultiHeadAttention' and
+             any(attr.name == 'exp_coefficients' for attr in node.attribute))
+            for node in model.graph.node
+        )
+    else:
+        graph = read_json_file(input_path)
+        is_bert = any(
+            layer.get('model_type') == 'bert' or layer.get('type') in ('CustomGELU', 'CustomTanh')
+            for layer in graph.get('layer', {}).values()
+        )
+    return 'bert' if is_bert else ''
+
+
+def read_compile_config(config_path: str) -> dict[str, int | float | str | list[int]]:
     if not config_path:
         return {}
     with open(config_path, 'r', encoding='utf-8') as f:
@@ -54,13 +176,15 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str]:
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     result = {
-        'n_heads': int(data['n_heads']),
-        'head_dim': int(data['head_dim']),
-        'matmul_block_size': int(data['matmul_block_size']),
+        'n_heads': int(data.get('n_heads', 1)),
+        'head_dim': int(data.get('head_dim', 0)),
+        'matmul_block_size': int(data.get('matmul_block_size', 0)),
         'mat_pack_style': mat_pack_style,
-        'model_type': str(data.get('model_type', '')),
+        'seed_weight_subgrid_stride': data.get('seed_weight_subgrid_stride', [1, 1]),
     }
     for key in (
+        'encrypted_parameter_storage_weight',
+        'encrypted_parameter_storage_normalization_bytes',
         'btp_scale',
         'set_btp_scale',
         'bert_softmax_values_btp_scale',
@@ -70,7 +194,6 @@ def read_compile_config(config_path: str) -> dict[str, int | float | str]:
         'bert_layernorm_inverse_btp_scale',
         'bert_softmax_initial_denominator_scale',
         'bert_softmax_wide_initial_denominator_scale',
-        'bert_softmax_use_wide_inverse_epsilon',
         'bert_softmax_first_refinement_denominator_scale',
         'bert_softmax_later_refinement_denominator_scale',
     ):
@@ -130,7 +253,7 @@ Examples:
         '--config',
         type=str,
         default='',
-        help='Compile config JSON path containing n_heads, head_dim, matmul_block_size, mat_pack_style',
+        help='Compile config JSON path containing packing, seed_weight_subgrid_stride, and storage scoring options',
     )
 
     parser.add_argument(
@@ -143,6 +266,20 @@ Examples:
     )
 
     parser.add_argument('--maxpool-config', help='JSON mapping MaxPool layer IDs to alpha, upper_bound and B')
+    parser.add_argument(
+        '--deployment-mode',
+        choices=sorted(DEPLOYMENT_MODES),
+        default='client_encrypted_input',
+        help='Deployment mode for task metadata and optional runner/provisioner layout.',
+    )
+
+    parser.add_argument(
+        '--runner-output-dir',
+        type=str,
+        default=None,
+        help='Runner output directory for server_provisioned_runner mode. Defaults to <output>/task/runner.',
+    )
+
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -174,7 +311,9 @@ Examples:
         with open(args.maxpool_config, encoding='utf-8') as stream:
             maxpool_config = json.load(stream)
     mat_pack_style = compile_config.get('mat_pack_style', '')
-    model_type = compile_config.get('model_type', '')
+    if args.deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
+        raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
+    model_type = infer_model_type(input_path)
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
     if set_btp_scale is None:
@@ -214,7 +353,7 @@ Examples:
     print(
         f'[Compile] Config: STYLE={args.style}, GRAPH_TYPE={args.graph_type}, '
         f'COMPILE_CONFIG={args.config or "<none>"}, MAT_PACK_STYLE={mat_pack_style}, '
-        f'MODEL_TYPE={model_type}, SET_BTP_SCALE={set_btp_scale}'
+        f'MODEL_TYPE={model_type}, SET_BTP_SCALE={set_btp_scale}, DEPLOYMENT_MODE={args.deployment_mode}'
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
@@ -243,13 +382,16 @@ Examples:
             bert_softmax_wide_initial_denominator_scale=compile_config.get(
                 'bert_softmax_wide_initial_denominator_scale'
             ),
-            bert_softmax_use_wide_inverse_epsilon=compile_config.get('bert_softmax_use_wide_inverse_epsilon'),
             bert_softmax_first_refinement_denominator_scale=compile_config.get(
                 'bert_softmax_first_refinement_denominator_scale'
             ),
             bert_softmax_later_refinement_denominator_scale=compile_config.get(
                 'bert_softmax_later_refinement_denominator_scale'
             ),
+            encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
+            encrypted_parameter_storage_normalization_bytes=compile_config.get('encrypted_parameter_storage_normalization_bytes', 1 << 30),
+            deployment_mode=args.deployment_mode,
+            seed_weight_subgrid_stride=compile_config.get('seed_weight_subgrid_stride', [1, 1]),
             # enable_score_cache=False
         )
 
@@ -258,10 +400,13 @@ Examples:
         task_dir = output_dir / 'task'
         if task_dir.exists():
             print(
-                f'[Compile] Structure: task/server/nn_layers_ct_0.json, task/{{server,client}}/{{task_config,ckks_parameter}}.json'
+                '[Compile] Structure: task/server/nn_layers_ct_0.json, '
+                'task/{server,client}/{task_config,ckks_parameter}.json'
             )
 
         if onnx_path is not None and task_dir.exists():
+            if feature_mat:
+                write_matrix_output_selections(onnx_path, task_dir)
             json_path = task_dir / 'server' / 'nn_layers_ct_0.json'
             h5_path = task_dir / 'server' / 'model_parameters.h5'
             if json_path.exists():
@@ -284,6 +429,15 @@ Examples:
                     traceback.print_exc()
             else:
                 print(f'\n[H5 Export] Skipped: {json_path} not found')
+
+        if args.deployment_mode == 'server_provisioned_runner' and task_dir.exists():
+            runner_output_dir = Path(args.runner_output_dir) if args.runner_output_dir else None
+            write_server_provisioned_runner_layout(task_dir, runner_output_dir)
+            runner_dir = runner_output_dir if runner_output_dir is not None else task_dir / 'runner'
+            print(f'\n[Deployment] server_provisioned_runner layout written:')
+            print(f'[Deployment] Provisioner: {task_dir / "provisioner"}')
+            print(f'[Deployment] Runner:      {runner_dir}')
+            print('[Deployment] Runner bundle config excludes secret_key.bin and model_parameters.h5.')
 
         return 0
 

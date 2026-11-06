@@ -59,7 +59,9 @@ class PolyActComputeNode(ComputeNode):
         if len(x.input) >= 2:
             rm_name = x.input[1]  # e.g. 'relu.rangenorm.running_max'
             suffix = '.rangenorm.running_max'
-            if rm_name.endswith(suffix):
+            if x.op_type == 'Simple_Polyrelu':
+                module_path = rm_name.rsplit('.', 1)[0]
+            elif rm_name.endswith(suffix):
                 module_path = rm_name[: -len(suffix)]
         if not module_path:
             parts = x.name.strip('/').split('/')

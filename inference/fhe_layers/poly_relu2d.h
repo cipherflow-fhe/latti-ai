@@ -46,6 +46,11 @@ public:
     generate_weight_pt_for_non_absorb_indices(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const;
     ls::CkksPlaintext
     generate_weight_pt_for_bsgs(ls::CkksContext& ctx, int idx, int n_packed_out_channel_idx) const override;
+    std::vector<double> generate_weight_values_for_bsgs(int degree, int channel_group) const;
+    ls::CkksPlaintext generate_channel_seed(ls::CkksContext& ctx, int degree, int seed,
+                                                const Duo& stride) const;
+    void validate_seed_geometry(const Duo& shape, const Duo& skip_in, uint32_t blocks,
+                                uint32_t slots, int groups, int degree, int use_site_level) const;
 
     Feature2DEncrypted run(ls::CkksContext& ctx, const Feature2DEncrypted& x);
     std::vector<ls::CkksCiphertext> run_core(ls::CkksContext& ctx, const std::vector<ls::CkksCiphertext>& x);

@@ -15,14 +15,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import sys
+import math
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
+from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
+from inference.model_generator.layers.kernel_seed_packing import restore_subgrid
 
 import numpy as np
 
@@ -107,7 +110,8 @@ def _bsgs_coeff_scales(param, order: int, level: int) -> dict[int, float]:
 
 class PolyRelu2D(PolyReluBase):
     def __init__(
-        self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1]
+        self, input_shape, order, skip, n_channel_per_ct, upsample_factor: list = [1, 1], block_expansion: list = [1, 1],
+        seed_layout=None,
     ):
         self.input_shape = input_shape
         self.order = order
@@ -115,6 +119,7 @@ class PolyRelu2D(PolyReluBase):
         self.n_channel_per_ct = n_channel_per_ct
         self.upsample_factor = upsample_factor
         self.block_expansion = block_expansion
+        self.poly_seed_layout = seed_layout
 
         if input_shape[0] & (input_shape[0] - 1) != 0 or input_shape[1] & (input_shape[1] - 1) != 0:
             raise ValueError(f'input_shape must be powers of 2, got: [{input_shape[0]}, {input_shape[1]}]')
@@ -128,6 +133,87 @@ class PolyRelu2D(PolyReluBase):
         self.block_shape[1] = int(self.input_shape[1] * self.skip[1] / self.block_expansion[1])
         if self.block_shape[0] & (self.block_shape[0] - 1) != 0 or self.block_shape[1] & (self.block_shape[1] - 1) != 0:
             raise ValueError(f'block_shape must be powers of 2, got: [{self.block_shape[0]}, {self.block_shape[1]}]')
+
+    def choose_seed_layout(self, stride, n, n_ct, level, bytes_at_level):
+        self.poly_seed_layout = None
+        seed_shape = [self.block_shape[i] // self.skip[i] for i in range(2)]
+        if (stride == [1, 1] or self.upsample_factor != [1, 1]
+                or any(a <= 0 or a & (a - 1) or h % a for h, a in zip(seed_shape, stride))
+                or n % math.prod(self.block_shape)):
+            return None
+        capacity = math.prod(stride)
+        levels = self._bsgs_encrypted_coeff_levels(level)
+        packed = []
+        for target in levels:
+            try:
+                packed.append(math.ceil(n_ct / capacity) * bytes_at_level(target + 1) < n_ct * bytes_at_level(target))
+            except (KeyError, ValueError):
+                packed.append(False)
+        if any(packed):
+            self.poly_seed_layout = {
+                'input_shape': seed_shape, 'skip': list(self.skip),
+                'blocks': math.ceil(self.n_channel_per_ct / math.prod(self.skip)), 'slots': n,
+                'stride': list(stride), 'group_size': capacity, 'channel_groups': n_ct,
+                'use_site_levels': levels, 'packed_degrees': packed,
+            }
+        return self.poly_seed_layout
+
+    def get_encrypted_param_count(self, n_ct, level):
+        if not self.poly_seed_layout:
+            return super().get_encrypted_param_count(n_ct, level)
+        layout = self.poly_seed_layout
+        counts = defaultdict(lambda: {'coefficient': 0})
+        for target, packed in zip(self._bsgs_encrypted_coeff_levels(level), layout['packed_degrees']):
+            counts[target + packed]['coefficient'] += math.ceil(n_ct / layout['group_size']) if packed else n_ct
+        return dict(counts)
+
+    def make_param_ct_nodes(self, layer_id, n_pack_in_channel, input_level):
+        if not self.poly_seed_layout:
+            return super().make_param_ct_nodes(layer_id, n_pack_in_channel, input_level)
+        layout = self.poly_seed_layout
+        levels = self._bsgs_encrypted_coeff_levels(input_level)
+        if (layout['channel_groups'] != n_pack_in_channel or layout['use_site_levels'] != levels
+                or layout['input_shape'] != [self.block_shape[i] // self.skip[i] for i in range(2)]
+                or layout['skip'] != list(self.skip) or self.upsample_factor != [1, 1]):
+            raise ValueError('polynomial seed metadata does not match graph')
+        return [[CkksCiphertextNode(id=f'poly_reluw_{layer_id}_{degree}_{j}', level=target + packed)
+                 for j in range(math.ceil(n_pack_in_channel / layout['group_size']) if packed else n_pack_in_channel)]
+                for degree, (target, packed) in enumerate(zip(levels, layout['packed_degrees']))]
+
+    def call_bsgs_param_ct(self, x, weight_ct):
+        if not self.poly_seed_layout:
+            return super().call_bsgs_param_ct(x, weight_ct)
+        layout = self.poly_seed_layout
+
+        def get_weight(degree, channel_group):
+            if not layout['packed_degrees'][degree]:
+                return materialize_encrypted_param(weight_ct[degree][channel_group], x[channel_group])
+            q, s = divmod(channel_group, layout['group_size'])
+            seed = materialize_encrypted_param(weight_ct[degree][q], x[channel_group])
+            mask = CkksPlaintextNode(f'{seed.id}_mask_{s}', is_ringt=True, scale=float(get_fhe_param().q[layout['use_site_levels'][degree] + 1]), level=0)
+            custom_compute(inputs=[], output=mask, type='encode_pt', attributes={
+                'op_class': op_class, 'type': 'seed_mask_pt', 'mask_kind': 'subgrid',
+                'seed_shape': layout['input_shape'], 'seed_skip': self.skip, 'seed_blocks': layout['blocks'],
+                'seed_a': layout['stride'][0], 'seed_b': layout['stride'][1],
+                'seed_step': [0, 0], 'subgrid': s, 'degree': degree,
+                'level': layout['use_site_levels'][degree] + 1,
+            })
+            return restore_subgrid(seed, mask, layout['input_shape'], self.skip, layout['stride'], s)
+
+        return self._run_bsgs_core_param_ct(x, get_weight)
+
+    def get_fhe_op_count(self, n_ct, level):
+        ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0},
+                          super().get_fhe_op_count(n_ct, level))
+        if self.poly_seed_layout:
+            copies = sum(a.bit_length() - 1 for a in self.poly_seed_layout['stride'])
+            for target, packed in zip(self._bsgs_encrypted_coeff_levels(level), self.poly_seed_layout['packed_degrees']):
+                if packed:
+                    ops[target + 1]['mult_plain'] += n_ct
+                    ops[target + 1]['rescale'] += n_ct
+                    ops[target]['rotate'] += n_ct * copies
+                    ops[target]['add'] += n_ct * copies
+        return dict(ops)
 
     def get_fhe_op_count_call(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.
@@ -305,7 +391,10 @@ class PolyRelu2D(PolyReluBase):
                 res = x[i]
                 for order_idx in range(self.order - 1, 0, -1):
                     w_pt = CkksPlaintextNode(
-                        f'encode_pt_{lid}_{order_idx}_{i}', is_ringt=True, scale=scales[order_idx]
+                        f'encode_pt_{lid}_{order_idx}_{i}',
+                        is_ringt=True,
+                        scale=scales[order_idx],
+                        level=0,
                     )
                     custom_compute(
                         inputs=[poly_data_source],
@@ -324,7 +413,7 @@ class PolyRelu2D(PolyReluBase):
                     if res.metadata.level < x[i].metadata.level:
                         x[i] = drop_level(x[i], x[i].metadata.level - res.metadata.level)
                     res = rescale(relin(mult(res, x[i])))
-                w_pt = CkksPlaintextNode(f'encode_pt_{lid}_{0}_{i}', is_ringt=True, scale=scales[0])
+                w_pt = CkksPlaintextNode(f'encode_pt_{lid}_{0}_{i}', is_ringt=True, scale=scales[0], level=0)
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,
@@ -342,7 +431,7 @@ class PolyRelu2D(PolyReluBase):
             result = [0 for i in range(len(x))]
             for x_idx in range(len(x)):
                 if self.order <= 1:
-                    w_pt_1 = CkksPlaintextNode(f'encode_pt_{1}_{x_idx}', is_ringt=True)
+                    w_pt_1 = CkksPlaintextNode(f'{poly_data_source.id}/encode_pt_{1}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[1], level=0)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_1,
@@ -355,7 +444,7 @@ class PolyRelu2D(PolyReluBase):
                         },
                     )
                     res = rescale(mult(x[x_idx], w_pt_1))
-                    w_pt_0 = CkksPlaintextNode(f'encode_pt_{0}_{x_idx}', is_ringt=True)
+                    w_pt_0 = CkksPlaintextNode(f'{poly_data_source.id}/encode_pt_{0}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[0], level=0)
                     custom_compute(
                         inputs=[poly_data_source],
                         output=w_pt_0,
@@ -404,7 +493,10 @@ class PolyRelu2D(PolyReluBase):
                             if baby_step == 0:
                                 has_coeff0 = True
                                 w_pt = CkksPlaintextNode(
-                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}', is_ringt=True, scale=scales[coeff_idx]
+                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}',
+                                    is_ringt=True,
+                                    scale=scales[coeff_idx],
+                                    level=0,
                                 )
                                 custom_compute(
                                     inputs=[poly_data_source],
@@ -426,7 +518,10 @@ class PolyRelu2D(PolyReluBase):
                                     x_copy = drop_level(x_copy, x_copy.metadata.level - target_level)
 
                                 w_pt = CkksPlaintextNode(
-                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}', is_ringt=True, scale=scales[coeff_idx]
+                                    f'encode_pt_{lid}_{coeff_idx}_{x_idx}',
+                                    is_ringt=True,
+                                    scale=scales[coeff_idx],
+                                    level=0,
                                 )
                                 custom_compute(
                                     inputs=[poly_data_source],
@@ -493,7 +588,10 @@ class PolyRelu2D(PolyReluBase):
             if key not in weight_cache:
                 scales = coeff_scales(x[x_idx].metadata.level)
                 w_pt = CkksPlaintextNode(
-                    f'encode_pt_{lid}_{idx}_{x_idx}', is_ringt=True, scale=scales[idx]
+                    f'encode_pt_{lid}_{idx}_{x_idx}',
+                    is_ringt=True,
+                    scale=scales[idx],
+                    level=0,
                 )
                 custom_compute(
                     inputs=[poly_data_source],

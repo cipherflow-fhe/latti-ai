@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import numpy as np
 
-import inference.lattisense.frontend.custom_task as custom_task
+import frontend.custom_task as custom_task
 from inference.model_generator.layers import poly2d, poly_maxpool2d_layer as reduction
 from inference.model_generator.layers import poly_maxpool_stages as stages
 from inference.unittests.test_interleaved_maxpool_reduction import Cipher

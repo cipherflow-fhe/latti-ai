@@ -20,7 +20,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 
 op_class = 'ParLowerDiagCCMM'
@@ -218,7 +218,7 @@ class ParLowerDiagCCMM:
         replication_count = self.m if self.is_kqt else self.n
         replication_mask_pt = []
         for ell in range(min(self.c, replication_count)):
-            node = CkksPlaintextNode(f'encode_pt_replication_mask_{ell}', is_ringt=True)
+            node = CkksPlaintextNode(f'{data_source.id}/encode_pt_replication_mask_{ell}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -234,7 +234,7 @@ class ParLowerDiagCCMM:
                 for ell in range(self.m):
                     route_ell = []
                     for mask_idx in range(4):
-                        node = CkksPlaintextNode(f'encode_pt_kqt_route_{j}_{ell}_{mask_idx}', is_ringt=True)
+                        node = CkksPlaintextNode(f'{data_source.id}/encode_pt_kqt_route_{j}_{ell}_{mask_idx}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 1]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 2]), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=node,
@@ -256,7 +256,7 @@ class ParLowerDiagCCMM:
         for ell in range(self.n):
             route_ell = []
             for mask_idx in range(4):
-                node = CkksPlaintextNode(f'encode_pt_ordinary_route_{ell}_{mask_idx}', is_ringt=True)
+                node = CkksPlaintextNode(f'{data_source.id}/encode_pt_ordinary_route_{ell}_{mask_idx}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 1]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 2]), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,

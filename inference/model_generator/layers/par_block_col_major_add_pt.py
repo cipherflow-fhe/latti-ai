@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add
 
 
 op_class = 'ParBlockColMajorAddPt'
@@ -52,7 +53,7 @@ class ParBlockColMajorAddPt:
             shape:      (m, total_dim) — full matrix shape.
             block_size: d, block size.
             n_heads:    number of interleaved heads.
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
         """
         self.m = shape[0]
         total_dim = shape[1]
@@ -109,7 +110,7 @@ class ParBlockColMajorAddPt:
         for bj in range(self.num_block_cols):
             for bi in range(self.num_block_rows):
                 for g in range(self.G):
-                    pt_node = CkksPlaintextNode(f'encode_pt_{bi}_{bj}_{g}', is_ringt=True)
+                    pt_node = CkksPlaintextNode(f'encode_pt_{bi}_{bj}_{g}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                     custom_compute(
                         inputs=[data_source],
                         output=pt_node,

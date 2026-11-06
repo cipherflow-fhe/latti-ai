@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
 
 
 def _next_pow2(n: int) -> int:
@@ -61,11 +62,11 @@ class _ParUpperDiagonalSoftmaxBase:
         assert self.m % self.c == 0
         self.total_cts = self.m // self.c
 
-    def _make_pt_per_ct(self, data_source, pt_type: str) -> list:
+    def _make_pt_per_ct(self, data_source, pt_type: str, *, level: int) -> list:
         pts = [None] * self.total_cts
         source_id = getattr(data_source, 'id', self.op_class)
         for ct_idx in range(self.total_cts):
-            node = CkksPlaintextNode(f'encode_pt_{source_id}_{pt_type}_{ct_idx}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_{source_id}_{pt_type}_{ct_idx}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': pt_type}, [level, level], get_fhe_param()), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -108,7 +109,7 @@ class ParUpperDiagonalAddPt(_ParUpperDiagonalSoftmaxBase):
         return [add(input_cts[idx], pt[idx]) for idx in range(self.total_cts)]
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        return self.call(input_cts, self._make_pt_per_ct(data_source, 'pt'))
+        return self.call(input_cts, self._make_pt_per_ct(data_source, 'pt', level=input_cts[0].metadata.level))
 
     def get_fhe_op_count(self, level: int | None = None) -> dict:
         ops = self._empty_op_count()
@@ -132,7 +133,7 @@ class ParUpperDiagonalMultipleSquare(_ParUpperDiagonalSoftmaxBase):
         return result
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        return self.call(input_cts, self._make_pt_per_ct(data_source, 'mask_pt'))
+        return self.call(input_cts, self._make_pt_per_ct(data_source, 'mask_pt', level=input_cts[0].metadata.level))
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()
@@ -163,7 +164,7 @@ class ParUpperDiagonalHeadColSum(_ParUpperDiagonalSoftmaxBase):
         return [rescale(mult(head_sum, mask_pt[idx])) for idx in range(self.total_cts)]
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        return self.call(input_cts, self._make_pt_per_ct(data_source, 'mask_pt'))
+        return self.call(input_cts, self._make_pt_per_ct(data_source, 'mask_pt', level=input_cts[0].metadata.level))
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()
@@ -192,7 +193,7 @@ class ParUpperDiagonalInverseInit(_ParUpperDiagonalSoftmaxBase):
         return result
 
     def call_custom_compute(self, b_cts: list, data_source) -> list:
-        return self.call(b_cts, self._make_pt_per_ct(data_source, 'two_pt'))
+        return self.call(b_cts, self._make_pt_per_ct(data_source, 'two_pt', level=b_cts[0].metadata.level))
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()
@@ -222,8 +223,8 @@ class ParUpperDiagonalInverseIter(_ParUpperDiagonalSoftmaxBase):
         return result
 
     def call_custom_compute(self, a_cts: list, b_cts: list, data_source) -> list:
-        one_pt = self._make_pt_per_ct(data_source, 'one_pt')
-        two_pt = self._make_pt_per_ct(data_source, 'two_pt')
+        one_pt = self._make_pt_per_ct(data_source, 'one_pt', level=a_cts[0].metadata.level)
+        two_pt = self._make_pt_per_ct(data_source, 'two_pt', level=a_cts[0].metadata.level)
         return self.call(a_cts, b_cts, one_pt, two_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
@@ -258,7 +259,7 @@ class ParUpperDiagonalGELU(_ParUpperDiagonalSoftmaxBase):
         return result
 
     def call_custom_compute(self, a_cts: list, b_cts: list, data_source) -> list:
-        return self.call(a_cts, b_cts, self._make_pt_per_ct(data_source, 'mask_pt'))
+        return self.call(a_cts, b_cts, self._make_pt_per_ct(data_source, 'mask_pt', level=a_cts[0].metadata.level))
 
     def get_fhe_op_count(self, level: int) -> dict:
         ops = self._empty_op_count()

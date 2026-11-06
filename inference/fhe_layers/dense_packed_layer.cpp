@@ -17,6 +17,7 @@
  */
 
 #include "dense_packed_layer.h"
+#include "interleaved_seed.h"
 #include "conv2d_layer.h"
 #include "layer_util.h"
 #include "util.h"
@@ -79,6 +80,12 @@ void DensePackedLayer::prepare_weight_0d_skip_lazy(uint32_t skip_0d) {
     bsgs_bs = (uint32_t)ceil(sqrt((double)n_channel_per_ct));
     bsgs_gs = div_ceil(n_channel_per_ct, bsgs_bs);
 
+    // A single 0D feature occupies slot zero; the remaining slots are sparse tiles.
+    if (normal_dense && n_channel_per_ct == 1 && skip_0d == param_.max_slots()) {
+        prepare_weight_for_2d_multiplexed_lazy({1, 1}, {1, skip_0d}, {1, skip_0d});
+        normal_dense = true;
+    }
+
     if (!normal_dense) {
         modified_scale = modified_scale * ENC_TO_SHARE_SCALE / param_.default_scale();
     }
@@ -137,8 +144,8 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
     input_shape_ct_mult[0] = special_input_shape[0] * special_skip[0];
     input_shape_ct_mult[1] = special_input_shape[1] * special_skip[1];
-    N_half = ctx.parameter().max_slots();
-    n_block_per_ct = div_ceil(N_half, input_shape_ct_mult[0] * input_shape_ct_mult[1]);
+    n_real_num_slot = ctx.parameter().max_slots();
+    n_block_per_ct = div_ceil(n_real_num_slot, input_shape_ct_mult[0] * input_shape_ct_mult[1]);
     int valid_skip_0 = special_skip[0] / invalid_fill_in[0];
     int valid_skip_1 = special_skip[1] / invalid_fill_in[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
@@ -149,14 +156,20 @@ void DensePackedLayer::prepare_weight_for_2d_multiplexed_lazy(const Duo& input_s
 CkksPlaintext DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksContext& ctx,
                                                                               int packed_out_feature_idx,
                                                                               int n_block_input_idx) const {
+    return fhe_api::encode_ringt(ctx, generate_weight_values_mult_pack(packed_out_feature_idx, n_block_input_idx), modified_scale);
+}
+
+vector<double> DensePackedLayer::generate_weight_values_mult_pack(int packed_out_feature_idx, int n_block_input_idx) const {
+    if (packed_out_feature_idx < 0 || packed_out_feature_idx >= static_cast<int>(div_ceil(n_out_feature, n_block_per_ct)) ||
+        n_block_input_idx < 0 || n_block_input_idx >= n_block_input) throw std::out_of_range("dense weight index");
     int valid_skip_0 = special_skip[0] / special_invalid_fill[0];
     int valid_skip_1 = special_skip[1] / special_invalid_fill[1];
     int n_channel_per_block = valid_skip_0 * valid_skip_1;
     int n_channel_per_block_col = valid_skip_1;
     int spatial_size = special_input_shape[0] * special_input_shape[1];
 
-    vector<double> w(N_half, 0);
-    for (int i = 0; i < N_half; i++) {
+    vector<double> w(n_real_num_slot, 0);
+    for (int i = 0; i < n_real_num_slot; i++) {
         int block_i = packed_out_feature_idx * n_block_per_ct + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1]);
         int shape_linear = i % (input_shape_ct_mult[0] * input_shape_ct_mult[1]);
         int shape_i = shape_linear / input_shape_ct_mult[1];
@@ -180,13 +193,19 @@ CkksPlaintext DensePackedLayer::generate_weight_pt_mult_pack_for_indices(CkksCon
             }
         }
     }
-    return fhe_api::encode_ringt(ctx, w, modified_scale);
+    return w;
 }
 
 CkksPlaintext DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksContext& ctx,
                                                                           int packed_out_feature_idx) const {
-    vector<double> b(N_half, 0);
-    for (int i = 0; i < N_half; i++) {
+    return fhe_api::encode_ringt(ctx, generate_bias_values_mult_pack(packed_out_feature_idx), ctx.parameter().default_scale());
+}
+
+vector<double> DensePackedLayer::generate_bias_values_mult_pack(int packed_out_feature_idx) const {
+    if (packed_out_feature_idx < 0 || packed_out_feature_idx >= static_cast<int>(div_ceil(n_out_feature, n_block_per_ct)))
+        throw std::out_of_range("dense bias index");
+    vector<double> b(n_real_num_slot, 0);
+    for (int i = 0; i < n_real_num_slot; i++) {
         int block_i = packed_out_feature_idx * n_block_per_ct + i / (input_shape_ct_mult[0] * input_shape_ct_mult[1]);
         int shape_linear = i % (input_shape_ct_mult[0] * input_shape_ct_mult[1]);
         int shape_i = shape_linear / input_shape_ct_mult[1];
@@ -195,7 +214,27 @@ CkksPlaintext DensePackedLayer::generate_bias_pt_mult_pack_for_index(CkksContext
             b[i] = bias.get(block_i);
         }
     }
-    return fhe_api::encode_ringt(ctx, b, ctx.parameter().default_scale());
+    return b;
+}
+
+CkksPlaintext DensePackedLayer::generate_tile_seed(CkksContext& ctx, uint32_t seed_index, bool bias_seed) const {
+    if ((normal_dense && n_channel_per_ct != 1) || is_1d_multiplexed || n_block_per_ct <= 0) throw std::invalid_argument("dense tile seed requires sparse 2D geometry");
+    const uint32_t outputs = div_ceil(n_out_feature, n_block_per_ct);
+    auto values = interleaved_seed::pack_tiles(outputs * (bias_seed ? 1 : n_block_input), seed_index,
+        special_input_shape, special_skip, special_invalid_fill, n_real_num_slot, [&](uint32_t request) {
+            return bias_seed ? generate_bias_values_mult_pack(request) :
+                generate_weight_values_mult_pack(request / n_block_input, request % n_block_input);
+        });
+    return fhe_api::encode_ringt(ctx, values, bias_seed ? param_.default_scale() : modified_scale);
+}
+
+void DensePackedLayer::validate_tile_geometry(const Duo& shape, const Duo& skip_in, const Duo& invalid_fill,
+                                               uint32_t slots, const Duo& weight_shape, int use_site_level) const {
+    if ((normal_dense && n_channel_per_ct != 1) || is_1d_multiplexed || n_block_per_ct <= 0 || shape != special_input_shape ||
+        skip_in != special_skip || invalid_fill != special_invalid_fill || slots != static_cast<uint32_t>(n_real_num_slot) ||
+        weight_shape != Duo{div_ceil(n_out_feature, n_block_per_ct), static_cast<uint32_t>(n_block_input)} ||
+        use_site_level != static_cast<int>(level_)) throw std::invalid_argument("dense tile metadata does not match layer");
+    interleaved_seed::tile_mask(shape, skip_in, invalid_fill, slots, 0, false);
 }
 
 void DensePackedLayer::prepare_weight_for_2d_multiplexed(const Duo& input_shape_in,
@@ -446,8 +485,8 @@ DensePackedLayer::generate_weight_pt_1d_mult_for_indices(CkksContext& ctx, int o
     int group = rot_idx / n_block_per_ct_1d;
     int offset = rot_idx % n_block_per_ct_1d;
 
-    vector<double> w(N_half, 0.0);
-    for (int i = 0; i < N_half; i++) {
+    vector<double> w(n_real_num_slot, 0.0);
+    for (int i = 0; i < n_real_num_slot; i++) {
         int local_block = i / (int)block_size;
         int pos_in_block = i % (int)block_size;
         int data_idx = pos_in_block / (int)block_stride;
@@ -475,7 +514,7 @@ CkksPlaintext DensePackedLayer::generate_bias_pt_1d_mult_for_index(CkksContext& 
     uint32_t block_stride = skip_1d;
     uint32_t block_size = input_shape_1d * block_stride;
 
-    vector<double> b(N_half, 0.0);
+    vector<double> b(n_real_num_slot, 0.0);
     for (int local_block = 0; local_block < n_block_per_ct_1d; local_block++) {
         int out_ch = out_group * n_block_per_ct_1d + local_block;
         if (out_ch < n_out_feature) {
@@ -494,12 +533,12 @@ void DensePackedLayer::prepare_weight_for_1d_multiplexed_lazy(uint32_t input_sha
     invalid_fill_1d = invalid_fill_in;
 
     CkksContext ctx = CkksContext::create_empty_context(this->param_);
-    N_half = ctx.parameter().max_slots();
+    n_real_num_slot = ctx.parameter().max_slots();
 
     uint32_t block_stride = skip_1d;
     uint32_t block_size = input_shape_1d * block_stride;
 
-    int n_blocks = N_half / (int)block_size;
+    int n_blocks = n_real_num_slot / (int)block_size;
     int valid_sub = (int)skip_1d / (int)invalid_fill_1d;
     int n_valid_per_ct_1d = n_blocks * valid_sub;
     n_block_per_ct_1d = n_blocks;

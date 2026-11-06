@@ -33,7 +33,7 @@ ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParamet
                                                                uint32_t n_heads,
                                                                uint32_t K,
                                                                uint32_t init_level,
-                                                               Array<double, 1>&& gamma)
+                                                               Array<double, 1>&& gamma, Duo head_shape)
     : Layer(param), gamma_vals_(move(gamma)) {
     level_ = init_level;
     m_ = shape[0];
@@ -42,9 +42,10 @@ ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParamet
     n_heads_ = n_heads;
     K_ = K;
     assert(K_ > 0);
-    assert(total_dim_ % (K_ * n_heads_) == 0);
+    assert(head_shape[1] || total_dim_ == 1 || total_dim_ % (K_ * n_heads_) == 0);
     assert(gamma_vals_.get_shape()[0] >= total_dim_);
-    cols_per_head_ = total_dim_ / (K_ * n_heads_);
+    cols_per_head_ = head_shape[1] ? head_shape[1] : max(1u, total_dim_ / (K_ * n_heads_));
+    K_ = div_ceil(total_dim_, n_heads_ * cols_per_head_);
     n_h_padded_ = next_pow2(n_heads);
     n_slot_ = param_.max_slots();
     assert(n_slot_ >= d_ * d_ && "n_slot must be at least d*d");
@@ -62,6 +63,10 @@ ParBlockColMajorPolyActRNGamma::ParBlockColMajorPolyActRNGamma(const CkksParamet
         }
         n_cts_per_block_idx_ = n_h_padded_ / S_;
     }
+    if (total_dim_ == 1) {
+        n_cts_per_block_idx_ = 1;
+        cols_per_head_ = d_;
+    }
     num_chunks_ = n_slot_ / chunk_size_;
     num_block_rows_ = div_ceil(m_, d_);
     num_block_cols_ = div_ceil(cols_per_head_, d_);
@@ -73,6 +78,9 @@ CkksPlaintext ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx
                                                                      uint32_t bj,
                                                                      uint32_t g) const {
     double q_L = param_.q()[level_];
+    if (total_dim_ == 1) {
+        return fhe_api::encode_ringt(ctx, vector<double>(n_slot_, gamma_vals_.get(0)), q_L);
+    }
     vector<double> gamma_vec(n_slot_, 0.0);
     for (uint32_t h_local = 0; h_local < S_; h_local++) {
         uint32_t h = g * S_ + h_local;
@@ -85,7 +93,8 @@ CkksPlaintext ParBlockColMajorPolyActRNGamma::generate_gamma_pt(CkksContext& ctx
                     uint32_t slot = ci * chunk_size_ + base_slot;
                     if (actual_row < m_ && h < n_heads_ && actual_col < cols_per_head_) {
                         uint32_t global_col = mb * n_heads_ * cols_per_head_ + h * cols_per_head_ + actual_col;
-                        gamma_vec[slot] = gamma_vals_.get(global_col);
+                        if (global_col < total_dim_)
+                            gamma_vec[slot] = gamma_vals_.get(global_col);
                     }
                 }
             }

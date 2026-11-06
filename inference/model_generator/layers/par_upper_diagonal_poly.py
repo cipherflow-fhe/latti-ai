@@ -22,8 +22,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
-from inference.model_generator.layers.poly_base import PolyBase
+from frontend.custom_task import *
+from inference.model_generator.layers.mat_poly_base import MatPolyBase
 
 
 op_class = 'ParUpperDiagonalPoly'
@@ -50,7 +50,7 @@ class _StockmeyerNode:
     const_only: bool = False
 
 
-class ParUpperDiagonalPoly(PolyBase):
+class ParUpperDiagonalPoly(MatPolyBase):
     """Python model-generator counterpart of C++ ParUpperDiagonalPoly."""
 
     def __init__(self, shape: tuple, head_shape: tuple, n_heads: int, n_slot: int, order: int):
@@ -269,7 +269,7 @@ class ParUpperDiagonalPoly(PolyBase):
             for mb in range(self.n_mb):
                 for ct_local in range(self.cts_per_mb):
                     ct_idx = self._ct_index(mb, ct_local)
-                    node = CkksPlaintextNode(f'encode_pt_upper_poly_c{coeff_idx}_{mb}_{ct_local}', is_ringt=True)
+                    node = CkksPlaintextNode(f'{data_source.id}/encode_pt_upper_poly_c{coeff_idx}_{mb}_{ct_local}', is_ringt=True, scale=self.cached_stockmeyer_coeff_scale[coeff_idx], level=0)
                     custom_compute(
                         inputs=[data_source],
                         output=node,

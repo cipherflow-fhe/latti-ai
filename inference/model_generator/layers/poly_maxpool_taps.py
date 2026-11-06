@@ -3,7 +3,7 @@
 import math
 import numpy as np
 
-from inference.lattisense.frontend.custom_task import (
+from frontend.custom_task import (
     add, mult, rescale, rotate_cols,
 )
 

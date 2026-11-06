@@ -68,5 +68,6 @@ enable_testing()
 
 add_subdirectory(inference)
 add_subdirectory(examples)
+add_subdirectory(tools)
 
 add_definitions(-w)

@@ -21,6 +21,11 @@
 using namespace std;
 using namespace lattisense;
 
+CkksPlaintext Avgpool2DLayer::normalization_pt(CkksContext& ctx, uint32_t divisor, uint32_t level) {
+    return fhe_api::encode_ringt(ctx, vector<double>(ctx.parameter().max_slots(), 1.0 / divisor),
+                                 ctx.parameter().q()[level]);
+}
+
 Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_block_per_ct(0) {
     shape[0] = shape_in[0];
     shape[1] = shape_in[1];
@@ -38,22 +43,23 @@ Avgpool2DLayer::Avgpool2DLayer(const Duo& shape_in, const Duo& stride_in) : n_bl
 }
 
 Feature2DEncrypted Avgpool2DLayer::run(CkksContext& ctx, const Feature2DEncrypted& x) {
-    Feature2DEncrypted result(&ctx, x.level);
+    Feature2DEncrypted result(&ctx, x.level - 1);
+    const auto mean_pt = normalization_pt(ctx, stride[0] * stride[1], x.level);
     int x_size = x.data.size();
     result.data.resize(x_size);
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int ct_idx) {
         CkksCiphertext y = x.data[ct_idx].copy();
         for (int j = 1; j < stride[0]; j++) {
-            y = ctx_copy.add(y, ctx_copy.rotate(x.data[ct_idx], j * shape[0]));
+            y = ctx_copy.add(y, ctx_copy.rotate(x.data[ct_idx], j * shape[1]));
         }
-        int step = stride[0];
+        int step = stride[1];
         CkksCiphertext r;
         while (step > 1) {
             r = ctx_copy.rotate(y, step / 2);
             y = ctx_copy.add(y, r);
             step = step / 2;
         }
-        result.data[ct_idx] = move(y);
+        result.data[ct_idx] = ctx_copy.rescale(ctx_copy.mult(y, mean_pt));
     });
 
     result.n_channel = x.n_channel;
@@ -62,12 +68,13 @@ Feature2DEncrypted Avgpool2DLayer::run(CkksContext& ctx, const Feature2DEncrypte
     result.shape[1] = x.shape[1] / stride[1];
     result.skip[0] = x.skip[0] * stride[0];
     result.skip[1] = x.skip[1] * stride[1];
-    result.level = x.level;
+    result.level = x.level - 1;
     return result;
 }
 
 Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const Feature2DEncrypted& x) {
-    Feature2DEncrypted result(&ctx, x.level);
+    Feature2DEncrypted result(&ctx, x.level - 1);
+    const auto mean_pt = normalization_pt(ctx, stride[0] * stride[1], x.level);
     int x_size = x.data.size();
     result.data.resize(x_size);
     Duo skip = x.skip;
@@ -78,13 +85,14 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     parallel_for(x_size, th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
         result.data[idx] = x.data[idx].copy();
         for (int i = log2_stride_0 - 1; i >= 0; --i) {
-            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, i) * shape[0] * skip[0] * skip[1]);
+            auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, i) * shape[1] * skip[0] * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
         }
         for (int j = log2_stride_1 - 1; j >= 0; --j) {
             auto ct_tmp = ctx_copy.rotate(result.data[idx], (int)pow(2, j) * skip[1]);
             result.data[idx] = ctx_copy.add(result.data[idx], ct_tmp);
         }
+        result.data[idx] = ctx_copy.rescale(ctx_copy.mult(result.data[idx], mean_pt));
     });
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
@@ -94,7 +102,7 @@ Feature2DEncrypted Avgpool2DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
     result.invalid_fill[1] = x.invalid_fill[1] * stride[1];
     result.shape[0] = x.shape[0] / stride[0];
     result.shape[1] = x.shape[1] / stride[1];
-    result.level = x.level;
+    result.level = x.level - 1;
     return result;
 }
 
@@ -169,12 +177,12 @@ void Avgpool2DLayer::prepare_weight_repack(const CkksParameter& param_in,
     n_channel_ = n_channel;
     block_shape = block_shape_in;
 
-    // Generate repack mask: 1.0 at every second_stage_stride position within block
-    int N = ctx.parameter().n();
-    vector<double> mask_vec(N, 0.0);
+    // Select and normalize once at every second_stage_stride position within block.
+    int n_real_num_slot = ctx.parameter().max_slots();
+    vector<double> mask_vec(n_real_num_slot, 0.0);
     for (uint32_t row = 0; row < block_shape[0]; row += second_stage_stride[0]) {
         for (uint32_t col = 0; col < block_shape[1]; col += second_stage_stride[1]) {
-            mask_vec[row * block_shape[1] + col] = 1.0;
+            mask_vec[row * block_shape[1] + col] = 1.0 / (stride[0] * stride[1]);
         }
     }
     repack_mask_pt = fhe_api::encode_ringt(ctx, mask_vec, ctx.parameter().q()[level]);
@@ -259,7 +267,7 @@ Feature2DEncrypted Avgpool2DLayer::run_multiplexed_avgpool(CkksContext& ctx, con
 
 Feature2DEncrypted
 Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x, const Duo block_expansion) {
-    int N = ctx.parameter().n();
+    int n_real_num_slot = ctx.parameter().max_slots();
     uint32_t x_size = x.data.size();
 
     // Determine first_stage_stride and second_stage_stride
@@ -321,7 +329,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
         uint32_t out_skip0 = second_stage_stride[0];
         uint32_t out_skip1 = second_stage_stride[1];
         uint32_t n_channel_per_block = out_skip0 * out_skip1;
-        uint32_t n_block_per_ct_out = (N) / (block_shape[0] * block_shape[1]);
+        uint32_t n_block_per_ct_out = (n_real_num_slot) / (block_shape[0] * block_shape[1]);
         uint32_t n_channel_per_ct_repack = n_channel_per_block * n_block_per_ct_out;
         uint32_t n_out_ct = div_ceil(n_channel_, n_channel_per_ct_repack);
 
@@ -382,8 +390,8 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
     int output_w = shape[1] / stride[1];
 
     int n_channel_per_ct_out;
-    if (2 * output_h * output_w < N) {
-        n_channel_per_ct_out = N / (2 * output_h * output_w);
+    if (2 * output_h * output_w < n_real_num_slot) {
+        n_channel_per_ct_out = n_real_num_slot / (2 * output_h * output_w);
     } else {
         n_channel_per_ct_out = 1;
     }
@@ -405,7 +413,11 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
         }
     }
 
-    Feature2DEncrypted result(&ctx, x.level);
+    const auto mean_pt = normalization_pt(ctx, stride[0] * stride[1], x.level);
+    parallel_for(packed_res.size(), th_nums, ctx, [&](CkksContext& ctx_copy, int idx) {
+        packed_res[idx] = ctx_copy.rescale(ctx_copy.mult(packed_res[idx], mean_pt));
+    });
+    Feature2DEncrypted result(&ctx, x.level - 1);
     result.data = move(packed_res);
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = n_channel_per_ct_out;
@@ -413,7 +425,7 @@ Avgpool2DLayer::run_split_avgpool(CkksContext& ctx, const Feature2DEncrypted& x,
     result.skip[1] = 1;
     result.shape[0] = output_h;
     result.shape[1] = output_w;
-    result.level = x.level;
+    result.level = x.level - 1;
     return result;
 }
 
@@ -435,7 +447,7 @@ Array<double, 3> Avgpool2DLayer::run_plaintext(const Array<double, 3>& x) {
                         sum += x.get(idx, m, n);
                     }
                 }
-                result.set(idx, i, j, sum);
+                result.set(idx, i, j, sum / (stride[0] * stride[1]));
             }
         }
     }

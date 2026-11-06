@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 op_class = 'BlockColMajorCPMM'
 
@@ -44,7 +44,7 @@ class BlockColMajorCPMM:
             shape_A:    (m, n) -- shape of matrix A.
             shape_B:    (n, p) -- shape of matrix B.
             block_size: d, block size (must satisfy d^2 | n_slot).
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
         """
         m, n = shape_A
         n2, p = shape_B
@@ -80,7 +80,7 @@ class BlockColMajorCPMM:
     #  Plaintext node creation                                            #
     # ------------------------------------------------------------------ #
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Create pre-declared plaintext nodes for B diagonals.
 
         Returns:
@@ -92,7 +92,7 @@ class BlockColMajorCPMM:
         for bp in range(self.num_block_cols_B):
             for bj in range(self.num_block_rows_B):
                 b_idx = self._block_index(bj, bp, self.num_block_rows_B)
-                diag_pt[b_idx] = [CkksPlaintextNode(f'cpmm_diag_{layer_id}_{bj}_{bp}_{k}', is_ringt=True) for k in range(self.d)]
+                diag_pt[b_idx] = [CkksPlaintextNode(f'cpmm_diag_{layer_id}_{bj}_{bp}_{k}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for k in range(self.d)]
         return diag_pt
 
     # ------------------------------------------------------------------ #
@@ -180,7 +180,7 @@ class BlockColMajorCPMM:
                 b_idx = self._block_index(bj, bp, self.num_block_rows_B)
                 diag_pt_b = []
                 for k in range(d):
-                    node = CkksPlaintextNode(f'encode_pt_{bj}_{bp}_{k}', is_ringt=True)
+                    node = CkksPlaintextNode(f'encode_pt_{bj}_{bp}_{k}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
                     custom_compute(
                         inputs=[data_source],
                         output=node,

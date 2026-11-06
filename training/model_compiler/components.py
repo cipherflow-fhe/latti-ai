@@ -46,6 +46,8 @@ import math
 import networkx as nx
 import os
 
+from inference.model_generator.parameter_sources import pcm_parameter_sources
+
 
 class FheParameter:
     def __init__(
@@ -209,19 +211,18 @@ class GlobalConfig:
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.set_btp_scale = None
-            cls._instance.bert_softmax_values_btp_scale = 512.0
-            cls._instance.bert_softmax_denominator_btp_scale = 16.0
-            cls._instance.bert_softmax_scaled_denominator_btp_scale = 16.0
-            cls._instance.bert_softmax_inverse_btp_scale = 0.125
+            cls._instance.bert_softmax_values_btp_scale = 1.0
+            cls._instance.bert_softmax_denominator_btp_scale = 1.0
+            cls._instance.bert_softmax_scaled_denominator_btp_scale = 1.0
+            cls._instance.bert_softmax_inverse_btp_scale = 1.0
             cls._instance.bert_layernorm_inverse_btp_scale = config_dict.get(
                 'BERT_LAYERNORM_INVERSE_BTP_SCALE',
                 config_dict.get('bert_layernorm_inverse_btp_scale', 0.125),
             )
             cls._instance.bert_softmax_initial_denominator_scale = 512.0
             cls._instance.bert_softmax_wide_initial_denominator_scale = 65536.0
-            cls._instance.bert_softmax_use_wide_inverse_epsilon = 1.0
-            cls._instance.bert_softmax_first_refinement_denominator_scale = 2.0
-            cls._instance.bert_softmax_later_refinement_denominator_scale = 1.0
+            cls._instance.bert_softmax_first_refinement_denominator_scale = 512.0
+            cls._instance.bert_softmax_later_refinement_denominator_scale = 512.0
             cls._instance.absorbable_layers = ['conv2d', 'fc0', 'fc1', 'mult_scalar', 'polyact']
             cls._instance.single_thread = config_dict.get('SINGLE_THREAD', False)
             cls._instance.n_heads = 1
@@ -763,6 +764,7 @@ class LayerAbstractGraph:
                 compute_node.bias_path = layer_json.get('bias_path', '')
                 compute_node.weight_multiplier = layer_json.get('weight_multiplier')
                 compute_node.bias_multiplier = layer_json.get('bias_multiplier')
+                compute_node.weight_transposed = layer_json.get('weight_transposed', False)
                 compute_node.fuse_gama_info = layer_json.get('fuse_gama_info')
                 compute_node.to_expand = layer_json.get('to_expand', False)
 
@@ -771,6 +773,7 @@ class LayerAbstractGraph:
                 compute_node.path = layer_json.get('weight_path', layer_json.get('bias_path', ''))
                 compute_node.bias_path = layer_json.get('bias_path', '')
                 compute_node.source_op_type = layer_json.get('source_op_type', '')
+                compute_node.value = layer_json.get('value')
 
             elif layer_type in ('partranspose', 'pdmtranspose'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -780,11 +783,17 @@ class LayerAbstractGraph:
 
             elif layer_type in (
                 'pdmupperaddpt',
+                'pcmmulsquare',
                 'pdmmulsquare',
+                'pcmheadcolsum',
                 'pdmheadcolsum',
+                'pcminvinit',
                 'pdminvinit',
+                'pcminviter',
                 'pdminviter',
+                'pcmctmul',
                 'pdmctmul',
+                'pcmpolymultct',
                 'pdmupperpolymultct',
             ):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
@@ -798,7 +807,7 @@ class LayerAbstractGraph:
                 compute_node.btp_scale = layer_json.get('btp_scale')
                 compute_node.scalar_value = layer_json.get('scalar_value')
 
-            elif layer_type == 'pdmupperpoly':
+            elif layer_type in ('pcmgeneralpoly', 'pdmupperpoly'):
                 compute_node = ComputeNode(key, layer_type, 1, 1)
                 compute_node.path = layer_json.get('weight_path', '')
                 compute_node.coeffs_path = layer_json.get('coeffs_path', compute_node.path)
@@ -1018,6 +1027,9 @@ class LayerAbstractGraph:
             else:
                 compute_node = ComputeNode(key, layer_type, channel_input, channel_output)
 
+            compute_node.parameter_sources = pcm_parameter_sources(layer_json)
+            if 'pcm_seed_layout' in layer_json:
+                compute_node.pcm_seed_layout = layer_json['pcm_seed_layout']
             graph_info.dag.add_node(compute_node, name=key)
             for idx, f_node in enumerate(feature_input):
                 graph_info.dag.add_edge(f_node, compute_node, input_index=idx if len(feature_input) > 1 else None)
@@ -1169,6 +1181,10 @@ class LayerAbstractGraph:
                     'absorb_path': absorb_path,
                     'is_big_size': layer.is_big_size,
                 }
+                if hasattr(layer, 'seed_weight_subgrid_stride'):
+                    layers[layer_id]['seed_weight_subgrid_stride'] = layer.seed_weight_subgrid_stride
+                if hasattr(layer, 'seed_weight_layout'):
+                    layers[layer_id]['seed_weight_layout'] = layer.seed_weight_layout
                 if hasattr(layer, 'synthetic_source'):
                     layers[layer_id]['synthetic_source'] = layer.synthetic_source
                     if layer.synthetic_source == 'avgpool1d':
@@ -1235,6 +1251,8 @@ class LayerAbstractGraph:
                 }
                 if layer.bias_path:
                     layers[layer_id]['bias_path'] = layer.bias_path
+                if getattr(layer, 'weight_transposed', False):
+                    layers[layer_id]['weight_transposed'] = True
                 if getattr(layer, 'weight_multiplier', None) is not None:
                     layers[layer_id]['weight_multiplier'] = layer.weight_multiplier
                 if getattr(layer, 'bias_multiplier', None) is not None:
@@ -1254,6 +1272,8 @@ class LayerAbstractGraph:
                     layers[layer_id]['weight_path'] = path
                 else:
                     layers[layer_id]['bias_path'] = path
+                if getattr(layer, 'value', None) is not None:
+                    layers[layer_id]['value'] = layer.value
                 if getattr(layer, 'source_op_type', ''):
                     layers[layer_id]['source_op_type'] = layer.source_op_type
 
@@ -1274,11 +1294,17 @@ class LayerAbstractGraph:
                 }
             if layer_type in (
                 'pdmupperaddpt',
+                'pcmmulsquare',
                 'pdmmulsquare',
+                'pcmheadcolsum',
                 'pdmheadcolsum',
+                'pcminvinit',
                 'pdminvinit',
+                'pcminviter',
                 'pdminviter',
+                'pcmctmul',
                 'pdmctmul',
+                'pcmpolymultct',
                 'pdmupperpolymultct',
             ):
                 edge_indices = {pred: self.dag.edges[pred, layer].get('input_index') for pred in preds}
@@ -1307,7 +1333,7 @@ class LayerAbstractGraph:
                     layers[layer_id]['btp_scale'] = layer.btp_scale
                 if getattr(layer, 'scalar_value', None) is not None:
                     layers[layer_id]['scalar_value'] = layer.scalar_value
-            if layer_type == 'pdmupperpoly':
+            if layer_type in ('pcmgeneralpoly', 'pdmupperpoly'):
                 layers[layer_id] = {
                     'type': layer_type,
                     'feature_input': input_feature_ids,
@@ -1430,6 +1456,8 @@ class LayerAbstractGraph:
                     'absorb_type': absorb_type,
                     'absorb_path': absorb_path,
                 }
+                if hasattr(layer, 'dense_seed_tiles'):
+                    layers[layer_id]['dense_seed_tiles'] = layer.dense_seed_tiles
             if 'batchnorm' in layer_type:
                 layers[layer_id] = {
                     'type': layer_type,
@@ -1529,9 +1557,17 @@ class LayerAbstractGraph:
                 # layers[layer_id]['weight_path'] = layer_id + '.weight'
                 layers[layer_id]['weight_path'] = layer.path
                 layers[layer_id]['zero_skip'] = layer.zero_skip
+                if hasattr(layer, 'poly_seed_layout'):
+                    layers[layer_id]['poly_seed_layout'] = layer.poly_seed_layout
                 layers[layer_id]['is_big_size'] = layer.is_big_size
                 layers[layer_id]['is_absorb_polyrelu'] = IS_ABSORB_POLYRELU
                 layers[layer_id]['style'] = config.style
+            sources = pcm_parameter_sources({**layers[layer_id],
+                                             'parameter_sources': getattr(layer, 'parameter_sources', {})})
+            if sources:
+                layers[layer_id]['parameter_sources'] = sources
+            if hasattr(layer, 'pcm_seed_layout'):
+                layers[layer_id]['pcm_seed_layout'] = layer.pcm_seed_layout
             if 'level_cost' in self.dag.nodes[layer]:
                 layers[layer_id]['level_cost'] = self.dag.nodes[layer]['level_cost']
             if 'polyact' == layer.layer_type:

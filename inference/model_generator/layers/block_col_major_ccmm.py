@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 op_class = 'BlockColMajorCCMM'
 
@@ -45,7 +45,7 @@ class BlockColMajorCCMM:
             shape_A:    (m, n) — shape of matrix A.
             shape_B:    (n, p) — shape of matrix B.
             block_size: d, block size (must satisfy d^2 | n_slot).
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
         """
         m, n = shape_A
         n2, p = shape_B
@@ -82,7 +82,7 @@ class BlockColMajorCCMM:
     #  Plaintext node creation                                            #
     # ------------------------------------------------------------------ #
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Create pre-declared plaintext nodes for sigma, tau, and psi diagonals.
 
         Returns:
@@ -93,11 +93,11 @@ class BlockColMajorCCMM:
             psi_wkd_pt: list of (d-1) nodes for psi i=1..d-1.
         """
         d = self.d
-        sigma_pt = [CkksPlaintextNode(f'ccmm_sigma_{layer_id}_{k}', is_ringt=True) for k in range(d)]
-        tau_pt = [CkksPlaintextNode(f'ccmm_tau_{layer_id}_{idx}', is_ringt=True) for idx in range(2 * d - 1)]
-        psi_k0_pt = CkksPlaintextNode(f'ccmm_psi_k0_{layer_id}', is_ringt=True)
-        psi_wk_pt = [CkksPlaintextNode(f'ccmm_psi_wk_{layer_id}_{i}', is_ringt=True) for i in range(1, d)]
-        psi_wkd_pt = [CkksPlaintextNode(f'ccmm_psi_wkd_{layer_id}_{i}', is_ringt=True) for i in range(1, d)]
+        sigma_pt = [CkksPlaintextNode(f'ccmm_sigma_{layer_id}_{k}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for k in range(d)]
+        tau_pt = [CkksPlaintextNode(f'ccmm_tau_{layer_id}_{idx}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for idx in range(2 * d - 1)]
+        psi_k0_pt = CkksPlaintextNode(f'ccmm_psi_k0_{layer_id}', is_ringt=True, scale=float(get_fhe_param().q[level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[level - 1]), level=0)
+        psi_wk_pt = [CkksPlaintextNode(f'ccmm_psi_wk_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[level - 1]), level=0) for i in range(1, d)]
+        psi_wkd_pt = [CkksPlaintextNode(f'ccmm_psi_wkd_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[level - 1]), level=0) for i in range(1, d)]
         return sigma_pt, tau_pt, psi_k0_pt, psi_wk_pt, psi_wkd_pt
 
     # ------------------------------------------------------------------ #
@@ -221,7 +221,7 @@ class BlockColMajorCCMM:
             attrs = {'op_class': op_class, 'type': key}
             if attrs_extra:
                 attrs.update(attrs_extra)
-            node = CkksPlaintextNode(f'encode_pt_{key}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_{key}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -233,7 +233,7 @@ class BlockColMajorCCMM:
         # sigma: d nodes
         sigma_pt = []
         for k in range(d):
-            node = CkksPlaintextNode(f'encode_pt_sigma_{k}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_sigma_{k}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -245,7 +245,7 @@ class BlockColMajorCCMM:
         # tau: (2d-1) nodes, offset_idx = 0..2d-2 maps to offset -(d-1)..d-1
         tau_pt = []
         for idx in range(2 * d - 1):
-            node = CkksPlaintextNode(f'encode_pt_tau_{idx}', is_ringt=True)
+            node = CkksPlaintextNode(f'encode_pt_tau_{idx}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node,
@@ -255,7 +255,7 @@ class BlockColMajorCCMM:
             tau_pt.append(node)
 
         # psi_k0: single all-ones node
-        psi_k0_pt = CkksPlaintextNode('encode_pt_psi_k0', is_ringt=True)
+        psi_k0_pt = CkksPlaintextNode('encode_pt_psi_k0', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
         custom_compute(
             inputs=[data_source],
             output=psi_k0_pt,
@@ -266,7 +266,7 @@ class BlockColMajorCCMM:
         # psi_wk / psi_wkd: (d-1) nodes each, i=1..d-1
         psi_wk_pt, psi_wkd_pt = [], []
         for i in range(1, d):
-            node_k = CkksPlaintextNode(f'encode_pt_psi_wk_{i}', is_ringt=True)
+            node_k = CkksPlaintextNode(f'encode_pt_psi_wk_{i}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node_k,
@@ -275,7 +275,7 @@ class BlockColMajorCCMM:
             )
             psi_wk_pt.append(node_k)
 
-            node_kd = CkksPlaintextNode(f'encode_pt_psi_wkd_{i}', is_ringt=True)
+            node_kd = CkksPlaintextNode(f'encode_pt_psi_wkd_{i}', is_ringt=True, scale=float(get_fhe_param().q[A_cts[0].metadata.level - 2]) / float(get_fhe_param().default_scale) * float(get_fhe_param().q[A_cts[0].metadata.level - 1]), level=0)
             custom_compute(
                 inputs=[data_source],
                 output=node_kd,

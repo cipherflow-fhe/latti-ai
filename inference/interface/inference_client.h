@@ -36,15 +36,18 @@ struct OutputParam {
     int dim = 0;
     int channel = 0;
     int skip = 1;               // dim=0 only (scalar skip)
+    Duo skip2d = {1, 1};        // dim=2 packing stride
     int height = 0;             // dim=2 only
     int width = 0;              // dim=2 only
     int length = 0;             // dim=1 only
     Duo invalid_fill = {1, 1};  // dim=2 only
     bool is_mat = false;
+    bool select_first_token = false;
     Duo head_shape = {0, 0};
     uint32_t matmul_block_size = 0;
     uint32_t n_heads = 0;
     bool is_transposed = true;
+    int pack_num = 0;  // n_channel_per_ct
 };
 
 /// Per-input parameters read from task_config.json.
@@ -52,10 +55,12 @@ struct InputParam {
     int dim = 0;
     int level = 0;
     int channel = 0;
-    int height = 0;    // dim=2 only
-    int width = 0;     // dim=2 only
-    int length = 0;    // dim=1 only
-    int skip = 1;      // dim=0/1 packing stride
+    int height = 0;  // dim=2 only
+    int width = 0;   // dim=2 only
+    int length = 0;  // dim=1 only
+    int skip = 1;    // dim=0/1 packing stride
+    Duo skip2d = {1, 1};
+    Duo invalid_fill = {1, 1};
     int pack_num = 0;  // n_channel_per_ct
     bool is_mat = false;
     Duo head_shape = {0, 0};
@@ -68,7 +73,7 @@ struct InputParam {
 ///
 /// Holds the secret key and is responsible for:
 /// - Generating the full CKKS key pair
-/// - Exporting a computation-keys-only evaluation context (no SK, no PK) for the server
+/// - Exporting a computation-keys-only evaluation context (no SK) for the server
 /// - Exporting the full context (incl. SK) for client-side persistence
 /// - Encrypting input data
 /// - Decrypting inference results
@@ -98,7 +103,7 @@ public:
     Bytes export_eval_context() const;
 
     /// Export the full client state including the secret key.
-    /// Contents: SK + PK + relin + rotation. Size is comparable to eval_context.
+    /// Contents: separate v6 evaluation-context and secret-key serializations.
     /// Pair with load_full_context() to restore a client that can both encrypt and decrypt.
     Bytes export_full_context() const;
 
@@ -106,6 +111,9 @@ public:
     /// After this call, both encrypt() and decrypt() work.
     /// Typically call exactly one of {setup, load_full_context}; calling both replaces the context.
     void load_full_context(const Bytes& full_bytes);
+
+    /// Restore v6 evaluation context and separately persisted secret key.
+    void load_context(const Bytes& context_bytes, const Bytes& secret_key_bytes);
 
     /// Encrypt inputs from CSV files and return serialized ciphertexts.
     /// @param input_csvs  Map of input name -> CSV file path.

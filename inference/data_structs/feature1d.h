@@ -76,7 +76,6 @@ public:
     uint32_t skip = 0;
     uint32_t invalid_fill = 1;
     std::vector<ls::CkksCiphertext> data;
-    std::vector<ls::CkksCiphertext> data_compress;
 
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;

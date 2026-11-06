@@ -13,7 +13,7 @@ from score import BtpScoreParam
 class MaxPoolLiveStateTest(unittest.TestCase):
     def setUp(self):
         self.saved = copy.deepcopy(components.config.__dict__)
-        components.config.fhe_param = copy.deepcopy(components.N16QP1546H192H32)
+        components.config.fhe_param = copy.deepcopy(components.PN15Default)
         components.config.block_shape = [128, 128]
         components.config.style = 'multiplexed'
         components.config.mpc_refresh = False

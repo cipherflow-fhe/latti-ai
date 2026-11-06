@@ -20,7 +20,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -164,7 +164,7 @@ class Conv1DPackedLayer:
             for in_channel_idx in range(self.n_packed_in_channel * rot_num):
                 for kernel_idx in range(self.kernel_shape):
                     x_ct = rotated_x_2d[in_channel_idx][kernel_idx]
-                    w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{kernel_idx}', is_ringt=True)
+                    w_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}_{in_channel_idx}_{kernel_idx}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
                     custom_compute(
                         inputs=[conv_data_source],
                         output=w_pt,
@@ -181,7 +181,7 @@ class Conv1DPackedLayer:
                     w_pt_list.append(w_pt)
             partial_sum = ct_pt_mult_accumulate(x_ct_list, w_pt_list)
             partial_sum = rescale(partial_sum)
-            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True)
+            b_pt = CkksPlaintextNode(f'encode_pt_{packed_out_channel_idx}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
             custom_compute(
                 inputs=[conv_data_source],
                 output=b_pt,
@@ -192,7 +192,7 @@ class Conv1DPackedLayer:
             result.append(result_ct)
         return result
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Return (weight_pt, bias_pt) with shapes matching call().
 
         weight_pt[i][j][k]: i in n_packed_out_channel,
@@ -203,12 +203,12 @@ class Conv1DPackedLayer:
         rot_num = min(self.n_in_channel, self.pack)
         weight_pt = [
             [
-                [CkksPlaintextNode(f'convw_{layer_id}_{i}_{j}_{k}', is_ringt=True) for k in range(self.kernel_shape)]
+                [CkksPlaintextNode(f'convw_{layer_id}_{i}_{j}_{k}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for k in range(self.kernel_shape)]
                 for j in range(self.n_packed_in_channel * rot_num)
             ]
             for i in range(self.n_packed_out_channel)
         ]
-        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(self.n_packed_out_channel)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(self.n_packed_out_channel)]
         return weight_pt, bias_pt
 
     def call(self, x: list[CkksCiphertextNode], weight_pt, bias_pt) -> list[CkksCiphertextNode]:

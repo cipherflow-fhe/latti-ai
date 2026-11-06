@@ -14,6 +14,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import math
 import sys
 from pathlib import Path
@@ -29,6 +30,13 @@ from components import (
     LayerAbstractGraph,
     config,
 )
+from inference.model_generator.layers.par_block_col_major_poly import ParBlockColMajorPoly
+from inference.model_generator.parameter_sources import resolve_pcm_parameter_source
+from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
+from inference.model_generator.layers.par_block_col_major_softmax import (
+    ParBlockColMajorMultipleSquare, ParBlockColMajorHeadColSum, ParBlockColMajorInverseInit,
+    ParBlockColMajorInverseIter, ParBlockColMajorCtMul,
+)
 from inference.model_generator.layers.activation_layer import SquareLayer
 from inference.model_generator.layers.add_pack import AddLayer
 from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer
@@ -37,6 +45,7 @@ from inference.model_generator.layers.conv1d_packed_layer import Conv1DPackedLay
 from inference.model_generator.layers.conv2d_depthwise import Conv2DPackedDepthwiseLayer
 from inference.model_generator.layers.conv2d_packed_layer import Conv2DPackedLayer
 from inference.model_generator.layers.dense_packed_layer import DensePackedLayer
+from inference.model_generator.layers.kernel_seed_packing import choose_convolution_seed_layout
 from inference.model_generator.layers.inverse_multiplexed_conv2d_layer import InverseMultiplexedConv2DLayer
 from inference.model_generator.layers.inverse_multiplexed_depthwise_conv2d_layer import (
     InverseMultiplexedDepthwiseConv2DLayer,
@@ -915,6 +924,89 @@ mpc_refresh_rate = 1 / 15
 ct_trans_rate = 1 / 10
 
 
+# Fixed calibration: no encryption or serialization is performed during DP.
+with open(Path(__file__).with_name('encrypted_parameter_size.json'), encoding='utf-8') as _size_file:
+    ENCRYPTED_PARAMETER_SIZE = json.load(_size_file)
+
+
+def encrypted_parameter_storage_enabled():
+    return getattr(config, 'encrypted_parameter_storage_weight', 0.0) > 0
+
+def encrypted_parameter_storage_normalization_bytes():
+    return getattr(config, 'encrypted_parameter_storage_normalization_bytes', 1 << 30)
+
+
+def encrypted_parameter_bytes(param, level):
+    calibration = ENCRYPTED_PARAMETER_SIZE
+    actual = param.to_dict()
+    expected = calibration['parameter']
+    if any(actual.get(key) != value for key, value in expected.items() if key != 'n_mult_level'):
+        raise ValueError(f'No encrypted parameter size calibration for {param.name}')
+    if str(level) not in calibration['bytes_per_element']:
+        raise ValueError(f'Uncalibrated encrypted parameter level: {level}')
+    return calibration['bytes_per_element'][str(level)]
+
+
+def get_encrypted_parameter_storage_report(dag, param_dict):
+    """Recount a concrete graph using the same layer interface as the DP score."""
+    report = {
+        'weight': config.encrypted_parameter_storage_weight,
+        'normalization_bytes': encrypted_parameter_storage_normalization_bytes(),
+        'calibration': ENCRYPTED_PARAMETER_SIZE,
+        'runtime_score': 0.0,
+        'refresh_score': 0.0,
+        'storage_bytes': 0,
+        'layers': [],
+        'unaccounted': [],
+    }
+    public_layers = {'add', 'add2d', 'reshape', 'drop_level', 'avgpool1d', 'avgpool2d',
+                     'concat', 'concat2d', 'upsample_nearest', 'resize'}
+    if getattr(config, 'pcm_encrypted_parameters', False):
+        zeros = set()
+        for feature in dag.nodes:
+            if isinstance(feature, FeatureNode) and dag.in_degree(feature) == 0:
+                level = dag.nodes[feature]['level']
+                key = (feature.ckks_parameter_id, level)
+                if key not in zeros:
+                    zeros.add(key)
+                    size = encrypted_parameter_bytes(param_dict[key[0]], level)
+                    report['layers'].append(dict(layer_id=feature.node_id, type='InputZero',
+                                                 counts={level: {'zero': 1}}, bytes=size))
+                    report['storage_bytes'] += size
+    for node in nx.topological_sort(dag):
+        if not isinstance(node, ComputeNode):
+            continue
+        if node.layer_type in {'bootstrapping', 'mpc_refresh'}:
+            if node.layer_type == 'bootstrapping':
+                report['refresh_score'] += BtpScoreParam(
+                    dag, node, param_dict, use_gpu=getattr(config, 'use_gpu', True)
+                ).get_score()
+            else:
+                raise ValueError('Storage reporting currently requires FHE bootstrapping, not MPC refresh')
+            continue
+        if node.layer_type in public_layers:
+            # Reshape/drop-level have no primitive score; preserve existing add/pool scores.
+            if node.layer_type not in {'reshape', 'drop_level', 'concat', 'concat2d'}:
+                level = min(dag.nodes[p]['level'] for p in dag.predecessors(node))
+                report['runtime_score'] += FheScoreParam(
+                    dag, node, param_dict, level, use_gpu=getattr(config, 'use_gpu', True)
+                ).get_score()
+            continue
+        level = min(dag.nodes[p]['level'] for p in dag.predecessors(node))
+        score_param = FheScoreParam(dag, node, param_dict, level, use_gpu=getattr(config, 'use_gpu', True))
+        storage = score_param.get_encrypted_parameter_storage()
+        report['runtime_score'] += score_param.get_score()
+        if storage is None:
+            report['unaccounted'].append({'layer_id': node.layer_id, 'type': node.layer_type})
+            continue
+        report['layers'].append({'layer_id': node.layer_id, 'type': node.layer_type,
+                                'input_level': level, 'parameter_use_site_level': score_param.get_parameter_use_site_level(), **storage})
+        report['storage_bytes'] += storage['bytes']
+    report['storage_score'] = report['weight'] * report['storage_bytes'] / report['normalization_bytes']
+    report['total_score'] = report['runtime_score'] + report['refresh_score'] + report['storage_score']
+    return report
+
+
 class FheScoreParam:
     def __init__(
         self,
@@ -927,6 +1019,7 @@ class FheScoreParam:
         preds: list[FeatureNode] = list(dag.predecessors(compute_node))
         succs: list[FeatureNode] = list(dag.successors(compute_node))
 
+        self.parameter = param[preds[0].ckks_parameter_id]
         self.dag = dag
         self.acc_rate = 1
         self.compute_node = compute_node
@@ -992,11 +1085,39 @@ class FheScoreParam:
         op_counts keys: 'rotate', 'mult_plain', 'mult', 'add', 'rescale'
         """
         preds: list[FeatureNode] = list(self.dag.predecessors(self.compute_node))
-        n = self.input_degree  # poly_modulus_degree = 2*N_slots
+        n = self.parameter.n_slots
         layer_type = self.compute_node.layer_type
         style = config.style
 
         op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
+        if (op_counts and getattr(config, 'pcm_encrypted_parameters', False)
+                and layer_type.startswith('pcm')):
+            if isinstance(next(iter(op_counts)), str):
+                op_counts = {self.input_mult_level: op_counts}
+            for lv, kinds in self._pcm_parameter_counts(preds, self.input_mult_level).items():
+                for kind, count in kinds.items():
+                    parameter = kind.split(':')[0]
+                    if parameter in {'bias_pt', 'add_pt'}:
+                        continue
+                    if parameter == 'coeff_pt' and kind.endswith('coeff_idx=0'):
+                        continue
+                    if parameter == 'stockmeyer_coeff_pt':
+                        degree = int(kind.rsplit('=', 1)[1])
+                        if degree % 4 == 0 and degree != getattr(self.compute_node, 'order', 0):
+                            continue
+                    if parameter == 'pt':
+                        idx = int(kind.rsplit('=', 1)[1])
+                        if ((layer_type == 'pcmstats' and idx == 3) or
+                                (layer_type == 'pcminit' and idx == 0) or
+                                (layer_type == 'pcmaffine' and idx == 1)):
+                            continue
+                        if layer_type in {'pcmstats', 'pcminit'}:
+                            count *= math.ceil(preds[0].shape[0]/config.matmul_block_size)
+                    if lv not in op_counts or op_counts[lv]['mult_plain'] < count:
+                        raise ValueError(f'PCM parameter operation count mismatch: {self.compute_node.layer_id} '
+                                         f'{layer_type} {kind} L{lv} count={count} ops={op_counts}')
+                    op_counts[lv]['mult_plain'] -= count
+                    op_counts[lv]['mult'] += count
         if op_counts is None:
             return 0.0
         # op_counts may be a flat dict {str: int} (single level) or a level-grouped
@@ -1026,11 +1147,129 @@ class FheScoreParam:
             )
         return score * self.acc_rate
 
-    def _build_layer_and_get_op_count(self, preds, n, layer_type, style):
-        """Instantiate the matching inference layer and return its get_fhe_op_count() dict.
+    def get_encrypted_parameter_storage(self):
+        counts = self.get_encrypted_param_count()
+        if counts is None:
+            return None
+        result = {
+            'counts': counts,
+            'bytes': sum(count * encrypted_parameter_bytes(self.parameter, level)
+                         for level, kinds in counts.items() for count in kinds.values()),
+        }
+        if getattr(self, 'dense_seed_tiles', None):
+            result['dense_seed_tiles'] = self.dense_seed_tiles
+        if getattr(self, 'poly_seed_layout', None):
+            result['poly_seed_layout'] = self.poly_seed_layout
+        if getattr(self, 'convolution_seed_layout', None):
+            result['convolution_seed_layout'] = self.convolution_seed_layout
+        if getattr(self, 'pcm_seed_layout', None):
+            result['pcm_seed_layout'] = self.pcm_seed_layout
+        return result
+
+    def get_parameter_use_site_level(self):
+        # Match transforms.insert_drop_level_layers(): excess input levels are
+        # dropped before the operator, including at a bootstrapping output.
+        output = next(self.dag.successors(self.compute_node))
+        return min(self.input_mult_level,
+                   self.dag.nodes[output]['level'] + self.dag.nodes[self.compute_node]['level_cost'])
+
+    def get_encrypted_param_count(self):
+        preds = list(self.dag.predecessors(self.compute_node))
+        kind = self.compute_node.layer_type
+        if kind.startswith('pcm') or kind in {'parcpmm', 'parccmm', 'partranspose'}:
+            return self._pcm_parameter_counts(preds)
+        return self._build_layer_and_get_op_count(
+            preds, self.parameter.n_slots, self.compute_node.layer_type, config.style, encrypted_param_count=True
+        )
+
+    def _pcm_parameter_counts(self, preds, level=None):
+        node = self.compute_node
+        preds = sorted(preds, key=lambda p: self.dag.edges[p, node].get('input_index', 0))
+        kind = node.layer_type
+        runtime_levels = level is not None
+        level = self.get_parameter_use_site_level() if level is None else level
+        d, heads, slots = config.matmul_block_size, config.n_heads, self.parameter.n_slots
+        rows, cols = preds[0].shape
+        hp = 1 << (heads-1).bit_length()
+        lanes = min(hp, slots//(d*d))
+        if lanes == 1: hp = heads
+        groups = hp//lanes
+        row_cts = math.ceil(rows/d)
+        counts = {}
+        sources = dict(parameter_sources=getattr(node, 'parameter_sources', {}))
+
+        def item(op, parameter, lv, count=1, **attrs):
+            source = resolve_pcm_parameter_source(sources, dict(op_class=op, type=parameter, **attrs))
+            if source['visibility'] == 'secret':
+                by_kind = counts.setdefault(lv, {})
+                key = parameter
+                for field in ('pt_idx', 'coeff_idx'):
+                    if field in attrs:
+                        key += f':{field}={attrs[field]}'
+                by_kind[key] = by_kind.get(key, 0) + count
+
+        if kind == 'parcpmm':
+            layer = ParBlockColMajorCPMM(tuple(preds[0].head_shape), tuple(node.weight_shape),
+                                         d, heads, slots, bool(getattr(node, 'bias_path', '')))
+            layout = layer.seed_layout(level, float(self.parameter.q[level]))
+            self.pcm_seed_layout = layout
+            item('ParBlockColMajorCPMM', 'row_chunk_seed', level+1, layout['seed_count'])
+            if layer.has_bias:
+                item('ParBlockColMajorCPMM', 'bias_pt', level-2, layer.n_out_mbs*row_cts*groups)
+        elif kind in {'pcm_add_pt', 'pcmgamma', 'pcmpoly', 'pcmaffine', 'pcmgeneralpoly'}:
+            k = getattr(node, 'K', 1)
+            head_cols = cols//(heads*k)
+            if kind in {'pcmgamma', 'pcmgeneralpoly'}:
+                head_cols = preds[0].head_shape[1]
+                k = math.ceil(cols/(heads*head_cols))
+            total = k*row_cts*math.ceil(head_cols/d)*groups
+            if kind == 'pcmgamma' and cols == 1:
+                total = row_cts
+            if kind == 'pcm_add_pt':
+                item('ParBlockColMajorAddPt', 'add_pt', level, total)
+            elif kind == 'pcmgamma':
+                item('ParBlockColMajorPolyActRNGamma', 'gamma_pt', level, total)
+            elif kind == 'pcmaffine':
+                ordered = sorted(preds, key=lambda p: self.dag.edges[p, node].get('input_index', 0))
+                ylevel = self.dag.nodes[ordered[1]]['level']
+                if not runtime_levels:
+                    ylevel = min(ylevel, self.output_mult_level+2)
+                item('ParBlockColMajorLNAffine', 'pt', ylevel, total, pt_idx=0)
+                item('ParBlockColMajorLNAffine', 'pt', ylevel-2, total, pt_idx=1)
+            elif kind == 'pcmpoly':
+                order = getattr(node, 'order', 4)
+                levels = [level-2, level, level-1, level, level-1]
+                for degree in range(order+1):
+                    item('ParBlockColMajorPolyActRNPoly', 'coeff_pt', levels[degree], total, coeff_idx=degree)
+            else:
+                order = node.order
+                cost = ParBlockColMajorPoly.compute_stockmeyer_level_cost(order)
+                babies = (order+4)//4
+                def visit(start, span, actual, target):
+                    if span == 1:
+                        for degree in range(start*4, min(order+1, start*4+4)):
+                            off = degree % 4
+                            lv = target + (0 if off == 0 else 2 if off == 3 else 1)
+                            item('ParBlockColMajorPoly', 'stockmeyer_coeff_pt', lv, total, coeff_idx=degree)
+                        return
+                    half = span//2
+                    visit(start, half, min(actual, half), target)
+                    if actual > half: visit(start+half, half, actual-half, target+1)
+                visit(0, 1 << (babies-1).bit_length(), babies, level-cost)
+        elif kind == 'pcmstats':
+            item('ParBlockColMajorLNStats', 'pt', level-3, pt_idx=2)
+            item('ParBlockColMajorLNStats', 'pt', level-4, pt_idx=3)
+        elif kind == 'pcminit':
+            for idx, lv in enumerate([level-2, level, level-1]):
+                item('ParBlockColMajorLNMinimaxInit', 'pt', lv, pt_idx=idx)
+        return counts
+
+    def _build_layer_and_get_op_count(self, preds, n, layer_type, style, encrypted_param_count=False):
+        """Instantiate the matching inference layer and return operation or parameter counts.
         Returns None if the layer type is not handled here.
         """
         node = self.compute_node
+        parameter_level = self.get_parameter_use_site_level() if encrypted_param_count else self.input_mult_level
         n_in = self.input_channel
         n_out = self.output_channel
         pack = self.pack
@@ -1052,6 +1291,9 @@ class FheScoreParam:
             if config.head_dim > 0 and head_shape[0] == config.head_dim and head_shape[1] != config.head_dim:
                 head_shape = [head_shape[1], head_shape[0]]
             return (head_shape[0], feature.shape[0]), tuple(head_shape)
+
+        if encrypted_param_count and layer_type not in {'conv2d', 'fc0', 'polyact', 'mult_scalar'}:
+            return None
 
         # ── conv2d ──────────────────────────────────────────────────────────
         if layer_type == 'conv2d' and node.dim == 2:
@@ -1078,6 +1320,8 @@ class FheScoreParam:
                         kernel_shape,
                         stride,
                         block_shape,
+                        seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                        seed_weight_layout=getattr(node, 'seed_weight_layout', 'kernel'),
                     )
                 else:
                     layer = InverseMultiplexedConv2DLayer(
@@ -1088,8 +1332,16 @@ class FheScoreParam:
                         kernel_shape,
                         stride,
                         block_shape,
+                        seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                        seed_weight_layout=getattr(node, 'seed_weight_layout', 'kernel'),
                     )
-                return layer.get_fhe_op_count(self.input_mult_level, n)
+                if getattr(node, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                    self.convolution_seed_layout = choose_convolution_seed_layout(
+                        layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+                if encrypted_param_count:
+                    return layer.get_encrypted_param_count(parameter_level)
+                return layer.get_fhe_op_count(
+                    self.get_parameter_use_site_level() if layer.use_seed_weight_pack else self.input_mult_level, n)
 
             if style == 'ordinary':
                 if is_depthwise:
@@ -1116,6 +1368,8 @@ class FheScoreParam:
                         n_packed_in,
                         n_packed_out,
                     )
+                if encrypted_param_count:
+                    return None if is_depthwise else layer.get_encrypted_param_count(parameter_level)
                 return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'multiplexed'
@@ -1131,6 +1385,8 @@ class FheScoreParam:
                     n_in_channel_per_ct,
                     n_packed_in,
                     n_packed_out,
+                    seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                    seed_weight_layout=getattr(node, 'seed_weight_layout', 'kernel'),
                 )
             else:
                 layer = MultiplexedConv2DPackedLayer(
@@ -1143,7 +1399,16 @@ class FheScoreParam:
                     pack,
                     n_packed_in,
                     n_packed_out,
+                    seed_weight_subgrid_stride=getattr(node, 'seed_weight_subgrid_stride', [1, 1]),
+                    seed_weight_layout=getattr(node, 'seed_weight_layout', 'input_blocks'),
                 )
+            if getattr(node, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                self.convolution_seed_layout = choose_convolution_seed_layout(
+                    layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+            if encrypted_param_count:
+                return layer.get_encrypted_param_count(parameter_level)
+            if layer.use_seed_weight_pack:
+                return layer.get_fhe_op_count(self.get_parameter_use_site_level())
             return layer.get_fhe_op_count(self.input_mult_level)
 
         # ── conv1d ──────────────────────────────────────────────────────────
@@ -1156,7 +1421,7 @@ class FheScoreParam:
             is_depthwise = groups == n_out and groups != 1
 
             if style == 'multiplexed':
-                n_channel_per_ct = math.ceil(n // 2 / input_shape_1d)
+                n_channel_per_ct = math.ceil(n / input_shape_1d)
                 n_packed_in_ch = math.ceil(n_in / n_channel_per_ct)
                 n_packed_out_ch = math.ceil(n_out / n_channel_per_ct)
                 if is_depthwise:
@@ -1185,7 +1450,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count(self.input_mult_level)
 
             # style == 'ordinary'
-            n_channel_per_ct = int(n // 2 // input_shape_1d // skip_1d)
+            n_channel_per_ct = int(n // input_shape_1d // skip_1d)
             n_pack_in = math.ceil(n_in / n_channel_per_ct)
             n_packed_out_ch = math.ceil(n_out / (n_channel_per_ct * stride_1d))
             layer = Conv1DPackedLayer(
@@ -1214,8 +1479,8 @@ class FheScoreParam:
                 special_shape = sp_info.get('shape', [1, 1])
                 if not (pred_com and pred.has_sp_info):
                     # call_skip_0d path
-                    skip_0d = sp_info['skip'][0] if isinstance(sp_info.get('skip'), list) else 1
-                    n_channel_per_ct = int(n // 2 // skip_0d)
+                    skip_0d = self.dag.nodes[pred]['skip'][0]
+                    n_channel_per_ct = int(n // skip_0d)
                     pack_0d = n_channel_per_ct
                     n_packed_in_feat = math.ceil(n_in / n_channel_per_ct)
                     n_packed_out_feat = math.ceil(n_out / n_channel_per_ct)
@@ -1223,12 +1488,18 @@ class FheScoreParam:
                         n_out,
                         n_in,
                         [1, 1],
-                        [1, 1],
+                        [1, skip_0d],
                         pack_0d,
                         n_packed_in_feat,
                         n_packed_out_feat,
+                        invalid_fill=[1, skip_0d],
                     )
-                    return layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level)
+                    if pack_0d == 1 and getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                        self.dense_seed_tiles = layer.choose_seed_tile_layout(
+                            n, self.get_parameter_use_site_level(),
+                            lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+                    return (layer.get_encrypted_param_count_skip_0d(parameter_level) if encrypted_param_count
+                            else layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level))
 
                 elif len(special_shape) == 1:
                     # 1D multiplexed
@@ -1238,7 +1509,7 @@ class FheScoreParam:
                     invalid_fill = sp_info.get('invalid_fill', [1])
                     invalid_fill_1d = int(invalid_fill[0]) if isinstance(invalid_fill, list) else int(invalid_fill)
                     block_size = shape_1d * skip_1d
-                    n_block_per_ct = int(n // 2) // block_size
+                    n_block_per_ct = int(n) // block_size
                     valid_sub = skip_1d // invalid_fill_1d
                     n_channel_per_ct_1d = n_block_per_ct * valid_sub
                     layer = DensePackedLayer(
@@ -1252,14 +1523,15 @@ class FheScoreParam:
                         invalid_fill=[invalid_fill_1d, 1],
                     )
                     n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
-                    return layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level)
+                    return (layer.get_encrypted_param_count_1d_multiplexed(n, parameter_level) if encrypted_param_count
+                            else layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level))
 
                 else:
                     # 2D multiplexed
                     special_skip = sp_info.get('skip', [1, 1])
                     invalid_fill = sp_info.get('invalid_fill', [1, 1])
                     n_ct_mult = math.ceil(
-                        n // 2 / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
+                        n / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
                     )
                     layer = DensePackedLayer(
                         n_out,
@@ -1271,8 +1543,13 @@ class FheScoreParam:
                         n_out,
                         invalid_fill=invalid_fill,
                     )
+                    if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+                        self.dense_seed_tiles = layer.choose_seed_tile_layout(
+                            n, self.get_parameter_use_site_level(),
+                            lambda lv: encrypted_parameter_bytes(self.parameter, lv))
                     n_input_ct = math.ceil(n_in / pack)
-                    return layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level)
+                    return (layer.get_encrypted_param_count_multiplexed(n, parameter_level) if encrypted_param_count
+                            else layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level))
             return None
 
         # ── avgpool ──────────────────────────────────────────────────────────
@@ -1293,7 +1570,7 @@ class FheScoreParam:
                 return layer.get_fhe_op_count_interleaved(n_input_ct, n, self.input_mult_level)
             if is_adaptive:
                 if style == 'ordinary':
-                    return layer.get_fhe_op_count(n_input_ct, n, self.input_mult_level)
+                    return layer.get_fhe_op_count(n_input_ct, self.input_mult_level)
                 else:
                     return layer.get_fhe_op_count_adaptive(n_input_ct, n_in, self.input_mult_level)
             else:
@@ -1323,31 +1600,43 @@ class FheScoreParam:
             pred = preds[0]
             order = getattr(node, 'order', 0)
             if pred.dim == 0:
-                skip_0d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
-                n_channel_per_ct_0d = int(n // 2 // skip_0d)
+                skip_0d = self.dag.nodes[pred]['skip'][0]
+                n_channel_per_ct_0d = int(n // skip_0d)
                 layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 n_input_ct = n_packed_in
-                return layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level)
+                return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level))
             if pred.dim == 1:
                 shape_1d = pred.shape[0]
                 skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
                 if style == 'multiplexed':
-                    n_channel_per_ct_1d = int(n // 2 // shape_1d)
+                    n_channel_per_ct_1d = int(n // shape_1d)
                     layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                    return layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level)
-                n_channel_per_ct_1d = int(n // 2 // shape_1d // skip_1d)
+                    return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level))
+                n_channel_per_ct_1d = int(n // shape_1d // skip_1d)
                 layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                return layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level)
+                return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level))
             # dim == 2
             input_shape = self.input_shape
             skip = self.input_skip
-            layer = PolyRelu2D(input_shape, order, skip, pack)
-            return layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.input_mult_level)
+            block_expansion = [math.ceil(input_shape[i] / config.block_shape[i]) for i in range(2)]
+            n_packed_in = math.ceil(n_in / pack) * math.prod(block_expansion)
+            layer = PolyRelu2D(input_shape, order, skip, pack, block_expansion=block_expansion)
+            if (style == 'multiplexed' and getattr(node, 'zero_skip', [1, 1]) == [1, 1]):
+                self.poly_seed_layout = layer.choose_seed_layout(
+                    getattr(config, 'seed_weight_subgrid_stride', [1, 1]), n, n_packed_in,
+                    self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+            return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.get_parameter_use_site_level()
+                                                              if layer.poly_seed_layout else self.input_mult_level))
 
         # ── mult_scalar ──────────────────────────────────────────────────────
         elif layer_type == 'mult_scalar':
             layer = MultScalarLayer()
-            return layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+            return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
+                    else layer.get_fhe_op_count(n_packed_in, self.input_mult_level))
 
         # ── add / add2d ──────────────────────────────────────────────────────
         elif layer_type in ('add', 'add2d'):
@@ -1357,7 +1646,7 @@ class FheScoreParam:
             n_cts = self.dag.nodes[preds[0]]['pack_num']
             return {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': n_cts, 'rescale': 0}
         elif layer_type == 'pdm_add_pt':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParLowerDiagonalAddPt(
                     shape=tuple(preds[0].shape),
@@ -1371,7 +1660,7 @@ class FheScoreParam:
         elif layer_type == 'pcmgamma':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorPolyActRNGamma(
                     shape=(m, n_cols),
@@ -1379,13 +1668,14 @@ class FheScoreParam:
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                     K=getattr(node, 'K', 1),
+                    head_shape=preds[0].head_shape,
                 )
                 n_cts = layer.total_cts
                 return {'rotate': 0, 'mult_plain': n_cts, 'mult': 0, 'add': 0, 'rescale': n_cts}
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmgamma':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyActRNGamma(
@@ -1398,15 +1688,38 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmupperaddpt':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalAddPt(shape, head_shape, config.n_heads, n_slot)
                 return layer.get_fhe_op_count(self.input_mult_level)
             except (AssertionError, ValueError, TypeError):
                 return None
+        elif layer_type in (
+            'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit',
+            'pcminviter', 'pcmctmul', 'pcmpolymultct',
+        ):
+            feat = preds[0]
+            shape = tuple(feat.shape)
+            head_shape = tuple(feat.head_shape) if feat.head_shape is not None else (shape[0], config.matmul_block_size)
+            args = (shape, head_shape, config.n_heads, n)
+            if layer_type == 'pcmgeneralpoly':
+                layer = ParBlockColMajorPoly(*args, getattr(node, 'order', 15), config.matmul_block_size)
+            elif layer_type == 'pcmmulsquare':
+                layer = ParBlockColMajorMultipleSquare(*args, config.matmul_block_size)
+            elif layer_type == 'pcmheadcolsum':
+                layer = ParBlockColMajorHeadColSum(*args, config.matmul_block_size)
+            elif layer_type == 'pcminvinit':
+                layer = ParBlockColMajorInverseInit(*args, config.matmul_block_size)
+            elif layer_type == 'pcminviter':
+                layer = ParBlockColMajorInverseIter(*args, config.matmul_block_size)
+            elif layer_type == 'pcmctmul':
+                layer = ParBlockColMajorCtMul(*args, config.matmul_block_size)
+            elif layer_type == 'pcmpolymultct':
+                layer = ParBlockColMajorPolyMultCt(*args, config.matmul_block_size)
+            return layer.get_fhe_op_count(level=self.input_mult_level)
         elif layer_type == 'pdmupperpoly':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPoly(shape, head_shape, config.n_heads, n_slot, getattr(node, 'order', 15))
@@ -1414,7 +1727,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError, RuntimeError):
                 return None
         elif layer_type == 'pdmmulsquare':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalMultipleSquare(shape, head_shape, config.n_heads, n_slot)
@@ -1422,7 +1735,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmheadcolsum':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalHeadColSum(shape, head_shape, config.n_heads, n_slot)
@@ -1430,7 +1743,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdminvinit':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalInverseInit(shape, head_shape, config.n_heads, n_slot)
@@ -1438,7 +1751,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdminviter':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalInverseIter(shape, head_shape, config.n_heads, n_slot)
@@ -1446,7 +1759,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmctmul':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalGELU(shape, head_shape, config.n_heads, n_slot)
@@ -1454,7 +1767,7 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type == 'pdmupperpolymultct':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyMultCt(shape, head_shape, config.n_heads, n_slot)
@@ -1464,7 +1777,7 @@ class FheScoreParam:
         elif layer_type == 'pcmpoly':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorPolyActRNPoly(
                     shape=(m, n_cols),
@@ -1478,7 +1791,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmpoly':
-            n_slot = n // 2
+            n_slot = n
             try:
                 shape, head_shape = pdm_upper_shape_and_head(preds[0])
                 layer = ParUpperDiagonalPolyActRNPoly(
@@ -1494,7 +1807,7 @@ class FheScoreParam:
         elif layer_type == 'pcmstats':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorLNStats(
                     shape=(m, n_cols),
@@ -1506,7 +1819,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmstats':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParUpperDiagonalLNStats(
                     shape=tuple(preds[0].shape),
@@ -1520,7 +1833,7 @@ class FheScoreParam:
         elif layer_type == 'pcmcenter':
             m = preds[0].shape[0]
             n_cols = preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorLNXCentered(
                     shape=(m, n_cols),
@@ -1532,7 +1845,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmcenter':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParUpperDiagonalLNXCentered(
                     shape=tuple(preds[0].shape),
@@ -1546,14 +1859,14 @@ class FheScoreParam:
         elif layer_type == 'pcminit':
             m = preds[0].shape[0]
             block_size = config.matmul_block_size
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorLNMinimaxInit(block_size=block_size, n_slot=n_slot)
                 return layer.get_fhe_op_count(math.ceil(m / block_size), self.input_mult_level)
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdminit':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParUpperDiagonalLNMinimaxInit(
                     shape=tuple(preds[0].shape),
@@ -1575,7 +1888,7 @@ class FheScoreParam:
             )
             m = ordered_preds[0].shape[0]
             block_size = config.matmul_block_size
-            n_slot = n // 2
+            n_slot = n
             level_y = self.dag.nodes[ordered_preds[0]]['level']
             level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
             try:
@@ -1592,7 +1905,7 @@ class FheScoreParam:
                     else 0
                 ),
             )
-            n_slot = n // 2
+            n_slot = n
             level_y = self.dag.nodes[ordered_preds[0]]['level']
             level_a = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else None
             try:
@@ -1616,7 +1929,7 @@ class FheScoreParam:
             )
             m = ordered_preds[0].shape[0]
             n_cols = ordered_preds[0].shape[1]
-            n_slot = n // 2
+            n_slot = n
             level_x = self.dag.nodes[ordered_preds[0]]['level']
             level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
             try:
@@ -1638,7 +1951,7 @@ class FheScoreParam:
                     else 0
                 ),
             )
-            n_slot = n // 2
+            n_slot = n
             level_x = self.dag.nodes[ordered_preds[0]]['level']
             level_y = self.dag.nodes[ordered_preds[1]]['level'] if len(ordered_preds) > 1 else self.input_mult_level
             try:
@@ -1653,24 +1966,23 @@ class FheScoreParam:
                 return None
         elif layer_type == 'parcpmm':
             m = preds[0].shape[0]
-            n_total = preds[0].shape[1]
-            n_per_head = n_total // config.n_heads
-            W_rows = n_total
-            W_cols = self.output_shape[1]
-            n_slot = n // 2
+            n_per_head = preds[0].head_shape[1]
+            n_slot = n
             try:
                 layer = ParBlockColMajorCPMM(
                     shape_A=(m, n_per_head),
-                    W_shape=(W_rows, W_cols),
+                    W_shape=tuple(node.weight_shape),
                     block_size=config.matmul_block_size,
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                 )
-                return layer.get_fhe_op_count(self.input_mult_level)
+                return (layer.get_compact_fhe_op_count(self.input_mult_level)
+                        if getattr(config, 'pcm_encrypted_parameters', False)
+                        else layer.get_fhe_op_count(self.input_mult_level))
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmpcmm':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParLowerDiagPCMM(
                     shape_X_T=tuple(preds[0].shape),
@@ -1686,7 +1998,7 @@ class FheScoreParam:
         elif layer_type == 'partranspose':
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorTranspose(
                     shape=(m, n_per_head),
@@ -1698,7 +2010,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmtranspose':
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParLowerDiagTranspose(
                     shape=tuple(preds[0].head_shape),
@@ -1713,7 +2025,7 @@ class FheScoreParam:
             m = preds[0].shape[0]
             n_per_head = preds[0].shape[1] // config.n_heads
             p_per_head = preds[1].shape[1] // config.n_heads
-            n_slot = n // 2
+            n_slot = n
             try:
                 layer = ParBlockColMajorCCMM(
                     shape_A=(m, n_per_head),
@@ -1726,7 +2038,7 @@ class FheScoreParam:
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmccmm':
-            n_slot = n // 2
+            n_slot = n
             try:
                 edge_indices = {pred: self.dag.edges[pred, node].get('input_index') for pred in preds}
                 ordered_preds = (

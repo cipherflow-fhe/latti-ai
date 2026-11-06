@@ -694,15 +694,6 @@ Array<uint64_t, 1> Feature2DEncrypted::encrypt_from_share(const Feature2DShare& 
     return y0_add_mod;
 }
 
-void Feature2DEncrypted::decompress() {
-    assert(data.size() == 0 && data_compress.size() > 0);
-    size_t n_ct = data_compress.size();
-    for (int i = 0; i < n_ct; i++) {
-        data.push_back(std::move(data_compress[i]));
-    }
-    data_compress.clear();
-}
-
 Bytes Feature2DEncrypted::serialize() const {
     stringstream ss;
     ss_write(ss, dim);
@@ -721,13 +712,6 @@ Bytes Feature2DEncrypted::serialize() const {
         Bytes ct_data = ct.serialize();
         ss_write_vector(ss, ct_data);
     }
-    uint32_t n_cct = data_compress.size();
-    ss_write(ss, n_cct);
-    for (const CkksCiphertext& cct : data_compress) {
-        Bytes cct_data = cct.serialize();
-        ss_write_vector(ss, cct_data);
-    }
-
     Bytes bytes = ss_to_bytes(ss);
     return bytes;
 }
@@ -752,13 +736,5 @@ void Feature2DEncrypted::deserialize(const Bytes& bytes) {
         ss_read_vector(ss, &ct_data);
         auto y_ct = CkksCiphertext::deserialize(ct_data);
         data.push_back(move(y_ct));
-    }
-    uint32_t n_cct;
-    ss_read(ss, &n_cct);
-    for (int i = 0; i < n_cct; i++) {
-        Bytes cct_data;
-        ss_read_vector(ss, &cct_data);
-        auto y_ct = CkksCiphertext::deserialize(cct_data);
-        data_compress.push_back(move(y_ct));
     }
 }

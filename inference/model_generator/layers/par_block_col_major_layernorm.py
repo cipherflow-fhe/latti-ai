@@ -21,7 +21,9 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
+from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add
 
 
 def _next_pow2(n: int) -> int:
@@ -115,8 +117,8 @@ class _ParBlockColMajorLNBase:
             result[bi] = row_sum
         return result
 
-    def _make_pt(self, data_source, op_class: str, pt_idx: int, bi: int = 0, bj: int = 0, g: int = 0):
-        node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_idx}_{bi}_{bj}_{g}', is_ringt=True)
+    def _make_pt(self, data_source, op_class: str, pt_idx: int, bi: int = 0, bj: int = 0, g: int = 0, *, level: int):
+        node = CkksPlaintextNode(f'encode_pt_{op_class}_{pt_idx}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': 'pt', 'pt_idx': pt_idx}, [level, level], get_fhe_param()), level=0)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -167,10 +169,10 @@ class ParBlockColMajorLNStats(_ParBlockColMajorLNBase):
         return result
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        h0_mask_pt = self._make_pt(data_source, self.op_class, 0)
-        inv_n_pt = self._make_pt(data_source, self.op_class, 1)
-        iv_pt = self._make_pt(data_source, self.op_class, 2)
-        eps_add_pt = self._make_pt(data_source, self.op_class, 3)
+        h0_mask_pt = self._make_pt(data_source, self.op_class, 0, level=input_cts[0].metadata.level)
+        inv_n_pt = self._make_pt(data_source, self.op_class, 1, level=input_cts[0].metadata.level)
+        iv_pt = self._make_pt(data_source, self.op_class, 2, level=input_cts[0].metadata.level)
+        eps_add_pt = self._make_pt(data_source, self.op_class, 3, level=input_cts[0].metadata.level)
         return self.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
@@ -230,8 +232,8 @@ class ParBlockColMajorLNXCentered(_ParBlockColMajorLNBase):
         return result
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        h0_mask_pt = self._make_pt(data_source, self.op_class, 0)
-        inv_n_pt = self._make_pt(data_source, self.op_class, 1)
+        h0_mask_pt = self._make_pt(data_source, self.op_class, 0, level=input_cts[0].metadata.level)
+        inv_n_pt = self._make_pt(data_source, self.op_class, 1, level=input_cts[0].metadata.level)
         return self.call(input_cts, h0_mask_pt, inv_n_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
@@ -266,8 +268,8 @@ class ParBlockColMajorLNMinimaxInit:
         self.n_slot = n_slot
         self.chunk_size = block_size * block_size
 
-    def _make_pt(self, data_source, pt_idx: int):
-        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}', is_ringt=True)
+    def _make_pt(self, data_source, pt_idx: int, *, level: int):
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': 'pt', 'pt_idx': pt_idx}, [level, level], get_fhe_param()), level=0)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -287,9 +289,9 @@ class ParBlockColMajorLNMinimaxInit:
         return result
 
     def call_custom_compute(self, a_cts: list, data_source) -> list:
-        c0_add_pt = self._make_pt(data_source, 0)
-        c1_pt = self._make_pt(data_source, 1)
-        c2_norm_pt = self._make_pt(data_source, 2)
+        c0_add_pt = self._make_pt(data_source, 0, level=a_cts[0].metadata.level)
+        c1_pt = self._make_pt(data_source, 1, level=a_cts[0].metadata.level)
+        c2_norm_pt = self._make_pt(data_source, 2, level=a_cts[0].metadata.level)
         return self.call(a_cts, c0_add_pt, c1_pt, c2_norm_pt)
 
     def get_fhe_op_count(self, n_ct: int, level: int) -> dict:
@@ -316,8 +318,8 @@ class ParBlockColMajorLNGoldschmidt:
         self.n_slot = n_slot
         self.chunk_size = block_size * block_size
 
-    def _make_pt(self, data_source, pt_idx: int):
-        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}', is_ringt=True)
+    def _make_pt(self, data_source, pt_idx: int, *, level: int):
+        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': 'pt', 'pt_idx': pt_idx}, [level, level], get_fhe_param()), level=0)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -344,8 +346,8 @@ class ParBlockColMajorLNGoldschmidt:
         return result
 
     def call_custom_compute(self, y_cts: list, a_cts: list, data_source) -> list:
-        three_pt = self._make_pt(data_source, 0)
-        half_norm_pt = self._make_pt(data_source, 1)
+        three_pt = self._make_pt(data_source, 0, level=y_cts[0].metadata.level)
+        half_norm_pt = self._make_pt(data_source, 1, level=y_cts[0].metadata.level)
         return self.call(y_cts, a_cts, three_pt, half_norm_pt)
 
     def get_fhe_op_count(self, n_ct: int, level: int, a_level: int | None = None) -> dict:
@@ -399,7 +401,7 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
             for bj in range(self.num_block_cols):
                 gamma_bibj = []
                 for g in range(self.G):
-                    gamma_bibj.append(self._make_pt(data_source, self.op_class, 0, bi, bj, g))
+                    gamma_bibj.append(self._make_pt(data_source, self.op_class, 0, bi, bj, g, level=y_cts[0].metadata.level))
                 gamma_bi.append(gamma_bibj)
             gamma_pt.append(gamma_bi)
 
@@ -409,7 +411,7 @@ class ParBlockColMajorLNAffine(_ParBlockColMajorLNBase):
             for bj in range(self.num_block_cols):
                 beta_bibj = []
                 for g in range(self.G):
-                    beta_bibj.append(self._make_pt(data_source, self.op_class, 1, bi, bj, g))
+                    beta_bibj.append(self._make_pt(data_source, self.op_class, 1, bi, bj, g, level=y_cts[0].metadata.level))
                 beta_bi.append(beta_bibj)
             beta_add_pt.append(beta_bi)
 

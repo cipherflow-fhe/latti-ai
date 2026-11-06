@@ -20,6 +20,7 @@
 #include <stdexcept>
 
 #include "interface/inference_client.h"
+#include "util/serial.h"
 #include "data_structs/feature_mat.h"
 
 using namespace lattisense;
@@ -73,6 +74,7 @@ void InferenceClient::read_configuration() {
         op.channel = param.value("channel", 1);
         op.is_mat = param.value("data_type", std::string("")) == "feature_mat";
         op.is_transposed = param.value("is_transposed", true);
+        op.select_first_token = param.value("select_first_token", false);
         if (op.is_mat) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
@@ -203,11 +205,22 @@ void InferenceClient::release() {
     std::cout << "[Client] Done." << std::endl;
 }
 
-void InferenceClient::load_full_context(const Bytes& full_bytes) {
-    std::cout << "[Client] Loading full context (with secret key)..." << std::endl;
-    ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(full_bytes));
+void InferenceClient::load_context(const Bytes& context_bytes, const Bytes& secret_key_bytes) {
+    ckks_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(context_bytes));
+    ckks_context_->set_secret_key(SecretKey::deserialize(secret_key_bytes));
     context_ptr_ = ckks_context_.get();
-    std::cout << "[Client] Done." << std::endl;
+}
+
+void InferenceClient::load_full_context(const Bytes& full_bytes) {
+    std::stringstream ss;
+    bytes_to_ss(full_bytes, ss);
+    Bytes context_bytes, secret_key_bytes;
+    ss_read_vector(ss, &context_bytes);
+    ss_read_vector(ss, &secret_key_bytes);
+    if (!ss || ss.peek() != std::char_traits<char>::eof()) {
+        throw std::runtime_error("[Client] Invalid persisted v6 client state");
+    }
+    load_context(context_bytes, secret_key_bytes);
 }
 
 Bytes InferenceClient::export_eval_context() const {
@@ -220,13 +233,12 @@ Bytes InferenceClient::export_eval_context() const {
 }
 
 Bytes InferenceClient::export_full_context() const {
-    std::cout << "[Client] Exporting full context (with secret key)..." << std::endl;
-    // NOTE: the v6 SDK deliberately omits secret key material from context
-    // serialization. load_full_context() can therefore only restore the
-    // evaluation-capable part of the client.
-    Bytes result = ckks_context_->serialize();
-    std::cout << "[Client] Done." << std::endl;
-    return result;
+    // Application persistence contains two independent v6 serializations.
+    // CkksContext::serialize() itself never includes the secret key.
+    std::stringstream ss;
+    ss_write_vector(ss, ckks_context_->serialize());
+    ss_write_vector(ss, ckks_context_->secret_key().serialize());
+    return ss_to_bytes(ss);
 }
 
 std::map<std::string, Bytes> InferenceClient::encrypt(const std::map<std::string, std::string>& input_csvs) const {
@@ -394,6 +406,12 @@ InferenceClient::decrypt(const std::map<std::string, Bytes>& encrypted_outputs) 
             }
             auto dec_1d = decrypted.to_array_1d();
             result.output = std::vector<double>(dec_1d.data(), dec_1d.data() + dec_1d.size());
+        }
+        if (param.is_mat && param.select_first_token) {
+            const size_t channels = param.is_transposed ? param.height : param.width;
+            if (result.output.size() < channels)
+                throw std::runtime_error("[Client] CLS output is shorter than its channel count: " + name);
+            result.output.resize(channels);
         }
         result.num_outputs = result.output.size();
         results[name] = std::move(result);

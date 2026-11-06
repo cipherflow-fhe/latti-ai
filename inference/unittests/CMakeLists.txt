@@ -8,6 +8,10 @@ add_executable(test_data_structs
 target_link_libraries(test_data_structs inference_task)
 add_test(NAME test_data_structs COMMAND test_data_structs)
 
+add_executable(test_encrypted_parameter_store test_encrypted_parameter_store.cpp)
+target_link_libraries(test_encrypted_parameter_store inference_interface)
+add_test(NAME test_encrypted_parameter_store COMMAND test_encrypted_parameter_store)
+
 # Copy test_gen_layers.py to build directory
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_gen_layers.py
@@ -62,3 +66,14 @@ if(INFERENCE_SDK_ENABLE_GPU)
 endif()
 
 add_test(NAME test_e2e_single_layer COMMAND test_e2e_single_layer)
+
+# PCM BERT primitives; optional lazy graphs are generated under /tmp by
+# gen_pcm_bert_layers.py and selected with PCM_BERT_TASK_ROOT.
+add_executable(test_pcm_bert_layers test_pcm_bert_layers.cpp)
+target_link_libraries(test_pcm_bert_layers PUBLIC
+    -Wl,--start-group inference_task fhe_layers log -Wl,--end-group
+    lattisense ${HDF5_CXX_LIBRARIES})
+if(INFERENCE_SDK_ENABLE_GPU)
+    target_compile_definitions(test_pcm_bert_layers PRIVATE INFERENCE_SDK_ENABLE_GPU)
+endif()
+add_test(NAME test_pcm_bert_layers COMMAND test_pcm_bert_layers)

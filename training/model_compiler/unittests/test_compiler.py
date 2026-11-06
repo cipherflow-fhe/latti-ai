@@ -135,10 +135,7 @@ def check_feature_scale(graph: LayerAbstractGraph):
         elif node.layer_type == 'mult_coeff':
             out_node.scale = f_node.scale * (1 / node.coeff)
         elif node.layer_type in {'avgpool1d', 'avgpool2d'}:
-            if (not node.is_adaptive_avgpool) and (not node.is_big_size):
-                out_node.scale = f_node.scale
-            else:
-                out_node.scale = f_node.scale * math.prod(node.kernel_shape)
+            out_node.scale = f_node.scale
         else:
             out_node.scale = f_node.scale
 

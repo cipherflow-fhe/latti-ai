@@ -24,6 +24,7 @@ q/k/v CPMM weights, attention gamma/poly coefficients, and output projection.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -34,6 +35,7 @@ import h5py
 import numpy as np
 import onnx
 from onnx import helper, numpy_helper
+from inference.model_generator.parameter_sources import pcm_parameter_sources, resolve_pcm_parameter_source
 
 log = logging.getLogger(__name__)
 
@@ -112,7 +114,7 @@ def export_feature_mat_h5_from_onnx(
             _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
         elif ltype == 'pdmgamma':
             _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
-        elif ltype == 'pdmupperpoly':
+        elif ltype in ('pcmgeneralpoly', 'pdmupperpoly'):
             _export_pdmupperpoly(layer_key, layer, features, out)
         elif ltype == 'pcmpoly':
             _export_pcmpoly(
@@ -153,15 +155,59 @@ def export_feature_mat_h5_from_onnx(
     if h5_dir:
         os.makedirs(h5_dir, exist_ok=True)
 
+    provenance = _audit_pcm_parameter_sources(layers, out)
     with h5py.File(h5_path, 'w') as f:
         for name, data in out.items():
             f.create_dataset(name, data=np.asarray(data, dtype='float64').reshape(-1))
+    if provenance:
+        with open(h5_path + '.parameter_sources.json', 'w', encoding='utf-8') as f:
+            json.dump(provenance, f, indent=2, allow_nan=False)
+            f.write('\n')
 
     if verbose:
         total_params = sum(data.size for data in out.values())
         log.info('FeatureMat ONNX→H5: %s  (%d tensors, %s params)', h5_path, len(out), f'{total_params:,}')
 
     return h5_path
+
+
+def _audit_pcm_parameter_sources(layers, values):
+    """Check public recipes against final exported values on the private side."""
+    audit = []
+    for layer_id, layer in layers.items():
+        for key, source in pcm_parameter_sources(layer).items():
+            if not (layer.get('type', '').startswith('pcm') or layer.get('type') == 'parcpmm'):
+                continue
+            item = dict(layer_id=layer_id, parameter=key, **source)
+            path = (layer.get('coeffs_path') if key.startswith(('coeff_pt', 'stockmeyer_coeff_pt')) else
+                    layer.get('gamma_path') if key == 'gamma_pt' else
+                    layer.get('bias_path') if key == 'bias_pt' or
+                    (layer.get('type') == 'pcmaffine' and key == 'pt:pt_idx=1') else None) or layer.get('weight_path')
+            data = values.get(path)
+            if source['visibility'] == 'public':
+                attrs = dict(op_class='ParBlockColMajorParameterAudit', type=key)
+                # Use the same recipe hash/version validation as task generation.
+                resolve_pcm_parameter_source(dict(parameter_sources={key: source}), attrs)
+                recipe = source['public_recipe']['content']
+                if key == 'gamma_pt':
+                    expected = np.full_like(data, recipe['scalar_value'])
+                elif key == 'add_pt':
+                    expected = np.full_like(data, recipe['value'])
+                elif key == 'stockmeyer_coeff_pt':
+                    expected = np.broadcast_to(np.asarray(recipe['coefficients'])[:, None], data.shape)
+                elif layer.get('type') == 'pcminit':
+                    idx = int(key.rsplit('=', 1)[1])
+                    expected = recipe['c' + str(idx)]
+                    data = np.asarray(layer['c' + str(idx)])
+                else:
+                    raise ValueError(f'{layer_id}: unsupported public parameter recipe {key}')
+                if data is None or not np.array_equal(data, expected):
+                    raise ValueError(f'{layer_id}: public recipe differs from exported {key}')
+                item['recipe_verified'] = True
+            if data is not None:
+                item['value_sha256'] = hashlib.sha256(np.asarray(data, dtype='<f8').tobytes()).hexdigest()
+            audit.append(item)
+    return audit
 
 
 def _index_onnx_sources(
@@ -249,6 +295,8 @@ def _export_parcpmm(
         expected_shape = (int(fin['shape'][1]), int(fout['shape'][1]))
 
     weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
+    if layer.get('type') == 'parcpmm' and layer.get('weight_transposed', False):
+        weight = weight.T
     weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
     _put(out, weight_path, weight, layer_key)
 
@@ -394,7 +442,7 @@ def _export_pdmupperpoly(
     dst_path = layer.get('coeffs_path') or _required_path(layer, 'weight_path', layer_key)
     fin = _feature(features, layer['feature_input'][0], layer_key)
     order = int(layer.get('order', 15))
-    expected_shape = (order + 1, int(fin['shape'][0]))
+    expected_shape = (order + 1, int(fin['shape'][1 if layer['type'] == 'pcmgeneralpoly' else 0]))
     if 'coefficients' not in layer:
         raise KeyError(f'{layer_key}: pdmupperpoly requires coefficients in layer JSON')
     coeffs = np.asarray(_parse_coefficients(layer['coefficients']), dtype='float64')
@@ -581,6 +629,11 @@ def _export_add_pt(
     path = layer.get('weight_path') or layer.get('bias_path')
     if not path:
         raise KeyError(f'{layer_key}: add_pt/pcm_add_pt/pdm_add_pt requires weight_path or bias_path')
+    if layer.get('value') is not None:
+        fin = _feature(features, layer['feature_input'][0], layer_key)
+        data = np.full(tuple(map(int, fin['shape'])), float(layer['value']), dtype='float64')
+        _put(out, path, data, layer_key)
+        return
     if path not in onnx_weights:
         raise KeyError(f'{layer_key}: add_pt source not found in ONNX: {path}')
     fin = _feature(features, layer['feature_input'][0], layer_key)

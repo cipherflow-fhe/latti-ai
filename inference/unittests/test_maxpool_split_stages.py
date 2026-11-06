@@ -6,7 +6,7 @@ from unittest.mock import patch
 import unittest
 import numpy as np
 
-import inference.lattisense.frontend.custom_task as custom_task
+import frontend.custom_task as custom_task
 from inference.model_generator.layers import poly2d, poly_maxpool_stages as stages
 from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_stage_op_count
 from inference.unittests.test_interleaved_maxpool_reduction import Cipher
@@ -23,7 +23,7 @@ class SplitStageTest(unittest.TestCase):
     def test_all_profiles_full_tree_refresh_semantics_and_counts(self):
         plan = build_maxpool_plan(
             {'kernel_shape': [3, 3], 'stride': [2, 2], 'padding': [1, 1]}, [8, 8])
-        param = SimpleNamespace(n=65536, scale=2.**40, q=[2.**40] * 33)
+        param = SimpleNamespace(n=65536, default_scale=2.**40, q=[2.**40] * 33)
         observed = {}
 
         def binary(a, b, op, name):

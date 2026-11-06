@@ -1,0 +1,759 @@
+# Copyright (c) 2025-2026 CipherFlow (Shenzhen) Co., Ltd.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from inference.model_generator.deploy_cmds import gen_custom_task
+from training.model_compiler.components import PN13Default
+
+
+def _feature(level: int):
+    return {
+        'dim': 0,
+        'channel': 1,
+        'scale': 1.0,
+        'ckks_scale': 1,
+        'skip': 8192,
+        'ckks_parameter_id': 'param0',
+        'level': level,
+        'depth': -1,
+        'pack_num': 1,
+    }
+
+
+def _data_with_missing_source(mega_ag):
+    source_data = set(mega_ag.get('inputs', [])) | set(mega_ag.get('offline_inputs', []))
+    for compute in mega_ag['compute'].values():
+        source_data.update(compute.get('outputs', []))
+
+    used_data = set()
+    for compute in mega_ag['compute'].values():
+        used_data.update(compute.get('inputs', []))
+        used_data.update(compute.get('wait_inputs', []))
+
+    return sorted(
+        (idx, mega_ag['data'].get(str(idx), {}).get('id', '<missing>')) for idx in used_data if idx not in source_data
+    )
+
+
+class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_adaptive_pool_normalization_is_public_and_preserves_scale(self):
+        for dim in (1, 2):
+            for parameter_mode in ('plaintext_lazy', 'encrypted_offline'):
+                if dim == 1 and parameter_mode == 'encrypted_offline':
+                    continue  # Encrypted Conv1D parameters are unsupported.
+                with self.subTest(dim=dim, parameter_mode=parameter_mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    shape = [16] if dim == 1 else [4, 8]
+                    stride = [4] if dim == 1 else [2, 4]
+                    output_shape = [s // k for s, k in zip(shape, stride)]
+                    features = {
+                        'input': dict(_feature(4), dim=dim, channel=2, shape=shape, skip=[1] * dim,
+                                      invalid_fill=[1] * dim, pack_num=512 if dim == 1 else 256),
+                        'output': dict(_feature(2), dim=dim, channel=2, shape=output_shape, skip=stride,
+                                       invalid_fill=stride, pack_num=512 if dim == 1 else 256),
+                    }
+                    features['hidden'] = dict(features['input'], level=3)
+                    layers = {'pool': dict(type=f'avgpool{dim}d', feature_input=['input'],
+                        feature_output=['output'], channel_input=2, channel_output=2,
+                        kernel_shape=stride, stride=stride, is_adaptive_avgpool=True, is_big_size=False)}
+                    layers['pool']['feature_input'] = ['hidden']
+                    layers = {'conv': dict(type=f'conv{dim}d', feature_input=['input'], feature_output=['hidden'],
+                        channel_input=2, channel_output=2, kernel_shape=[1] * dim, stride=[1] * dim,
+                        groups=1, is_big_size=False), **layers}
+                    graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
+                    config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[4, 8],
+                        task_input_id=['input'], task_output_id=['output'],
+                        task_input_param={'input': features['input']}, task_output_param={'output': features['output']},
+                        use_btp=False)
+                    (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+                    (root / 'task_config.json').write_text(json.dumps(config))
+                    kwargs = dict(parameter_mode=parameter_mode)
+                    if parameter_mode == 'encrypted_offline':
+                        kwargs.update(input_mode='plaintext', deployment_mode='server_provisioned_runner',
+                                      parameter_loading_mode='runtime_lazy')
+                    gen_custom_task(str(root), param_name='PN13Default', style='multiplexed', lazy=True, **kwargs)
+                    mega = json.loads((root / 'mega_ag.json').read_text())
+                    self.assertEqual(_data_with_missing_source(mega), [])
+                    means = [n for n in mega['compute'].values() if n['type'] == 'encode_pt' and
+                             n.get('attributes', {}).get('type') == 'normalization_pt']
+                    self.assertEqual(len(means), 1)
+                    mean = means[0]
+                    self.assertEqual(mean['inputs'], [])
+                    self.assertEqual(mean['attributes']['divisor'], 4 if dim == 1 else 8)
+                    self.assertEqual(mean['attributes']['level'], 3)
+                    self.assertEqual(mega['data'][mean['outputs'][0]]['scale'], float(PN13Default.q[3]))
+                    scales = [mega['data'][idx]['scale'] for idx in mega['outputs']]
+                    self.assertTrue(all(abs(s / (2 ** PN13Default.log_default_scale) - 1) < 1e-10 for s in scales))
+                    self.assertTrue(all(mega['data'][idx]['level'] == 2 for idx in mega['outputs']))
+
+    def test_gpu_bootstrap_restores_default_scale_after_natural_square(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features = {name: _feature(level) for name, level in [('input', 2), ('squared', 1), ('output', 12)]}
+            layers = {
+                'square': dict(type='square2d', feature_input=['input'], feature_output=['squared'],
+                               channel_input=1, channel_output=1),
+                'refresh': dict(type='bootstrapping', feature_input=['squared'], feature_output=['output'],
+                                channel_input=1, channel_output=1),
+            }
+            graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
+            config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[1, 1],
+                          task_input_id=['input'], task_output_id=['output'],
+                          task_input_param={'input': features['input']},
+                          task_output_param={'output': features['output']}, use_btp=True)
+            (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+            (root / 'task_config.json').write_text(json.dumps(config))
+            gen_custom_task(str(root), param_name='PN15Default', style='multiplexed', lazy=True)
+            mega = json.loads((root / 'mega_ag.json').read_text())
+            bootstrap = next(op for op in mega['compute'].values() if op['type'] == 'bootstrap')
+            source = mega['data'][bootstrap['inputs'][0]]
+            output = mega['data'][bootstrap['outputs'][0]]
+            self.assertNotEqual(source['scale'], 2.0 ** 40)
+            self.assertEqual(output['scale'], 2.0 ** 40)
+            self.assertEqual(output['level'], 12)
+
+    def test_upsample_masks_are_runner_local_in_runtime_lazy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server, runner = root / 'server', root / 'runner'
+            server.mkdir()
+            features = {
+                'input': dict(_feature(3), dim=2, channel=4, shape=[4, 8], skip=[4, 4], pack_num=128),
+                'hidden': dict(_feature(2), dim=2, channel=4, shape=[4, 8], skip=[4, 4], pack_num=128),
+                'output': dict(_feature(1), dim=2, channel=4, shape=[8, 16], skip=[2, 2], pack_num=32),
+            }
+            layers = {
+                'conv': dict(type='conv2d', feature_input=['input'], feature_output=['hidden'],
+                             channel_input=4, channel_output=4, kernel_shape=[1, 1], stride=[1, 1], groups=1,
+                             is_big_size=False),
+                'resize': dict(type='upsample_nearest', feature_input=['hidden'], feature_output=['output'],
+                               channel_input=4, channel_output=4, upsample_factor=[2, 2]),
+            }
+            graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
+            config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[4, 8],
+                          task_input_id=['input'], task_output_id=['output'],
+                          task_input_param={'input': features['input']},
+                          task_output_param={'output': features['output']}, use_btp=False)
+            (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+            (server / 'task_config.json').write_text(json.dumps(config))
+            gen_custom_task(str(server), param_name='PN13Default', style='multiplexed',
+                            parameter_mode='encrypted_offline', input_mode='plaintext',
+                            deployment_mode='server_provisioned_runner', parameter_loading_mode='runtime_lazy',
+                            output_dir=str(runner))
+            signature = json.loads((runner / 'task_signature.json').read_text())
+            mega = json.loads((runner / 'mega_ag.json').read_text())
+            self.assertEqual([a['id'] for a in signature['online']], ['input', 'output'])
+            masks = [n for n in mega['compute'].values()
+                     if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'UpsampleNearestLayer']
+            self.assertEqual(len(masks), 4)
+            self.assertEqual([m['attributes']['i'] for m in masks], list(range(4)))
+            self.assertTrue(all(m['attributes']['input_shape'] == [4, 8] and
+                                m['attributes']['level'] == 2 and m['inputs'] == [] for m in masks))
+            self.assertEqual(_data_with_missing_source(mega), [])
+
+    def test_concat_0d_masks_are_runner_local_in_runtime_lazy(self):
+        for second_pack in (4, 8):
+            with self.subTest(second_pack=second_pack), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                server, runner = root / 'server', root / 'runner'
+                server.mkdir()
+                features = {}
+                layers = {}
+                for name, pack in [('a', 4), ('b', second_pack)]:
+                    for fid, level in [(name, 3), (name + '_hidden', 2)]:
+                        features[fid] = dict(_feature(level), channel=3, pack_num=pack, skip=8192 // pack)
+                    layers[name + '_fc'] = dict(type='fc0', feature_input=[name],
+                        feature_output=[name + '_hidden'], channel_input=3, channel_output=3)
+                features['output'] = dict(_feature(1), channel=6, pack_num=4, skip=1024)
+                layers['concat'] = dict(type='concat2d', feature_input=['a_hidden', 'b_hidden'],
+                    feature_output=['output'], channel_input=3, channel_output=6)
+                graph = dict(feature=features, layer=layers, input_feature=['a', 'b'], output_feature=['output'])
+                config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[1, 1],
+                    task_input_id=['a', 'b'], task_output_id=['output'],
+                    task_input_param={n: features[n] for n in ['a', 'b']},
+                    task_output_param={'output': features['output']}, use_btp=False)
+                (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+                (server / 'task_config.json').write_text(json.dumps(config))
+                gen_custom_task(str(server), param_name='PN13Default', style='multiplexed',
+                    parameter_mode='encrypted_offline', input_mode='plaintext',
+                    deployment_mode='server_provisioned_runner',
+                    parameter_loading_mode='runtime_lazy', output_dir=str(runner))
+                signature = json.loads((runner / 'task_signature.json').read_text())
+                mega = json.loads((runner / 'mega_ag.json').read_text())
+                self.assertEqual([a['id'] for a in signature['online']], ['a', 'b', 'output'])
+                self.assertFalse(any('mask' in a['id'] for a in signature['encrypted_parameters']))
+                masks = [n for n in mega['compute'].values()
+                         if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'ConcatLayer']
+                self.assertEqual(len(masks), 6)
+                self.assertEqual([m['attributes']['slot'] for m in masks],
+                                 [0, 2048, 4096, 0, 8192 // second_pack, 16384 // second_pack])
+                self.assertTrue(all(m['attributes']['level'] == 2 for m in masks))
+                self.assertTrue(all(m['inputs'] == [] and m.get('wait_inputs', []) == [] for m in masks))
+                self.assertEqual(_data_with_missing_source(mega), [])
+
+    def test_two_dense_layers_use_plaintext_input_and_offline_ct_params(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'fc2': {
+                        'type': 'fc0',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13Default',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            online = signature['online']
+            offline = signature['offline']
+            self.assertEqual(online[0]['id'], 'input')
+            self.assertEqual(online[0]['type'], 'pt')
+            self.assertEqual(online[0]['phase'], 'in')
+            self.assertEqual(online[-1]['id'], 'output')
+            self.assertEqual(online[-1]['type'], 'ct')
+            self.assertEqual(online[-1]['phase'], 'out')
+
+            offline_by_id = {arg['id']: arg for arg in offline}
+            self.assertEqual(offline_by_id['densew_fc1']['type'], 'ct')
+            self.assertEqual(offline_by_id['densew_fc1']['level'], 2)
+            self.assertEqual(offline_by_id['denseb_fc1']['level'], 1)
+            self.assertEqual(offline_by_id['densew_fc2']['type'], 'ct')
+            self.assertEqual(offline_by_id['densew_fc2']['level'], 1)
+            self.assertEqual(offline_by_id['denseb_fc2']['level'], 0)
+            self.assertGreaterEqual(len(mega_ag['inputs']), 5)
+
+            compute_types = {node['type'] for node in mega_ag['compute'].values()}
+            self.assertIn('mult', compute_types)
+            self.assertIn('relin', compute_types)
+            self.assertIn('rescale', compute_types)
+
+    def test_mult_scalar_uses_offline_ct_param(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'scale': {
+                        'type': 'mult_scalar',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13Default',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            offline_by_id = {arg['id']: arg for arg in signature['offline']}
+            self.assertEqual(offline_by_id['mult_scalar_scale']['type'], 'ct')
+            self.assertEqual(offline_by_id['mult_scalar_scale']['phase'], 'in')
+            self.assertEqual(offline_by_id['mult_scalar_scale']['level'], 1)
+            self.assertEqual(offline_by_id['mult_scalar_scale']['size'], [1])
+            self.assertEqual(offline_by_id['mult_scalar_scale']['scale'], PN13Default.q[1])
+
+            compute_types = {node['type'] for node in mega_ag['compute'].values()}
+            self.assertIn('mult', compute_types)
+            self.assertIn('relin', compute_types)
+            self.assertIn('rescale', compute_types)
+
+    def test_runtime_lazy_loads_wait_for_real_input_dependencies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'fc2': {
+                        'type': 'fc0',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'deployment_mode': 'server_provisioned_runner',
+                'parameter_loading_mode': 'runtime_lazy',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13Default',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
+            self.assertEqual(signature['offline'][0]['type'], 'encrypted_parameter_store')
+            encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
+            self.assertEqual(encrypted_param_ids, {'densew_fc1', 'denseb_fc1', 'densew_fc2', 'denseb_fc2'})
+
+            load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
+            self.assertEqual(len(load_nodes), 4)
+            store_indices = {idx for idx in mega_ag['data'] if idx == 'encrypted_parameter_store'}
+            self.assertEqual(len(store_indices), 1)
+            store_idx = next(iter(store_indices))
+            for node in load_nodes:
+                self.assertEqual(node['inputs'][0], store_idx)
+                self.assertEqual(len(node['inputs']), 2)
+                self.assertEqual(len(node['outputs']), 1)
+                self.assertEqual(node.get('wait_inputs', []), [])
+                self.assertIn('arg_id', node['attributes'])
+                self.assertIn('flat_index', node['attributes'])
+
+            # The C++ scheduler only inspects inputs, not wait_inputs. A second
+            # layer load must be blocked when only graph inputs are available.
+            initial = set(mega_ag['inputs'])
+            second_load = next(n for n in load_nodes if n['attributes']['arg_id'] == 'densew_fc2')
+            self.assertNotIn(second_load['inputs'][1], initial)
+            self.assertTrue(any(second_load['inputs'][1] in n['outputs'] for n in mega_ag['compute'].values()))
+
+            self.assertEqual(_data_with_missing_source(mega_ag), [])
+
+    def test_server_runner_multiplexed_masks_are_local_plaintexts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            server_dir.mkdir()
+            graph = {
+                'feature': {
+                    'input': {
+                        'dim': 2,
+                        'channel': 1,
+                        'scale': 1.0,
+                        'ckks_scale': 1,
+                        'shape': [4, 4],
+                        'skip': [1, 1],
+                        'ckks_parameter_id': 'param0',
+                        'level': 2,
+                        'depth': -1,
+                        'pack_num': 2,
+                    },
+                    'output': {
+                        'dim': 2,
+                        'channel': 2,
+                        'scale': 1.0,
+                        'ckks_scale': 1,
+                        'shape': [2, 2],
+                        'skip': [2, 2],
+                        'ckks_parameter_id': 'param0',
+                        'level': 0,
+                        'depth': -1,
+                        'pack_num': 2,
+                    },
+                },
+                'layer': {
+                    'conv': {
+                        'type': 'conv2d',
+                        'channel_input': 1,
+                        'channel_output': 2,
+                        'kernel_shape': [3, 3],
+                        'groups': 1,
+                        'stride': [2, 2],
+                        'ckks_parameter_id_input': 'param0',
+                        'ckks_parameter_id_output': 'param0',
+                        'feature_input': ['input'],
+                        'feature_output': ['output'],
+                        'weight_path': 'weight',
+                        'bias_path': 'bias',
+                        'is_big_size': False,
+                        'upsample_factor_in': [1, 1],
+                        'style': 'multiplexed',
+                    }
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [4, 4],
+                'pack_style': 'multiplexed',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            for loading_mode in ('eager', 'runtime_lazy'):
+                runner_dir = root / f'runner_{loading_mode}'
+                gen_custom_task(
+                    str(server_dir),
+                    param_name='PN13Default',
+                    style='multiplexed',
+                    parameter_mode='encrypted_offline',
+                    input_mode='plaintext',
+                    deployment_mode='server_provisioned_runner',
+                    parameter_loading_mode=loading_mode,
+                    output_dir=str(runner_dir),
+                )
+                with open(runner_dir / 'task_signature.json', encoding='utf-8') as f:
+                    signature = json.load(f)
+                with open(runner_dir / 'mega_ag.json', encoding='utf-8') as f:
+                    mega_ag = json.load(f)
+                args = signature.get('offline', []) + signature.get('encrypted_parameters', [])
+                self.assertFalse(any(arg['id'].startswith('convm_') for arg in args))
+                mask_nodes = [
+                    node
+                    for node in mega_ag['compute'].values()
+                    if node['type'] == 'encode_pt' and node.get('attributes', {}).get('type') == 'mask_pt'
+                ]
+                self.assertGreater(len(mask_nodes), 0)
+                self.assertTrue(all(node['inputs'] == [] for node in mask_nodes))
+                self.assertTrue(all(node['attributes']['level'] == 1 for node in mask_nodes))
+
+            client_dir = root / 'client_runner'
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13Default',
+                style='multiplexed',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='client_encrypted_input',
+                output_dir=str(client_dir),
+            )
+            with open(client_dir / 'task_signature.json', encoding='utf-8') as f:
+                client_signature = json.load(f)
+            self.assertTrue(any(arg['id'].startswith('convm_') for arg in client_signature['offline']))
+
+    def test_runtime_lazy_materializes_polyrelu_params(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(3),
+                    'hidden': _feature(2),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'act': {
+                        'type': 'polyact',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                        'order': 2,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'deployment_mode': 'server_provisioned_runner',
+                'parameter_loading_mode': 'runtime_lazy',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13Default',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
+            encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
+            self.assertEqual(
+                encrypted_param_ids,
+                {
+                    'densew_fc1',
+                    'denseb_fc1',
+                    'poly_reluw_act_0',
+                    'poly_reluw_act_1',
+                    'poly_reluw_act_2',
+                },
+            )
+            load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
+            loaded_arg_ids = {node['attributes']['arg_id'] for node in load_nodes}
+            self.assertEqual(loaded_arg_ids, encrypted_param_ids)
+            self.assertEqual(_data_with_missing_source(mega_ag), [])
+
+    def test_runtime_lazy_materializes_mult_scalar_params(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server_dir = root / 'server'
+            runner_dir = root / 'runner'
+            server_dir.mkdir()
+
+            graph = {
+                'feature': {
+                    'input': _feature(2),
+                    'hidden': _feature(1),
+                    'output': _feature(0),
+                },
+                'layer': {
+                    'fc1': {
+                        'type': 'fc0',
+                        'feature_input': ['input'],
+                        'feature_output': ['hidden'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                    'scale': {
+                        'type': 'mult_scalar',
+                        'feature_input': ['hidden'],
+                        'feature_output': ['output'],
+                        'channel_input': 1,
+                        'channel_output': 1,
+                    },
+                },
+                'input_feature': ['input'],
+                'output_feature': ['output'],
+            }
+            task_config = {
+                'task_type': 'fhe',
+                'task_num': 1,
+                'server_start_id': 0,
+                'server_end_id': 0,
+                'block_shape': [1, 1],
+                'pack_style': 'ordinary',
+                'deployment_mode': 'server_provisioned_runner',
+                'parameter_loading_mode': 'runtime_lazy',
+                'task_input_id': ['input'],
+                'task_output_id': ['output'],
+                'task_input_param': {'input': graph['feature']['input']},
+                'task_output_param': {'output': graph['feature']['output']},
+                'server_task': {'nn_layers_ct_0': {'enable_fpga': True}},
+                'use_btp': False,
+            }
+
+            with open(server_dir / 'nn_layers_ct_0.json', 'w', encoding='utf-8') as f:
+                json.dump(graph, f)
+            with open(server_dir / 'task_config.json', 'w', encoding='utf-8') as f:
+                json.dump(task_config, f)
+
+            gen_custom_task(
+                str(server_dir),
+                param_name='PN13Default',
+                style='ordinary',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner_dir),
+            )
+
+            with open(runner_dir / 'task_signature.json', 'r', encoding='utf-8') as f:
+                signature = json.load(f)
+            with open(runner_dir / 'mega_ag.json', 'r', encoding='utf-8') as f:
+                mega_ag = json.load(f)
+
+            self.assertEqual([arg['id'] for arg in signature['offline']], ['encrypted_parameter_store'])
+            encrypted_param_ids = {arg['id'] for arg in signature['encrypted_parameters']}
+            self.assertEqual(encrypted_param_ids, {'densew_fc1', 'denseb_fc1', 'mult_scalar_scale'})
+            scalar = next(arg for arg in signature['encrypted_parameters'] if arg['id'] == 'mult_scalar_scale')
+            self.assertEqual(scalar['scale'], PN13Default.q[1])
+            load_nodes = [node for node in mega_ag['compute'].values() if node['type'] == 'load_encrypted_param_ct']
+            loaded_arg_ids = {node['attributes']['arg_id'] for node in load_nodes}
+            self.assertEqual(loaded_arg_ids, encrypted_param_ids)
+            self.assertEqual(_data_with_missing_source(mega_ag), [])
+
+
+if __name__ == '__main__':
+    unittest.main()

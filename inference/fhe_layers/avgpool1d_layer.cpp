@@ -21,6 +21,11 @@
 using namespace std;
 using namespace lattisense;
 
+CkksPlaintext Avgpool1DLayer::normalization_pt(CkksContext& ctx, uint32_t divisor, uint32_t level) {
+    return fhe_api::encode_ringt(ctx, vector<double>(ctx.parameter().max_slots(), 1.0 / divisor),
+                                 ctx.parameter().q()[level]);
+}
+
 Avgpool1DLayer::Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in) : n_block_per_ct(0), skip(0) {
     shape = shape_in;
     stride = stride_in;
@@ -34,7 +39,8 @@ Avgpool1DLayer::Avgpool1DLayer(uint32_t shape_in, uint32_t stride_in) : n_block_
 }
 
 Feature1DEncrypted Avgpool1DLayer::run_adaptive_avgpool(CkksContext& ctx, const Feature1DEncrypted& x) {
-    Feature1DEncrypted result(&ctx, x.level);
+    Feature1DEncrypted result(&ctx, x.level - 1);
+    const auto mean_pt = normalization_pt(ctx, stride, x.level);
     int x_size = x.data.size();
     result.data.resize(x_size);
     uint32_t skip = x.skip;
@@ -53,13 +59,14 @@ Feature1DEncrypted Avgpool1DLayer::run_adaptive_avgpool(CkksContext& ctx, const 
             result.data[idx] =
                 ctx_copy.add(result.data[idx], ctx_copy.rotate(result.data[idx], pow(2, r) * x.n_channel * x.shape));
         }
+        result.data[idx] = ctx_copy.rescale(ctx_copy.mult(result.data[idx], mean_pt));
     });
     result.n_channel = x.n_channel;
     result.n_channel_per_ct = x.n_channel_per_ct;
     result.skip = x.skip * stride;
     result.invalid_fill = x.invalid_fill * stride;
     result.shape = x.shape / stride;
-    result.level = x.level;
+    result.level = x.level - 1;
     return result;
 }
 
@@ -194,7 +201,7 @@ Array<double, 2> Avgpool1DLayer::run_plaintext(const Array<double, 2>& x) {
             for (int m = i * stride; m < (i + 1) * stride; m++) {
                 sum += x.get(idx, m);
             }
-            result.set(idx, i, sum);
+            result.set(idx, i, sum / stride);
         }
     }
     return result;

@@ -67,7 +67,7 @@ private:
     Duo skip_;
 
     // Cached values for on-demand generation (lazy mode)
-    int N = 0;
+    int n_real_num_slot = 0;
     uint32_t cached_n_packed_in_ct = 0;
     uint32_t cached_n_packed_out_ct = 0;
     uint32_t cached_input_block_size = 0;

@@ -114,6 +114,7 @@ public:
 
     virtual void init_parameters(bool is_bootstrapping = false);
     virtual void load_model_prepare();
+    void load_public_matrix_layers();
 
     template <typename T> T& get_layer(const std::string& key) {
         auto it = ckks_layers_.find(key);
@@ -194,6 +195,13 @@ private:
     void _init_pdm_add_pt_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmgamma_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmgeneralpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
+    void _init_pcmmulsquare_layer(const std::string& key, const json& layer);
+    void _init_pcmheadcolsum_layer(const std::string& key, const json& layer);
+    void _init_pcminvinit_layer(const std::string& key, const json& layer);
+    void _init_pcminviter_layer(const std::string& key, const json& layer);
+    void _init_pcmctmul_layer(const std::string& key, const json& layer);
+    void _init_pcmpolymultct_layer(const std::string& key, const json& layer);
     void _init_pdmupperaddpt_layer(const std::string& key, const json& layer);
     void _init_pdmupperpoly_layer(const std::string& key, const json& layer, const hid_t& h5_file);
     void _init_pdmmulsquare_layer(const std::string& key, const json& layer);
@@ -306,3 +314,5 @@ private:
     std::unique_ptr<lattisense::FheTaskCpu> fhe_task_cpu_;
     std::unordered_map<std::string, ExecutorFunc> task_custom_executors_;
 };
+
+ls::CkksPlaintext generate_matrix_parameter(ls::CkksContext& context, Layer* layer, const json& attributes);

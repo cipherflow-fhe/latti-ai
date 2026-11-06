@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
 
 
 gamma_op_class = 'ParUpperDiagonalPolyActRNGamma'
@@ -78,7 +79,7 @@ class ParUpperDiagonalPolyActRNGamma(_ParUpperDiagonalPolyBase):
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{ct_local}', is_ringt=True)
+                node = CkksPlaintextNode(f'{data_source.id}/encode_pt_gamma_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': gamma_op_class, 'type': 'gamma_pt'}, [input_cts[0].metadata.level, input_cts[0].metadata.level], get_fhe_param()), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,
@@ -143,12 +144,12 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
             result[idx] = add(drop_level(low), x2_high)
         return result
 
-    def _make_coeff_pts(self, data_source, coeff_idx: int) -> list:
+    def _make_coeff_pts(self, data_source, coeff_idx: int, *, level: int) -> list:
         pts = [None] * self.total_cts
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
                 idx = self._ct_index(mb, ct_local)
-                node = CkksPlaintextNode(f'encode_pt_poly_c{coeff_idx}_{mb}_{ct_local}', is_ringt=True)
+                node = CkksPlaintextNode(f'{data_source.id}/encode_pt_poly_c{coeff_idx}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': poly_op_class, 'type': 'coeff_pt', 'coeff_idx': coeff_idx}, [level, level], get_fhe_param()), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,
@@ -166,12 +167,12 @@ class ParUpperDiagonalPolyActRNPoly(_ParUpperDiagonalPolyBase):
         return pts
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        c0_add_pt = self._make_coeff_pts(data_source, 0)
-        c1_pt = self._make_coeff_pts(data_source, 1)
-        c2_pt = self._make_coeff_pts(data_source, 2)
+        c0_add_pt = self._make_coeff_pts(data_source, 0, level=input_cts[0].metadata.level)
+        c1_pt = self._make_coeff_pts(data_source, 1, level=input_cts[0].metadata.level)
+        c2_pt = self._make_coeff_pts(data_source, 2, level=input_cts[0].metadata.level)
         if self.degree == 4:
-            c3_pt = self._make_coeff_pts(data_source, 3)
-            c4_pt = self._make_coeff_pts(data_source, 4)
+            c3_pt = self._make_coeff_pts(data_source, 3, level=input_cts[0].metadata.level)
+            c4_pt = self._make_coeff_pts(data_source, 4, level=input_cts[0].metadata.level)
         else:
             c3_pt = None
             c4_pt = None

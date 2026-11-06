@@ -1,0 +1,4787 @@
+{
+  "model": "resnet20",
+  "onnx": "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+  "input_csv": "/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+  "deployment_mode": "server_provisioned_runner",
+  "parameter_mode": "encrypted_offline",
+  "parameter_loading_mode": "runtime_lazy",
+  "gpu": true,
+  "seed_stride": [
+    4,
+    4
+  ],
+  "git_revision": "3cbcc868fc3aa00208e9f5e5b8adaa998090ec55",
+  "source_sha256": "76d264c714e7843634f8f46f0d78d08c3d16c25ff2d965517bfba20ff68d21a6",
+  "onnx_sha256": "4e4857a7af897707aa977ee824e1d0d425098cfd912a081f3c922ee546d59218",
+  "input_csv_sha256": "574966402db6769aadbeb2418845901f65ac2375ec4d7b368bda9d3b00c3ead6",
+  "device": "NVIDIA RTX 5880 Ada Generation, 535.230.02\nNVIDIA RTX 5880 Ada Generation, 535.230.02",
+  "build_flags": {
+    "INFERENCE_SDK_ENABLE_GPU": "ON",
+    "LATTISENSE_DEV": "ON"
+  },
+  "plaintext": {
+    "onnx": "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+    "input_csv": "/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+    "provider": "CPUExecutionProvider",
+    "preparation_wall_ms": 2475.060299038887,
+    "plaintext_wall_ms": 1.1961203999817371,
+    "samples": [
+      {
+        "warmup": true,
+        "wall_ms": 2.419434953480959
+      },
+      {
+        "warmup": false,
+        "wall_ms": 1.195570919662714
+      },
+      {
+        "warmup": false,
+        "wall_ms": 1.314288005232811
+      },
+      {
+        "warmup": false,
+        "wall_ms": 1.1961203999817371
+      }
+    ],
+    "output_counts": {
+      "output": 10
+    },
+    "top1": {
+      "output": 3
+    }
+  },
+  "modes": {
+    "legacy": {
+      "runner_wall_ms": 41665.6632036902,
+      "decrypt_wall_ms": 15375.255153048784,
+      "e2e_fhe_wall_ms": 57062.73839622736,
+      "cpu_peak_rss_bytes": 18915565568,
+      "gpu_peak_used_bytes": 12145404082,
+      "encrypted_parameter_payload_bytes": 4588616340,
+      "runner_bundle_bytes": 7927478957,
+      "task_directory_bytes": 17947838825,
+      "samples": [
+        {
+          "warmup": true,
+          "runner_wall_ms": 43311.16851232946,
+          "decrypt_wall_ms": 15467.204824090004,
+          "e2e_fhe_wall_ms": 58778.37333641946,
+          "cpu_peak_rss_bytes": 17690673152,
+          "gpu_peak_used_bytes": 12196259716,
+          "metrics": {
+            "max_abs_error": 0.00017103216088631967,
+            "mean_abs_error": 6.871313109776955e-05,
+            "rmse": 8.51552846278102e-05,
+            "max_rel_error": 0.0001920291807706317,
+            "cosine_similarity": 0.9999999999569504,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 2096,
+            "cache_hits": 0,
+            "cache_evictions": 2063,
+            "cache_peak_bytes": 67076918,
+            "cache_bytes": 62407393,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 27135.2,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "warmup": false,
+          "runner_wall_ms": 41665.6632036902,
+          "decrypt_wall_ms": 15428.351977840066,
+          "e2e_fhe_wall_ms": 57094.01518153027,
+          "cpu_peak_rss_bytes": 18946174976,
+          "gpu_peak_used_bytes": 12145404082,
+          "metrics": {
+            "max_abs_error": 0.00017103216088631967,
+            "mean_abs_error": 6.871313109776955e-05,
+            "rmse": 8.51552846278102e-05,
+            "max_rel_error": 0.0001920291807706317,
+            "cosine_similarity": 0.9999999999569504,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 2096,
+            "cache_hits": 0,
+            "cache_evictions": 2063,
+            "cache_peak_bytes": 67093010,
+            "cache_bytes": 67044072,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 25482.3,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "warmup": false,
+          "runner_wall_ms": 40922.57845122367,
+          "decrypt_wall_ms": 15358.628782909364,
+          "e2e_fhe_wall_ms": 56281.207234133035,
+          "cpu_peak_rss_bytes": 18803408896,
+          "gpu_peak_used_bytes": 12364031876,
+          "metrics": {
+            "max_abs_error": 0.00017103216088631967,
+            "mean_abs_error": 6.871313109776955e-05,
+            "rmse": 8.51552846278102e-05,
+            "max_rel_error": 0.0001920291807706317,
+            "cosine_similarity": 0.9999999999569504,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 2096,
+            "cache_hits": 0,
+            "cache_evictions": 2062,
+            "cache_peak_bytes": 67093010,
+            "cache_bytes": 66077434,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 24886.9,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "warmup": false,
+          "runner_wall_ms": 41687.483243178576,
+          "decrypt_wall_ms": 15375.255153048784,
+          "e2e_fhe_wall_ms": 57062.73839622736,
+          "cpu_peak_rss_bytes": 18915565568,
+          "gpu_peak_used_bytes": 12141208973,
+          "metrics": {
+            "max_abs_error": 0.00017103216088631967,
+            "mean_abs_error": 6.871313109776955e-05,
+            "rmse": 8.51552846278102e-05,
+            "max_rel_error": 0.0001920291807706317,
+            "cosine_similarity": 0.9999999999569504,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 2096,
+            "cache_hits": 0,
+            "cache_evictions": 2062,
+            "cache_peak_bytes": 67092893,
+            "cache_bytes": 64750328,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 25550.5,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        }
+      ],
+      "bundle": {
+        "task_dir": "/tmp/latti-param-compression-acceptance/resnet20/legacy/task",
+        "ciphertext_count": 2096,
+        "encrypted_parameter_payload_bytes": 4588616340,
+        "encrypted_parameter_directory_bytes": 4588967096,
+        "runner_bundle_bytes": 7927478957,
+        "task_directory_bytes": 17947838825,
+        "by_param_kind": {
+          "weight": {
+            "ciphertext_count": 1972,
+            "payload_bytes": 4263227192
+          },
+          "bias": {
+            "ciphertext_count": 22,
+            "payload_bytes": 27296214
+          },
+          "poly_coeff": {
+            "ciphertext_count": 95,
+            "payload_bytes": 283756776
+          },
+          "mult_scalar_weight": {
+            "ciphertext_count": 7,
+            "payload_bytes": 14336158
+          }
+        },
+        "by_layer": {
+          "_conv1_Conv": {
+            "ciphertext_count": 37,
+            "payload_bytes": 158778305
+          },
+          "_relu_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_0_conv1_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 241650805
+          },
+          "_layer1_layer1_0_Add_mult_scalar_ts1793549783236760": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer1_layer1_0_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_0_conv2_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 241650805
+          },
+          "_layer1_layer1_0_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_1_conv1_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 241650805
+          },
+          "_layer1_layer1_1_Add_mult_scalar_ts1793549783236740": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer1_layer1_1_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_1_conv2_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 241650805
+          },
+          "_layer1_layer1_1_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_2_conv1_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 241650805
+          },
+          "_layer1_layer1_2_Add_mult_scalar_ts1793549783236723": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer1_layer1_2_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_2_conv2_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 241650805
+          },
+          "_layer1_layer1_2_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_0_conv1_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 336022789
+          },
+          "_layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 17,
+            "payload_bytes": 38224261
+          },
+          "_layer2_layer2_0_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_0_conv2_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer2_layer2_0_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_1_conv1_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer2_layer2_1_Add_mult_scalar_ts1793549783236698": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer2_layer2_1_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_1_conv2_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer2_layer2_1_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_2_conv1_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer2_layer2_2_Add_mult_scalar_ts1793549783236679": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer2_layer2_2_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_2_conv2_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer2_layer2_2_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_0_conv1_Conv": {
+            "ciphertext_count": 145,
+            "payload_bytes": 336022789
+          },
+          "_layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 17,
+            "payload_bytes": 38224261
+          },
+          "_layer3_layer3_0_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_0_conv2_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer3_layer3_0_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_1_conv1_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer3_layer3_1_Add_mult_scalar_ts1793549783236651": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer3_layer3_1_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_1_conv2_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer3_layer3_1_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer3_layer3_2_Add_mult_scalar_ts1793549783236621": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018
+          },
+          "_layer3_layer3_2_conv1_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 168511117
+          },
+          "_layer3_layer3_2_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 28180620
+          },
+          "_layer3_layer3_2_conv2_Conv": {
+            "ciphertext_count": 73,
+            "payload_bytes": 362268593
+          },
+          "_layer3_layer3_2_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_linear_Gemm": {
+            "ciphertext_count": 33,
+            "payload_bytes": 54477525
+          }
+        },
+        "arguments": {
+          "convw__conv1_Conv": {
+            "ciphertext_count": 36,
+            "payload_bytes": 155124648,
+            "level": 5,
+            "size": [
+              1,
+              4,
+              9
+            ],
+            "layer_id": "_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_0_conv1_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 240651360,
+            "level": 1,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer1_layer1_0_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer1_layer1_0_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer1_layer1_0_Add_mult_scalar_ts1793549783236760": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_Add_mult_scalar_ts1793549783236760",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_0_conv2_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 240651360,
+            "level": 1,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer1_layer1_0_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer1_layer1_0_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_1_conv1_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 240651360,
+            "level": 1,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer1_layer1_1_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer1_layer1_1_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer1_layer1_1_Add_mult_scalar_ts1793549783236740": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_Add_mult_scalar_ts1793549783236740",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_1_conv2_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 240651360,
+            "level": 1,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer1_layer1_1_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer1_layer1_1_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_2_conv1_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 240651360,
+            "level": 1,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer1_layer1_2_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer1_layer1_2_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer1_layer1_2_Add_mult_scalar_ts1793549783236723": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_Add_mult_scalar_ts1793549783236723",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_2_conv2_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 240651360,
+            "level": 1,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer1_layer1_2_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer1_layer1_2_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_0_conv1_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 335023344,
+            "level": 2,
+            "size": [
+              1,
+              16,
+              9
+            ],
+            "layer_id": "_layer2_layer2_0_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_0_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "convw__layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 16,
+            "payload_bytes": 37224816,
+            "level": 2,
+            "size": [
+              1,
+              16,
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_shortcut_shortcut_0_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_shortcut_shortcut_0_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_0_conv2_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              1,
+              8,
+              9
+            ],
+            "layer_id": "_layer2_layer2_0_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_0_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_1_conv1_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              1,
+              8,
+              9
+            ],
+            "layer_id": "_layer2_layer2_1_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_1_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer2_layer2_1_Add_mult_scalar_ts1793549783236698": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_Add_mult_scalar_ts1793549783236698",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_1_conv2_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              1,
+              8,
+              9
+            ],
+            "layer_id": "_layer2_layer2_1_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_1_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_2_conv1_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              1,
+              8,
+              9
+            ],
+            "layer_id": "_layer2_layer2_2_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_2_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer2_layer2_2_Add_mult_scalar_ts1793549783236679": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_Add_mult_scalar_ts1793549783236679",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_2_conv2_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              1,
+              8,
+              9
+            ],
+            "layer_id": "_layer2_layer2_2_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer2_layer2_2_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_0_conv1_Conv": {
+            "ciphertext_count": 144,
+            "payload_bytes": 335023344,
+            "level": 2,
+            "size": [
+              2,
+              8,
+              9
+            ],
+            "layer_id": "_layer3_layer3_0_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_0_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "convw__layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 16,
+            "payload_bytes": 37224816,
+            "level": 2,
+            "size": [
+              2,
+              8,
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_shortcut_shortcut_0_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_shortcut_shortcut_0_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_0_conv2_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              2,
+              4,
+              9
+            ],
+            "layer_id": "_layer3_layer3_0_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_0_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_1_conv1_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              2,
+              4,
+              9
+            ],
+            "layer_id": "_layer3_layer3_1_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_1_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer3_layer3_1_Add_mult_scalar_ts1793549783236651": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_Add_mult_scalar_ts1793549783236651",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_1_conv2_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              2,
+              4,
+              9
+            ],
+            "layer_id": "_layer3_layer3_1_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_1_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "mult_scalar__layer3_layer3_2_Add_mult_scalar_ts1793549783236621": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_Add_mult_scalar_ts1793549783236621",
+            "param_kind": "mult_scalar_weight"
+          },
+          "convw__layer3_layer3_2_conv1_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 167511672,
+            "level": 2,
+            "size": [
+              2,
+              4,
+              9
+            ],
+            "layer_id": "_layer3_layer3_2_conv1_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_2_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 6291485,
+            "level": 8,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_2_conv2_Conv": {
+            "ciphertext_count": 72,
+            "payload_bytes": 358614936,
+            "level": 6,
+            "size": [
+              2,
+              4,
+              9
+            ],
+            "layer_id": "_layer3_layer3_2_conv2_Conv",
+            "param_kind": "weight"
+          },
+          "convb__layer3_layer3_2_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "densew__linear_Gemm": {
+            "ciphertext_count": 32,
+            "payload_bytes": 53478080,
+            "level": 1,
+            "size": [
+              1,
+              32
+            ],
+            "layer_id": "_linear_Gemm",
+            "param_kind": "weight"
+          },
+          "denseb__linear_Gemm": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_linear_Gemm",
+            "param_kind": "bias"
+          }
+        }
+      },
+      "structure": {
+        "canonical_load_nodes": 2096,
+        "graph_operations": {
+          "load_encrypted_param_ct": 2096,
+          "rotate_col": 4321,
+          "mult": 2765,
+          "add": 2819,
+          "rescale": 822,
+          "relin": 2057,
+          "drop_level": 167,
+          "bootstrap": 17,
+          "encode_pt": 448
+        },
+        "recovery_operations": {},
+        "public_masks_absent": true,
+        "shape_level_scale_layout_match": true
+      },
+      "ckks_parameter": {
+        "param0": {
+          "poly_modulus_degree": 65536,
+          "n_mult_level": 9,
+          "log_default_scale": 40,
+          "param_name": "N16QP1546H192H32",
+          "q": [
+            1152921504614055937,
+            1099512938497,
+            1099510054913,
+            1099507695617,
+            1099515691009,
+            1099506515969,
+            1099516870657,
+            1099504549889,
+            1099503894529,
+            1099503370241,
+            549754109953,
+            549753978881,
+            549753716737,
+            1152921504598720513,
+            1152921504615628801,
+            1152921504597016577,
+            1152921504616808449,
+            1152921504595968001,
+            1152921504618381313,
+            1152921504620347393,
+            1152921504592822273,
+            72057594038321153,
+            72057594036879361,
+            72057594035306497,
+            72057594040680449
+          ],
+          "p": [
+            2305843009211596801,
+            2305843009210023937,
+            2305843009208713217,
+            2305843009202159617,
+            2305843009201242113
+          ]
+        }
+      },
+      "plaintext_wall_ms": 1.1961203999817371,
+      "commands": [
+        {
+          "command": [
+            "/home/linghm/pytorch_venv/bin/python",
+            "/home/linghm/project/latti-ai/training/run_compile.py",
+            "--input",
+            "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+            "--output",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy",
+            "--style",
+            "multiplexed",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--config",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 3684.911100193858,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 555836,
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "command": [
+            "/home/linghm/pytorch_venv/bin/python",
+            "/home/linghm/project/latti-ai/inference/interface/gen_mega_ag.py",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--parameter-loading-mode",
+            "runtime_lazy"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 1071.9988909550011,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 99752,
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/provision_encrypted_runner_bundle",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task",
+            "--out",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 171523.0776737444,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 27363028,
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 43311.16851232946,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 17276048
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15467.204824090004,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15120000
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 41665.6632036902,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 18502124
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15428.351977840066,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15119652
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 40922.57845122367,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 18362704
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15358.628782909364,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15118176
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 41687.483243178576,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 18472232
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15375.255153048784,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15121788
+        }
+      ],
+      "seed_stride": [
+        1,
+        1
+      ],
+      "metrics": {
+        "max_abs_error": 0.00017103216088631967,
+        "mean_abs_error": 6.871313109776955e-05,
+        "rmse": 8.51552846278102e-05,
+        "max_rel_error": 0.0001920291807706317,
+        "cosine_similarity": 0.9999999999569504,
+        "top1_match": true
+      },
+      "timing_scope": "Process wall time includes key/model loading and CUDA initialization; decrypt is a separate process. Plaintext inference excludes session preparation (reported separately).",
+      "gpu_core_ms": 25482.3
+    },
+    "compressed": {
+      "runner_wall_ms": 25970.369577407837,
+      "decrypt_wall_ms": 15410.806300118566,
+      "e2e_fhe_wall_ms": 41567.97490036115,
+      "cpu_peak_rss_bytes": 19930787840,
+      "gpu_peak_used_bytes": 12194161625,
+      "encrypted_parameter_payload_bytes": 993679628,
+      "runner_bundle_bytes": 4347337596,
+      "task_directory_bytes": 14367516710,
+      "samples": [
+        {
+          "warmup": true,
+          "runner_wall_ms": 26397.887269966304,
+          "decrypt_wall_ms": 15441.340858116746,
+          "e2e_fhe_wall_ms": 41839.22812808305,
+          "cpu_peak_rss_bytes": 19759120384,
+          "gpu_peak_used_bytes": 12151170076,
+          "metrics": {
+            "max_abs_error": 0.00016317196249104882,
+            "mean_abs_error": 0.00010126694066789899,
+            "rmse": 0.00011455618268447595,
+            "max_rel_error": 0.00037657117218355265,
+            "cosine_similarity": 0.9999999999146855,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 252,
+            "cache_hits": 0,
+            "cache_evictions": 236,
+            "cache_peak_bytes": 67076548,
+            "cache_bytes": 62357910,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 9659.55,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "warmup": false,
+          "runner_wall_ms": 25970.369577407837,
+          "decrypt_wall_ms": 15597.605322953314,
+          "e2e_fhe_wall_ms": 41567.97490036115,
+          "cpu_peak_rss_bytes": 21124800512,
+          "gpu_peak_used_bytes": 12476753293,
+          "metrics": {
+            "max_abs_error": 0.00016317196249104882,
+            "mean_abs_error": 0.00010126694066789899,
+            "rmse": 0.00011455618268447595,
+            "max_rel_error": 0.00037657117218355265,
+            "cosine_similarity": 0.9999999999146855,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 252,
+            "cache_hits": 0,
+            "cache_evictions": 236,
+            "cache_peak_bytes": 67076587,
+            "cache_bytes": 64995738,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 9271.51,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "warmup": false,
+          "runner_wall_ms": 26213.651401922107,
+          "decrypt_wall_ms": 15410.806300118566,
+          "e2e_fhe_wall_ms": 41624.45770204067,
+          "cpu_peak_rss_bytes": 19853508608,
+          "gpu_peak_used_bytes": 12194161625,
+          "metrics": {
+            "max_abs_error": 0.00016317196249104882,
+            "mean_abs_error": 0.00010126694066789899,
+            "rmse": 0.00011455618268447595,
+            "max_rel_error": 0.00037657117218355265,
+            "cosine_similarity": 0.9999999999146855,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 252,
+            "cache_hits": 0,
+            "cache_evictions": 236,
+            "cache_peak_bytes": 67076548,
+            "cache_bytes": 64995738,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 9613.53,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "warmup": false,
+          "runner_wall_ms": 25936.81756639853,
+          "decrypt_wall_ms": 15394.866412039846,
+          "e2e_fhe_wall_ms": 41331.68397843838,
+          "cpu_peak_rss_bytes": 19930787840,
+          "gpu_peak_used_bytes": 12110275545,
+          "metrics": {
+            "max_abs_error": 0.00016317196249104882,
+            "mean_abs_error": 0.00010126694066789899,
+            "rmse": 0.00011455618268447595,
+            "max_rel_error": 0.00037657117218355265,
+            "cosine_similarity": 0.9999999999146855,
+            "top1_match": true
+          },
+          "cache": {
+            "canonical_loads": 252,
+            "cache_hits": 0,
+            "cache_evictions": 236,
+            "cache_peak_bytes": 67076626,
+            "cache_bytes": 64995738,
+            "cache_capacity_bytes": 67108864,
+            "byte_accounting": "serialized_ciphertext_payload"
+          },
+          "monitors": {
+            "cpu": "[raw artifact cleaned after acceptance]",
+            "gpu": "[raw artifact cleaned after acceptance]"
+          },
+          "gpu_core_ms": 9383.83,
+          "logits_csv": "[raw artifact cleaned after acceptance]"
+        }
+      ],
+      "bundle": {
+        "task_dir": "/tmp/latti-param-compression-acceptance/resnet20/compressed/task",
+        "ciphertext_count": 252,
+        "encrypted_parameter_payload_bytes": 993679628,
+        "encrypted_parameter_directory_bytes": 993842884,
+        "runner_bundle_bytes": 4347337596,
+        "task_directory_bytes": 14367516710,
+        "by_param_kind": {
+          "seed_weight": {
+            "ciphertext_count": 127,
+            "payload_bytes": 579718423
+          },
+          "bias": {
+            "ciphertext_count": 22,
+            "payload_bytes": 50463225
+          },
+          "poly_coeff": {
+            "ciphertext_count": 95,
+            "payload_bytes": 343525698
+          },
+          "mult_scalar_weight": {
+            "ciphertext_count": 7,
+            "payload_bytes": 17645731
+          },
+          "weight": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551
+          }
+        },
+        "by_layer": {
+          "_conv1_Conv": {
+            "ciphertext_count": 4,
+            "payload_bytes": 30965885
+          },
+          "_relu_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer1_layer1_0_conv1_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 54378773
+          },
+          "_layer1_layer1_0_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_0_Add_mult_scalar_ts1793550191105585": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer1_layer1_0_conv2_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 27836653
+          },
+          "_layer1_layer1_0_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer1_layer1_1_conv1_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 54378773
+          },
+          "_layer1_layer1_1_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_1_Add_mult_scalar_ts1793550191105568": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer1_layer1_1_conv2_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 27836653
+          },
+          "_layer1_layer1_1_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer1_layer1_2_conv1_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 54378773
+          },
+          "_layer1_layer1_2_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_layer1_layer1_2_Add_mult_scalar_ts1793550191105550": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer1_layer1_2_conv2_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 27836653
+          },
+          "_layer1_layer1_2_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 2,
+            "payload_bytes": 7962675
+          },
+          "_layer2_layer2_0_conv1_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 33882358
+          },
+          "_layer2_layer2_0_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer2_layer2_0_conv2_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 31162532
+          },
+          "_layer2_layer2_0_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 8339566
+          },
+          "_layer2_layer2_1_conv1_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 39043248
+          },
+          "_layer2_layer2_1_Add_mult_scalar_ts1793550191105526": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer2_layer2_1_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer2_layer2_1_conv2_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 19267730
+          },
+          "_layer2_layer2_1_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 28180620
+          },
+          "_layer2_layer2_2_Add_mult_scalar_ts1793550191105507": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763
+          },
+          "_layer2_layer2_2_conv1_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 31162532
+          },
+          "_layer2_layer2_2_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 8339566
+          },
+          "_layer2_layer2_2_conv2_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 39043248
+          },
+          "_layer2_layer2_2_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_0_conv1_Conv": {
+            "ciphertext_count": 10,
+            "payload_bytes": 33882358
+          },
+          "_layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 2,
+            "payload_bytes": 3981357
+          },
+          "_layer3_layer3_0_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_0_conv2_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 19267730
+          },
+          "_layer3_layer3_0_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_1_conv1_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 19267730
+          },
+          "_layer3_layer3_1_Add_mult_scalar_ts1793550191105479": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190
+          },
+          "_layer3_layer3_1_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 14925944
+          },
+          "_layer3_layer3_1_conv2_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 19267730
+          },
+          "_layer3_layer3_1_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 24887431
+          },
+          "_layer3_layer3_2_Add_mult_scalar_ts1793550191105449": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018
+          },
+          "_layer3_layer3_2_conv1_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 19267730
+          },
+          "_layer3_layer3_2_relu1_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 28180620
+          },
+          "_layer3_layer3_2_conv2_Conv": {
+            "ciphertext_count": 6,
+            "payload_bytes": 35111082
+          },
+          "_layer3_layer3_2_relu2_RangeNormPoly2d": {
+            "ciphertext_count": 5,
+            "payload_bytes": 11632755
+          },
+          "_linear_Gemm": {
+            "ciphertext_count": 2,
+            "payload_bytes": 3325996
+          }
+        },
+        "arguments": {
+          "convw__conv1_Conv": {
+            "ciphertext_count": 3,
+            "payload_bytes": 24674400,
+            "level": 11,
+            "size": [
+              1,
+              3,
+              1
+            ],
+            "layer_id": "_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 6291485,
+            "level": 8,
+            "size": [
+              1
+            ],
+            "layer_id": "_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__relu_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_relu_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_0_conv1_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 50725116,
+            "level": 7,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer1_layer1_0_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "mult_scalar__layer1_layer1_0_Add_mult_scalar_ts1793550191105585": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_Add_mult_scalar_ts1793550191105585",
+            "param_kind": "mult_scalar_weight"
+          },
+          "convw__layer1_layer1_0_conv2_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 26837208,
+            "level": 3,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer1_layer1_0_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_0_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_1_conv1_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 50725116,
+            "level": 7,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer1_layer1_1_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "mult_scalar__layer1_layer1_1_Add_mult_scalar_ts1793550191105568": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_Add_mult_scalar_ts1793550191105568",
+            "param_kind": "mult_scalar_weight"
+          },
+          "convw__layer1_layer1_1_conv2_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 26837208,
+            "level": 3,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer1_layer1_1_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_1_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer1_layer1_2_conv1_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 50725116,
+            "level": 7,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer1_layer1_2_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "mult_scalar__layer1_layer1_2_Add_mult_scalar_ts1793550191105550": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_Add_mult_scalar_ts1793550191105550",
+            "param_kind": "mult_scalar_weight"
+          },
+          "convw__layer1_layer1_2_conv2_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 26837208,
+            "level": 3,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer1_layer1_2_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer1_layer1_2_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer1_layer1_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1,
+              1,
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_shortcut_shortcut_0_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_shortcut_shortcut_0_Conv",
+            "param_kind": "bias"
+          },
+          "convw__layer2_layer2_0_conv1_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 32882913,
+            "level": 4,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_0_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_0_conv2_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 28180620,
+            "level": 7,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_0_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_0_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_1_conv1_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 34734230,
+            "level": 9,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_1_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer2_layer2_1_Add_mult_scalar_ts1793550191105526": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_Add_mult_scalar_ts1793550191105526",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_1_conv2_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 18268285,
+            "level": 4,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_1_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_1_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 6291485,
+            "level": 8,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "mult_scalar__layer2_layer2_2_Add_mult_scalar_ts1793550191105507": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_Add_mult_scalar_ts1793550191105507",
+            "param_kind": "mult_scalar_weight"
+          },
+          "convw__layer2_layer2_2_conv1_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 28180620,
+            "level": 7,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_2_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer2_layer2_2_conv2_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 34734230,
+            "level": 9,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer2_layer2_2_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer2_layer2_2_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer2_layer2_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_0_conv1_Conv": {
+            "ciphertext_count": 9,
+            "payload_bytes": 32882913,
+            "level": 4,
+            "size": [
+              1,
+              9,
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_0_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "convw__layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1,
+              1,
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_shortcut_shortcut_0_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_0_shortcut_shortcut_0_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_shortcut_shortcut_0_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_0_conv2_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 18268285,
+            "level": 4,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_0_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_0_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_0_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_1_conv1_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 18268285,
+            "level": 4,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_1_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "mult_scalar__layer3_layer3_1_Add_mult_scalar_ts1793550191105479": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_Add_mult_scalar_ts1793550191105479",
+            "param_kind": "mult_scalar_weight"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_1_conv2_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 18268285,
+            "level": 4,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_1_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_1_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_1_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "mult_scalar__layer3_layer3_2_Add_mult_scalar_ts1793550191105449": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4309018,
+            "level": 5,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_Add_mult_scalar_ts1793550191105449",
+            "param_kind": "mult_scalar_weight"
+          },
+          "convw__layer3_layer3_2_conv1_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 18268285,
+            "level": 4,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_conv1_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_2_conv1_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_conv1_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 4980763,
+            "level": 6,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 5636124,
+            "level": 7,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu1_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 6291485,
+            "level": 8,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu1_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "convw__layer3_layer3_2_conv2_Conv": {
+            "ciphertext_count": 5,
+            "payload_bytes": 31457425,
+            "level": 8,
+            "size": [
+              1,
+              5,
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_conv2_Conv",
+            "param_kind": "seed_weight"
+          },
+          "convb__layer3_layer3_2_conv2_Conv": {
+            "ciphertext_count": 1,
+            "payload_bytes": 3653657,
+            "level": 4,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_conv2_Conv",
+            "param_kind": "bias"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_0": {
+            "ciphertext_count": 1,
+            "payload_bytes": 1671190,
+            "level": 1,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_1": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_2": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_3": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "poly_reluw__layer3_layer3_2_relu2_RangeNormPoly2d_4": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2981912,
+            "level": 3,
+            "size": [
+              1
+            ],
+            "layer_id": "_layer3_layer3_2_relu2_RangeNormPoly2d",
+            "param_kind": "poly_coeff"
+          },
+          "densew__linear_Gemm": {
+            "ciphertext_count": 1,
+            "payload_bytes": 2326551,
+            "level": 2,
+            "size": [
+              1,
+              1
+            ],
+            "layer_id": "_linear_Gemm",
+            "param_kind": "weight"
+          },
+          "denseb__linear_Gemm": {
+            "ciphertext_count": 1,
+            "payload_bytes": 999445,
+            "level": 0,
+            "size": [
+              1
+            ],
+            "layer_id": "_linear_Gemm",
+            "param_kind": "bias"
+          }
+        }
+      },
+      "structure": {
+        "canonical_load_nodes": 252,
+        "graph_operations": {
+          "encode_pt": 4328,
+          "load_encrypted_param_ct": 252,
+          "mult": 6645,
+          "rescale": 4702,
+          "rotate_col": 12157,
+          "add": 10579,
+          "relin": 2057,
+          "drop_level": 144,
+          "bootstrap": 12
+        },
+        "recovery_operations": {
+          "encode_pt": 3880,
+          "mult": 3916,
+          "rescale": 3881,
+          "rotate_col": 8004,
+          "add": 7795
+        },
+        "public_masks_absent": true,
+        "shape_level_scale_layout_match": true
+      },
+      "ckks_parameter": {
+        "param0": {
+          "poly_modulus_degree": 65536,
+          "n_mult_level": 9,
+          "log_default_scale": 40,
+          "param_name": "N16QP1546H192H32",
+          "q": [
+            1152921504614055937,
+            1099512938497,
+            1099510054913,
+            1099507695617,
+            1099515691009,
+            1099506515969,
+            1099516870657,
+            1099504549889,
+            1099503894529,
+            1099503370241,
+            549754109953,
+            549753978881,
+            549753716737,
+            1152921504598720513,
+            1152921504615628801,
+            1152921504597016577,
+            1152921504616808449,
+            1152921504595968001,
+            1152921504618381313,
+            1152921504620347393,
+            1152921504592822273,
+            72057594038321153,
+            72057594036879361,
+            72057594035306497,
+            72057594040680449
+          ],
+          "p": [
+            2305843009211596801,
+            2305843009210023937,
+            2305843009208713217,
+            2305843009202159617,
+            2305843009201242113
+          ]
+        }
+      },
+      "plaintext_wall_ms": 1.1961203999817371,
+      "commands": [
+        {
+          "command": [
+            "/home/linghm/pytorch_venv/bin/python",
+            "/home/linghm/project/latti-ai/training/run_compile.py",
+            "--input",
+            "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+            "--output",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed",
+            "--style",
+            "multiplexed",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--config",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 3527.157950680703,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 555612,
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "command": [
+            "/home/linghm/pytorch_venv/bin/python",
+            "/home/linghm/project/latti-ai/inference/interface/gen_mega_ag.py",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--parameter-loading-mode",
+            "runtime_lazy"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 2527.8502497822046,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 179784,
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/provision_encrypted_runner_bundle",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task",
+            "--out",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 76215.3507382609,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 26956716,
+          "archived_command_record": "[raw artifact cleaned after acceptance]"
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 26397.887269966304,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 19296016
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15441.340858116746,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15119732
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 25970.369577407837,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 20629688
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15597.605322953314,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15120884
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 26213.651401922107,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 19388192
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15410.806300118566,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15119680
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/examples/inference",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+            "--deployment-mode",
+            "server_provisioned_runner",
+            "--input",
+            "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+            "--output-cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--gpu"
+          ],
+          "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+          "returncode": 0,
+          "wall_ms": 25936.81756639853,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 19463660
+        },
+        {
+          "command": [
+            "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+            "--task-dir",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+            "--cipher",
+            "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+            "--output-csv",
+            "[raw artifact cleaned after acceptance]"
+          ],
+          "cwd": "/home/linghm/project/latti-ai",
+          "returncode": 0,
+          "wall_ms": 15394.866412039846,
+          "log": "[raw artifact cleaned after acceptance]",
+          "peak_rss_kib": 15119236
+        }
+      ],
+      "seed_stride": [
+        4,
+        4
+      ],
+      "metrics": {
+        "max_abs_error": 0.00016317196249104882,
+        "mean_abs_error": 0.00010126694066789899,
+        "rmse": 0.00011455618268447595,
+        "max_rel_error": 0.00037657117218355265,
+        "cosine_similarity": 0.9999999999146855,
+        "top1_match": true
+      },
+      "timing_scope": "Process wall time includes key/model loading and CUDA initialization; decrypt is a separate process. Plaintext inference excludes session preparation (reported separately).",
+      "gpu_core_ms": 9383.83
+    }
+  },
+  "acceptance_passed": true,
+  "encrypted_parameter_payload_bytes": 993679628,
+  "runner_bundle_bytes": 4347337596,
+  "task_directory_bytes": 14367516710,
+  "cpu_peak_rss_bytes": 19930787840,
+  "gpu_peak_used_bytes": 12194161625,
+  "runner_wall_ms": 25970.369577407837,
+  "decrypt_wall_ms": 15410.806300118566,
+  "e2e_fhe_wall_ms": 41567.97490036115,
+  "plaintext_wall_ms": 1.1961203999817371,
+  "metrics": {
+    "max_abs_error": 0.00016317196249104882,
+    "mean_abs_error": 0.00010126694066789899,
+    "rmse": 0.00011455618268447595,
+    "max_rel_error": 0.00037657117218355265,
+    "cosine_similarity": 0.9999999999146855,
+    "top1_match": true
+  },
+  "ckks_parameter": {
+    "param0": {
+      "poly_modulus_degree": 65536,
+      "n_mult_level": 9,
+      "log_default_scale": 40,
+      "param_name": "N16QP1546H192H32",
+      "q": [
+        1152921504614055937,
+        1099512938497,
+        1099510054913,
+        1099507695617,
+        1099515691009,
+        1099506515969,
+        1099516870657,
+        1099504549889,
+        1099503894529,
+        1099503370241,
+        549754109953,
+        549753978881,
+        549753716737,
+        1152921504598720513,
+        1152921504615628801,
+        1152921504597016577,
+        1152921504616808449,
+        1152921504595968001,
+        1152921504618381313,
+        1152921504620347393,
+        1152921504592822273,
+        72057594038321153,
+        72057594036879361,
+        72057594035306497,
+        72057594040680449
+      ],
+      "p": [
+        2305843009211596801,
+        2305843009210023937,
+        2305843009208713217,
+        2305843009202159617,
+        2305843009201242113
+      ]
+    }
+  },
+  "commands": [
+    {
+      "command": [
+        "/home/linghm/pytorch_venv/bin/python",
+        "/home/linghm/project/latti-ai/training/run_compile.py",
+        "--input",
+        "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+        "--output",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy",
+        "--style",
+        "multiplexed",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--config",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 3684.911100193858,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 555836,
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
+    },
+    {
+      "command": [
+        "/home/linghm/pytorch_venv/bin/python",
+        "/home/linghm/project/latti-ai/inference/interface/gen_mega_ag.py",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--parameter-loading-mode",
+        "runtime_lazy"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 1071.9988909550011,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 99752,
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/provision_encrypted_runner_bundle",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task",
+        "--out",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 171523.0776737444,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 27363028,
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
+    },
+    {
+      "command": [
+        "/home/linghm/pytorch_venv/bin/python",
+        "/home/linghm/project/latti-ai/training/run_compile.py",
+        "--input",
+        "/home/linghm/project/latti-ai/runs/cifar10/model/trained_poly.onnx",
+        "--output",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed",
+        "--style",
+        "multiplexed",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--config",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 3527.157950680703,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 555612,
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
+    },
+    {
+      "command": [
+        "/home/linghm/pytorch_venv/bin/python",
+        "/home/linghm/project/latti-ai/inference/interface/gen_mega_ag.py",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--parameter-loading-mode",
+        "runtime_lazy"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 2527.8502497822046,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 179784,
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/provision_encrypted_runner_bundle",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task",
+        "--out",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 76215.3507382609,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 26956716,
+      "archived_command_record": "[raw artifact cleaned after acceptance]"
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 43311.16851232946,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 17276048
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15467.204824090004,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15120000
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 41665.6632036902,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 18502124
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15428.351977840066,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15119652
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 40922.57845122367,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 18362704
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15358.628782909364,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15118176
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 41687.483243178576,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 18472232
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/legacy/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15375.255153048784,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15121788
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 26397.887269966304,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 19296016
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15441.340858116746,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15119732
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 25970.369577407837,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 20629688
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15597.605322953314,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15120884
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 26213.651401922107,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 19388192
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15410.806300118566,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15119680
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/examples/inference",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/runner",
+        "--deployment-mode",
+        "server_provisioned_runner",
+        "--input",
+        "input=/home/linghm/project/latti-ai/examples/test_cifar10/task/client/img.csv",
+        "--output-cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--gpu"
+      ],
+      "cwd": "/home/linghm/project/latti-ai/docs/report/raw",
+      "returncode": 0,
+      "wall_ms": 25936.81756639853,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 19463660
+    },
+    {
+      "command": [
+        "/home/linghm/project/latti-ai/build/tools/decrypt_runner_output",
+        "--task-dir",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/task/provisioner",
+        "--cipher",
+        "/tmp/latti-param-compression-acceptance/resnet20/compressed/output.ct",
+        "--output-csv",
+        "[raw artifact cleaned after acceptance]"
+      ],
+      "cwd": "/home/linghm/project/latti-ai",
+      "returncode": 0,
+      "wall_ms": 15394.866412039846,
+      "log": "[raw artifact cleaned after acceptance]",
+      "peak_rss_kib": 15119236
+    }
+  ],
+  "preparation_provenance": {
+    "source_sha256": "1080f6321b458e32ee0df40657ce56d538e52c0b76013ec3ef64674f832a13c8",
+    "source_provenance": "[raw artifact cleaned after acceptance]",
+    "note": "Compiled and provisioned tasks reused. Final binary fixes JSON object key-order comparison only; all GPU/decrypt samples rerun with the final binary."
+  },
+  "numerical_gate_baseline_max_abs": 0.00017103216088631967
+}

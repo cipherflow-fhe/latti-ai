@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 
 op_class = 'ParLowerDiagonalAddPt'
@@ -69,7 +69,7 @@ class ParLowerDiagonalAddPt:
         pt_nodes = []
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
-                node = CkksPlaintextNode(f'encode_pt_add_{mb}_{ct_local}', is_ringt=True)
+                node = CkksPlaintextNode(f'{data_source.id}/encode_pt_add_{mb}_{ct_local}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                 custom_compute(
                     inputs=[data_source],
                     output=node,

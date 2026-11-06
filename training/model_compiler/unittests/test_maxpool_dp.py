@@ -16,14 +16,14 @@ from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_stage
 from inference.model_generator.layers import poly_maxpool2d_layer as reduction
 from inference.model_generator.layers import poly2d
 from inference.model_generator.layers import poly_maxpool_stages as stages
-import inference.lattisense.frontend.custom_task as custom_task
+import frontend.custom_task as custom_task
 from training.model_compiler.maxpool_plan import build_maxpool_plan
 
 
 class MaxPoolDPTest(unittest.TestCase):
     def setUp(self):
         self.saved = copy.deepcopy(components.config.__dict__)
-        components.config.fhe_param = copy.deepcopy(components.N16QP1546H192H32)
+        components.config.fhe_param = copy.deepcopy(components.PN15Default)
         components.config.block_shape = [128, 128]
         components.config.style = 'multiplexed'
         components.config.mpc_refresh = False
@@ -58,13 +58,13 @@ class MaxPoolDPTest(unittest.TestCase):
         refresh_groups = []
         for node in result:
             if not isinstance(node, components.ComputeNode):
-                self.assertTrue(0 <= result.nodes[node]['level'] <= 9)
+                self.assertTrue(0 <= result.nodes[node]['level'] <= components.config.fhe_param.max_level)
                 continue
             source = next(result.predecessors(node))
             output = next(result.successors(node))
             before, after = result.nodes[source]['level'], result.nodes[output]['level']
             if node.layer_type == 'bootstrapping':
-                self.assertEqual(after, 9)
+                self.assertEqual(after, components.config.fhe_param.max_level)
                 self.assertEqual(source.maxpool_state, output.maxpool_state)
                 cost = BtpScoreParam(result, node, params, use_gpu=True)
                 self.assertEqual(cost.ct_num, source.maxpool_state['groups'] * 64)
@@ -82,9 +82,11 @@ class MaxPoolDPTest(unittest.TestCase):
         plan = build_maxpool_plan(
             {'kernel_shape': [3, 3], 'stride': [2, 2], 'padding': [1, 1]}, [256, 256])
         class Ct:
-            def __init__(self, level): self.level = level
+            def __init__(self, level):
+                self.level = level
+                self.metadata = SimpleNamespace(level=level)
         class Pt: pass
-        param = SimpleNamespace(n=65536, scale=2.**40, q=[2.**40] * 33)
+        param = SimpleNamespace(n=65536, default_scale=2.**40, q=[2.**40] * 33)
         for alpha, level in ((a, get_maxpool_compare_cost(a) + extra)
                              for a in range(7, 15) for extra in (0, 2)):
             for r in range(4):
@@ -136,7 +138,7 @@ class MaxPoolDPTest(unittest.TestCase):
                     btp = BtpScoreParam(result, node, params, use_gpu=True)
                     if state is not None:
                         self.assertEqual(btp.ct_num, state['groups'] * 64)
-                    self.assertEqual(result.nodes[output]['level'], 9)
+                    self.assertEqual(result.nodes[output]['level'], components.config.fhe_param.max_level)
                     internal_refreshes += state is not None and 'layout' in state
                     actual_score += btp.get_score()
                 elif isinstance(node, components.ComputeNode):
@@ -147,7 +149,7 @@ class MaxPoolDPTest(unittest.TestCase):
                     self.assertGreater(get_compute_score(result, node, params), 0)
                     actual_score += get_compute_score(result, node, params)
             self.assertAlmostEqual(score, actual_score)
-            if alpha >= 10:
+            if cost > components.config.fhe_param.max_level:
                 self.assertGreater(internal_refreshes, 0)
 
     def test_higher_profiles_lower_with_sufficient_real_budget(self):

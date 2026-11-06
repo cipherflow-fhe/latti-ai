@@ -211,7 +211,7 @@ void Conv2DPackedLayer::prepare_weight_lazy() {
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
 
     // Cache values for on-demand generation
-    N = param_.n();
+    n_real_num_slot = param_.n();
     cached_n_packed_in_ct = n_packed_ct_in_;
     cached_n_packed_out_ct = n_packed_ct_out_;
     cached_input_block_size = input_shape_ct[0] * input_shape_ct[1];

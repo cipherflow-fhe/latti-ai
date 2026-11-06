@@ -32,6 +32,7 @@
 #include "fhe_layers/inverse_multiplexed_conv2d_layer_depthwise.h"
 #include "fhe_layers/layer.h"
 #include "fhe_layers/poly_base.h"
+#include "fhe_layers/mat_poly_base.h"
 #include "fhe_layers/mult_scaler.h"
 #include "fhe_layers/multiplexed_conv1d_pack_layer.h"
 #include "fhe_layers/multiplexed_conv2d_pack_layer.h"
@@ -60,3 +61,7 @@
 #include "fhe_layers/reshape_layer.h"
 #include "fhe_layers/upsample_layer.h"
 #include "fhe_layers/upsample_nearest_layer.h"
+
+#include "par_block_col_major_softmax.h"
+#include "par_block_col_major_poly.h"
+#include "par_block_col_major_poly_mult_ct.h"

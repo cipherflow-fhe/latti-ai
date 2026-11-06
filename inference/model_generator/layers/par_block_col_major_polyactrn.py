@@ -21,7 +21,9 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
+from inference.model_generator.layers.matrix_param_ops import custom_compute, mult, add
 
 op_class = 'ParBlockColMajorPolyActRNPoly'
 gamma_op_class = 'ParBlockColMajorPolyActRNGamma'
@@ -39,14 +41,17 @@ def _next_pow2(n: int) -> int:
 class ParBlockColMajorPolyActRNGamma:
     """Python model-generator counterpart of C++ ParBlockColMajorPolyActRNGamma."""
 
-    def __init__(self, shape: tuple, block_size: int, n_heads: int, n_slot: int, K: int = 1):
+    def __init__(self, shape: tuple, block_size: int, n_heads: int, n_slot: int, K: int = 1, head_shape: tuple | None = None):
         assert K > 0
-        assert shape[1] % (K * n_heads) == 0
+        self.row_scalar = shape[1] == 1
+        if head_shape is None and not self.row_scalar:
+            assert shape[1] % (K * n_heads) == 0
 
         self.m = shape[0]
         self.total_dim = shape[1]
         self.K = K
-        self.cols_per_head = shape[1] // (K * n_heads)
+        self.cols_per_head = int(head_shape[1]) if head_shape else max(1, shape[1] // (K * n_heads))
+        self.K = math.ceil(shape[1] / (n_heads * self.cols_per_head))
         self.d = block_size
         self.n_heads = n_heads
         self.n_slot = n_slot
@@ -63,6 +68,9 @@ class ParBlockColMajorPolyActRNGamma:
                 self.n_h_padded = self.n_heads
             self.G = self.n_h_padded // self.S
 
+        if self.row_scalar:
+            self.G = 1
+            self.cols_per_head = self.d
         assert n_slot % self.chunk_size == 0
         self.num_chunks = n_slot // self.chunk_size
         self.num_block_rows = math.ceil(self.m / self.d)
@@ -92,7 +100,7 @@ class ParBlockColMajorPolyActRNGamma:
                 for bj in range(self.num_block_cols):
                     gamma_row = []
                     for g in range(self.G):
-                        gamma_node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        gamma_node = CkksPlaintextNode(f'encode_pt_gamma_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': gamma_op_class, 'type': 'gamma_pt'}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=gamma_node,
@@ -129,7 +137,7 @@ class ParBlockColMajorPolyActRNPoly:
             shape:      (m, total_dim), where total_dim = K * n_heads * cols_per_head.
             block_size: d, block size.
             n_heads:    number of interleaved heads.
-            n_slot:     N/2 (number of CKKS slots per ciphertext).
+            n_slot:     v6 real slot capacity (parameter.max_slots()).
             degree:     polynomial degree, only 2 or 4.
             K:          megablock count.
         """
@@ -242,7 +250,7 @@ class ParBlockColMajorPolyActRNPoly:
                     c4_row = []
                     c3_row = []
                     for g in range(self.G):
-                        c2_node = CkksPlaintextNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        c2_node = CkksPlaintextNode(f'encode_pt_poly_c2_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': op_class, 'type': 'coeff_pt', 'coeff_idx': 2}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=c2_node,
@@ -259,7 +267,7 @@ class ParBlockColMajorPolyActRNPoly:
                         )
                         c2_row.append(c2_node)
 
-                        c1_node = CkksPlaintextNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        c1_node = CkksPlaintextNode(f'encode_pt_poly_c1_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': op_class, 'type': 'coeff_pt', 'coeff_idx': 1}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=c1_node,
@@ -277,7 +285,7 @@ class ParBlockColMajorPolyActRNPoly:
                         c1_row.append(c1_node)
 
                         if self.degree == 4:
-                            c4_node = CkksPlaintextNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                            c4_node = CkksPlaintextNode(f'encode_pt_poly_c4_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': op_class, 'type': 'coeff_pt', 'coeff_idx': 4}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                             custom_compute(
                                 inputs=[data_source],
                                 output=c4_node,
@@ -294,7 +302,7 @@ class ParBlockColMajorPolyActRNPoly:
                             )
                             c4_row.append(c4_node)
 
-                            c3_node = CkksPlaintextNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                            c3_node = CkksPlaintextNode(f'encode_pt_poly_c3_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': op_class, 'type': 'coeff_pt', 'coeff_idx': 3}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                             custom_compute(
                                 inputs=[data_source],
                                 output=c3_node,
@@ -335,7 +343,7 @@ class ParBlockColMajorPolyActRNPoly:
                 for bj in range(self.num_block_cols):
                     c0_bibj = []
                     for g in range(self.G):
-                        c0_node = CkksPlaintextNode(f'encode_pt_poly_c0_{mb}_{bi}_{bj}_{g}', is_ringt=True)
+                        c0_node = CkksPlaintextNode(f'encode_pt_poly_c0_{mb}_{bi}_{bj}_{g}', is_ringt=True, scale=pcm_parameter_scale({'op_class': op_class, 'type': 'coeff_pt', 'coeff_idx': 0}, [input_cts[0].metadata.level], get_fhe_param()), level=0)
                         custom_compute(
                             inputs=[data_source],
                             output=c0_node,

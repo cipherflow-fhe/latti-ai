@@ -21,7 +21,7 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 
 
@@ -170,7 +170,7 @@ class MultiplexedDWConv1DPackedLayer:
             x_ct_list = []
             w_pt_list = []
             for k in range(self.kernel_shape):
-                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{k}', is_ringt=True)
+                w_pt = CkksPlaintextNode(f'encode_pt_{ct_idx}_{k}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=w_pt,
@@ -200,7 +200,7 @@ class MultiplexedDWConv1DPackedLayer:
         if not needs_rearrange:
             res = list()
             for ct_idx in range(self.n_packed_ct):
-                b_pt = CkksPlaintextNode(f'encode_pt_bias_{ct_idx}', is_ringt=True)
+                b_pt = CkksPlaintextNode(f'encode_pt_bias_{ct_idx}', is_ringt=True, scale=(float(get_fhe_param().q[x[0].metadata.level - 1]) if self.skip > 1 or self.stride > 1 else float(get_fhe_param().default_scale)), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -220,7 +220,7 @@ class MultiplexedDWConv1DPackedLayer:
             n_local_ch = min(self.n_channel_per_ct, self.n_channel)
             select_pts = []
             for local_ch in range(n_local_ch):
-                s_pt = CkksPlaintextNode(f'encode_pt_select_{local_ch}', is_ringt=True)
+                s_pt = CkksPlaintextNode(f'encode_pt_select_{local_ch}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level - 1]), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=s_pt,
@@ -260,7 +260,7 @@ class MultiplexedDWConv1DPackedLayer:
                     else:
                         combined = add(combined, masked)
 
-                b_pt = CkksPlaintextNode(f'encode_pt_bias_{po}', is_ringt=True)
+                b_pt = CkksPlaintextNode(f'encode_pt_bias_{po}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0)
                 custom_compute(
                     inputs=[conv_data_source],
                     output=b_pt,
@@ -271,7 +271,7 @@ class MultiplexedDWConv1DPackedLayer:
                 res.append(combined)
             return res
 
-    def make_pt_nodes(self, layer_id):
+    def make_pt_nodes(self, layer_id, *, level: int):
         """Return (weight_pt, bias_pt, block_select_pt) matching call().
 
         weight_pt[ct_idx][k]: ct_idx in n_packed_ct, k in kernel_shape
@@ -282,14 +282,14 @@ class MultiplexedDWConv1DPackedLayer:
 
         n_packed_ct = _math.ceil(self.n_channel / self.n_channel_per_ct)
         weight_pt = [
-            [CkksPlaintextNode(f'convw_{layer_id}_{ct_idx}_{k}', is_ringt=True) for k in range(self.kernel_shape)]
+            [CkksPlaintextNode(f'convw_{layer_id}_{ct_idx}_{k}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for k in range(self.kernel_shape)]
             for ct_idx in range(n_packed_ct)
         ]
-        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True) for i in range(n_packed_ct)]
+        bias_pt = [CkksPlaintextNode(f'convb_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().default_scale), level=0) for i in range(n_packed_ct)]
         needs_rearrange = self.skip > 1 or self.stride > 1
         if needs_rearrange:
             n_local_ch = min(self.n_channel_per_ct, self.n_channel)
-            block_select_pt = [CkksPlaintextNode(f'convm_{layer_id}_{i}', is_ringt=True) for i in range(n_local_ch)]
+            block_select_pt = [CkksPlaintextNode(f'convm_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level - 1]), level=0) for i in range(n_local_ch)]
         else:
             block_select_pt = []
         return weight_pt, bias_pt, block_select_pt

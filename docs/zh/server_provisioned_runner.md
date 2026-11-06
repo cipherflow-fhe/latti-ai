@@ -1,0 +1,270 @@
+# Server-Provisioned Runner 部署模式
+
+本文档说明 `server_provisioned_runner` 部署模式的角色分工、产物目录、安全边界和基本使用流程。该模式的目标是让 server 侧离线加密模型参数，Runner 现场读取明文输入并执行同态计算，最后由 server 侧解密 Runner 返回的密文结果。
+
+## 角色分工
+
+- `Provisioner`：server 侧离线准备者，持有明文模型参数和 secret key，负责生成 eval context、按 use-site level 加密模型参数，并导出可搬运的 Runner bundle。
+- `Runner`：现场执行者，只持有 eval context、MegaAG、task signature 和加密后的模型参数。Runner 读取明文输入，输出密文结果，不持有 secret key。
+- `Decryptor`：server 侧解密者，持有 secret key，负责解密 Runner 返回的密文输出。
+
+默认的 `client_encrypted_input` 模式不变；`server_provisioned_runner` 是新增的部署模式，不改变旧 quick start 和旧 API 的默认语义。
+
+## 安全边界
+
+`server_provisioned_runner` 模式只保护模型参数和输出密文不被 Runner 解密，不保护 Runner 现场输入。
+
+- Runner 可以看到输入明文，因为该模式假设输入隐私不是目标。
+- Runner bundle 不应包含 `secret_key.bin`、`secret_context.bin`、`model_parameters.h5` 或其他明文模型参数 dump。
+- Runner 持有 eval context，包括 relin key、rotation/galois key 和 bootstrapping 所需公钥材料；这些公钥只用于同态计算，不能解密参数密文或输出密文。
+- Runner 可读取加密后的模型参数并执行 `PT * CT`、`CT * CT` 等计算，但不能解密参数或结果。
+- `Provisioner` / `Decryptor` 位于 server 侧，持有 secret key，因此可以访问明文模型参数并解密输出。
+- v1 已将 CIFAR10 runner 图中会进入 signature 的 `convm_` structural masks 也作为 offline ciphertext 参数处理，避免 Runner 需要额外的 plaintext mask 输入。avgpool select tensors、concat masks、repack masks、upsample select tensors 和 routing/mask 类常量如果后续出现在 runner signature 中，也应按相同模式迁移到 offline encrypted parameters，或显式标注为 Runner-local public constants。
+
+## 目录结构
+
+保留旧模式的 `client/` 和 `server/` 目录，并为新模式新增 `provisioner/` 和 `runner/`：
+
+```text
+runs/cifar10/task/
+  client/
+  server/
+    task_config.json
+    ckks_parameter.json
+    nn_layers_ct_0.json
+    model_parameters.h5
+    mega_ag.json
+
+  provisioner/
+    task_config.json
+    ckks_parameter.json
+    nn_layers_ct_0.json
+    model_parameters.h5
+    secret_key.bin 或 secret_context.bin
+    eval_context.bin
+
+  runner/
+    task_config.json
+    ckks_parameter.json
+    nn_layers_ct_0.json
+    mega_ag.json
+    task_signature.json
+    eval_context.bin
+    encrypted_model_parameters/
+      manifest.json
+      shard_*.bin
+```
+
+`runner/` 是可搬运目录。部署前应检查其中没有 secret key、secret context、H5 模型参数或明文参数文件。
+
+`runtime_lazy` 模式下，`task/runner/task_config.json` 会包含：
+
+```json
+{
+  "deployment_mode": "server_provisioned_runner",
+  "input_mode": "plaintext",
+  "parameter_mode": "encrypted_offline",
+  "parameter_loading_mode": "runtime_lazy",
+  "decryptor": "provisioner",
+  "deployment_role": "runner"
+}
+```
+
+## Python 环境
+
+仓库当前已验证的 Python 环境是 `/home/linghm/pytorch_venv`（Python 3.10，含
+PyTorch、ONNX、ONNX Runtime、NumPy 和 NetworkX）。从仓库根目录执行 Python
+步骤时，建议显式使用该解释器，并设置 LattiSense 模块路径：
+
+```bash
+cd /home/linghm/project/latti-ai
+source /home/linghm/pytorch_venv/bin/activate
+export PYTHONPATH="$PWD/inference/lattisense${PYTHONPATH:+:$PYTHONPATH}"
+
+python training/run_compile.py --help
+python inference/interface/gen_mega_ag.py --help
+```
+
+激活环境后直接使用 `python`；`run_compile.py` 和
+`gen_mega_ag.py` 都应在仓库根目录运行。Provisioner、Runner 和 decryptor
+是已编译的 C++ 可执行文件，不依赖 Python 虚拟环境；GPU Runner 仍需显式传入
+`--gpu`。如果使用其他虚拟环境，应按
+`inference/lattisense/requirements.txt` 和 `training/requirements.txt` 安装依赖，
+并确认 PyTorch、CUDA、ONNX 版本与当前构建兼容。
+
+## Quick Start
+
+以下以 CIFAR10 风格目录为例。路径可按实际任务调整。
+
+### 1. 编译并生成新模式目录布局
+
+```bash
+python training/run_compile.py \
+  --input ./runs/cifar10/model/trained_poly.onnx \
+  --output ./runs/cifar10 \
+  --style multiplexed \
+  --deployment-mode server_provisioned_runner \
+  --config ./training/config/storage_aware_config.json
+```
+
+该步骤显式读取 `training/config/storage_aware_config.json`，启用 storage-aware level 优化；程序不会自动扫描或默认加载这个文件。它生成常规 `task/server/` 产物，并写出 `task/provisioner/`、`task/runner/` 的基础配置。`--runner-output-dir` 可用于指定 runner 目录，默认是 `<output>/task/runner`。
+
+示例配置还通过 `seed_weight_subgrid_stride: [4,4]` 为适用的 multiplexed 普通
+Conv2D、depthwise Conv2D 和 inverse Conv2D 指定全局 `(a,b)`。普通卷积沿输入
+block 轴打包，depthwise/inverse 沿 kernel 轴打包。可在该文件中修改为其他合法值；
+省略字段或设为 `[1,1]` 时关闭 seed packing。编译器在 DP 评分前应用该配置，并将逐层配置写入导出文件，后续运行
+不再读取 training 配置。适用范围与回退规则见
+[seed weight 设计规范](../spec/interleaved_subgrid_weight_seed_packing.md#21-全局编译配置与分发)。
+修改 `(a,b)` 或 seed 布局实现后，须重新编译、生成 MegaAG 并运行 Provisioner。
+
+### 2. 生成 Runner MegaAG
+
+```bash
+python inference/interface/gen_mega_ag.py \
+  --task-dir ./runs/cifar10/task \
+  --deployment-mode server_provisioned_runner \
+  --parameter-loading-mode runtime_lazy
+```
+
+该步骤把 `mega_ag.json` 和 `task_signature.json` 写入 `task/runner/`。默认 `--parameter-loading-mode eager` 保持旧行为，将模型参数声明为 offline ciphertext arguments；`runtime_lazy` 只在 `server_provisioned_runner` 下生效，会把 `offline` 缩减为一个 `encrypted_parameter_store` 句柄，并在 `encrypted_parameters` 中记录真实参数列表。
+
+### 3. Provisioner 离线加密参数
+
+```bash
+./build/tools/provision_encrypted_runner_bundle \
+  --task-dir ./runs/cifar10/task \
+  --out ./runs/cifar10/task/runner
+```
+
+该工具在 server/provisioner 侧执行，读取 `task/provisioner/` 或 `task/server/` 中的配置和 `model_parameters.h5`，生成 secret/eval context，并把模型参数按 task signature 与 manifest 要求加密到 `task/runner/encrypted_model_parameters/`。
+
+### 4. Runner 现场执行
+
+```bash
+./build/examples/inference \
+  --task-dir ./runs/cifar10/task/runner \
+  --deployment-mode server_provisioned_runner \
+  --input ./runs/cifar10/task/client/img.csv \
+  --output-cipher ./runs/cifar10/output.ct \
+  --gpu
+```
+
+Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。在 `eager` 模式下，Runner 启动计算前整包反序列化 offline encrypted parameters；在 `runtime_lazy` 模式下，计算图运行到参数 use-site 时才通过 `load_encrypted_param_ct` 节点按元素读取并反序列化所需密文。depthwise 和 inverse 的 `call_param_ct()` 路径同样使用该公共加载节点；公开 seed mask 由 Runner 的 `encode_pt` executor 生成，不需要为每个 `call_param_ct*()` 增加 custom compute。
+
+GPU 运行需要先用 `-DINFERENCE_SDK_ENABLE_GPU=ON` 构建，并在运行命令中显式传入 `--gpu`；CPU 运行时省略 `--gpu`。多输入任务可以使用 `--input name=path` 形式显式绑定输入名。
+
+### 5. Server 解密输出
+
+```bash
+./build/tools/decrypt_runner_output \
+  --task-dir ./runs/cifar10/task/provisioner \
+  --cipher ./runs/cifar10/output.ct
+```
+
+Decryptor 使用 provisioner 目录中的 secret key 或 secret context 解密 Runner 输出，并打印输出向量和 top-1。
+
+## runtime_lazy 全链路开关
+
+`parameter_loading_mode=runtime_lazy` 的入口在 MegaAG 生成阶段。推荐显式传：
+
+```bash
+python inference/interface/gen_mega_ag.py \
+  --task-dir ./runs/cifar10/task \
+  --deployment-mode server_provisioned_runner \
+  --parameter-loading-mode runtime_lazy
+```
+
+如果 `task/server/task_config.json` 已经写入 `"parameter_loading_mode": "runtime_lazy"`，也可以省略该 flag；
+`gen_mega_ag.py` 会读取 server config，并把该字段写入 `task/runner/task_config.json`。
+
+完整链路中的配置流向如下：
+
+- `training/run_compile.py --deployment-mode server_provisioned_runner` 只负责生成新模式目录和基础配置，不在编译阶段加密参数。
+- `gen_mega_ag.py --parameter-loading-mode runtime_lazy` 写出 runtime-lazy graph/signature：`offline` 只有
+  `encrypted_parameter_store`，真实参数列表在 `encrypted_parameters`。
+- `provision_encrypted_runner_bundle` 不需要额外 flag；它读取 `task/runner/task_config.json`，看到
+  `parameter_loading_mode=runtime_lazy` 后生成 manifest v2，在每个参数元素上记录 byte `offset` / `length`。
+- `./build/examples/inference` 不需要额外 lazy flag；Runner 读取同一个 `task_config.json`，自动绑定
+  `load_encrypted_param_ct` executor。CPU 默认生效，传 `--gpu` 时 GPU Runner 也走同一套 use-site lazy load。
+- `decrypt_runner_output` 与加载模式无关，只使用 provisioner 侧 secret key 或 secret context 解密输出。
+
+切回 eager 只需省略 `--parameter-loading-mode runtime_lazy`，或显式传 `--parameter-loading-mode eager`。
+`runtime_lazy` 不支持标准 `client_encrypted_input` 模式；旧 client/server quick start 的默认行为保持不变。
+
+## 参数 level 与 use-site 物化
+
+Python MegaAG 图不会显式插入 `ringt_to_mul()` 节点。原始 `CT * PT` 路径中，C++ executor 在运行到 `mult(ct, pt_ringt)` 或 fused MAC 节点时，会读取实际输入 ciphertext 的 level，然后调用 `ringt_to_mul(pt_ringt, level)`。`add_plain_ringt(ct, pt_ringt)` 不显式传入 plaintext level，但其语义等价于按被加 ciphertext 的当前 level 解释该 ringt。
+
+加密参数模式沿用这条 level/scale 轨迹，不重新做一套 depth 规划：
+
+- 乘法 use-site：Provisioner 先按 layer 原有 `generate_weight_pt_for_*` 逻辑生成 `pt_ringt`，再根据该 use-site 的 ciphertext 操作数 level `L` 物化 plaintext，并加密为对应的参数密文。
+- `mult_scalar` use-site：该算子的 scalar 来自模型数值参数，不属于 public structural constant。新模式中会为 `mult_scalar_<layer_id>` 生成 offline ciphertext argument，Provisioner 通过 `MultScalarLayer::generate_weight_pt_for_index()` 生成原始 `pt_ringt`，再按输入 feature 的 level 物化并加密。
+- 加法 use-site：例如 dense/conv bias，原图通常是 `partial_sum = rescale(partial_sum)` 后执行 `add_plain_ringt(partial_sum, bias_pt_ringt)`。虽然 `add_plain_ringt()` 自身不需要显式传入 level，但 encrypted bias 必须从 `partial_sum.level` 推导目标 level `L`，再对 `bias_pt_ringt` 物化并加密为 `bias_ct_L`。
+- 同一个逻辑参数如果在多个不同 level 的 use-site 被复用，manifest 和 signature 必须保存多个离线密文实例；相同 level 的实例可以在 manifest 层去重。
+- offline argument id 应能对应到 use-site level，例如通过 `source_id + use_site + level` 的映射记录到 manifest。
+
+这样做的结果是：执行计算图的 level/scale 管理与原始 `CT * PT` 模式保持一致，额外差异主要来自参数变为 ciphertext 后需要 `CT * CT`、`relin` 和更高的运行成本。
+
+## use-site 懒加载语义
+
+`runtime_lazy` 是运行时懒加载，不是“启动时延迟一点再整包读取”。Runner 在 `evaluate_plaintext_input()` 中只构造一个
+`encrypted_parameter_store` offline argument；每个参数密文节点在 MegaAG 中由 `load_encrypted_param_ct` 负责 materialize。
+
+加载节点包含：
+
+- 普通 `inputs`：只有 `encrypted_parameter_store`。
+- `attributes`：`arg_id`、`flat_index`、`expected_level`。
+- `wait_inputs`：对应 use-site 的 activation 或 plaintext input，只用于调度 ready 判断。
+
+因此执行到相应 use-site 前，Runner 才调用 `EncryptedParameterStore::load_element(arg_id, flat_index)` 读取单个密文。
+manifest v2 记录元素级 byte range，所以不需要反序列化同一参数向量中的其他元素；已加载元素会缓存在 store 内。
+GPU 下 `wait_inputs` 不会进入 custom executor 参数列表，不会为了触发加载把 activation 从 GPU 拷回 CPU。
+
+## 注意事项
+
+- `CT * CT` 比 `CT * PT` 更重，参数密文体积也远大于 H5 或 plaintext ringt 参数；`convm_` 这类 structural masks 加密后同样会引入额外 relin/rescale 成本。Runner 侧应依赖 manifest 和 lazy load 降低峰值内存。
+- 仅打开 CMake GPU 编译开关不会自动切换运行时 backend；`./build/examples/inference` 需要显式传入 `--gpu` 才会使用 GPU Runner。
+- eval context 必须覆盖 MegaAG 中所有 relin、rotation/galois 和 bootstrapping key 需求。
+- 不要把每个 term 都改成“先 rescale 再累加”的通用写法，除非原 layer 的 `run_core` 本来就是这个轨迹；否则会改变 level/scale 语义。
+- `client_encrypted_input` 默认流程仍然保留，未显式指定 `--deployment-mode server_provisioned_runner` 时使用旧模式。
+
+## 存储感知 level 优化（可选）
+
+如需在编译 DP 目标中加入加密参数存储成本，使用编译配置 JSON 传入权重：
+
+```bash
+# 在该文件中修改存储评分权重、归一化单位或 seed_weight_subgrid_stride。
+PYTHONPATH=inference/lattisense python training/run_compile.py \
+  --input ./runs/cifar10/model/trained_poly.onnx \
+  --output ./runs/cifar10_storage_aware \
+  --style multiplexed \
+  --deployment-mode server_provisioned_runner \
+  --config ./training/config/storage_aware_config.json
+```
+
+存储评分字段影响编译阶段的 level/分区选择；同一文件中的
+`seed_weight_subgrid_stride` 则控制 seed 布局，并参与 runtime 和存储评分。
+后续 `gen_mega_ag.py`、Provisioner 和 Runner 命令不变。存储权重必须是有限的
+非负数，且只对 `server_provisioned_runner` 生效；省略该权重或设为 `0` 时，
+优化目标不计存储成本，seed 是否启用仍由 `(a,b)` 决定。
+
+编译器使用如下目标：
+
+```text
+总分 = runtime_score + refresh_score
+     + encrypted_parameter_storage_weight * storage_bytes / 2**30
+```
+
+`storage_bytes` 按实际参数 use-site level 查固定 CKKS 序列化校准表计算，
+`encrypted_parameter_storage_normalization_bytes`（默认 `2**30`，即 1073741824）
+是归一化单位；DP 内不执行加密。该字段与 weight 一样由上述 JSON 读取并实际参与 DP
+和最终 report 计算。当前校准表对应
+`N16QP1546H192H32`，level 0 到 11 的单密文大小来自 `CkksCiphertext.serialize`，
+其中 level 10、11 用于 seed 恢复前的参数密文。
+因此 weight=1 的含义是每增加 1 GiB 参数存储，在目标中增加 1 个 score 单位，不能
+解释成 1 秒。
+
+推荐先用 `0`、`0.5`、`1.0` 做小规模编译比较：`1.0` 是当前 ResNet20 验收使用值，
+在参数 payload 和 BTP/运行代价之间取得了可观察的折中。若存储成本优先可提高到
+`2.0` 或更高，但应重新验收 refresh 数量和 GPU 延迟；若延迟优先，使用 `0` 或较小
+权重。不同硬件、序列化版本或模型应重新校准后再比较 weight。

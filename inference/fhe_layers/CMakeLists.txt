@@ -22,6 +22,7 @@ add_library(fhe_layers
   poly_relu1d.cpp
   poly_relu_base.cpp
   poly_base.cpp
+  mat_poly_base.cpp
   mult_scaler.cpp
   conv1d_packed_layer.cpp
   multiplexed_conv1d_pack_layer.cpp
@@ -43,6 +44,9 @@ add_library(fhe_layers
   par_upper_diagonal_polyact.cpp
   par_upper_diagonal_poly_mult_ct.cpp
   par_upper_diagonal_poly.cpp
+  par_block_col_major_softmax.cpp
+  par_block_col_major_poly.cpp
+  par_block_col_major_poly_mult_ct.cpp
   par_upper_diagonal_softmax.cpp
   ../data_structs/feature.cpp
   ../data_structs/feature1d.cpp

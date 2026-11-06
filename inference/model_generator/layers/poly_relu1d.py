@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
 
 op_class = 'PolyRelu1D'
@@ -31,11 +31,11 @@ class PolyRelu1D(PolyReluBase):
     Two packing modes, matching Feature1DEncrypted::pack / pack_multiplexed:
 
       Mode 1 — skip pack (wasted slots):
-        n_channel_per_ct = N/2 / (shape * skip)
+        n_channel_per_ct = n_real_num_slot / (shape * skip)
         channel ch (CT-local), position i → slot = ch * shape * skip + i * skip
 
       Mode 2 — multiplexed/interleaved pack (no wasted slots):
-        n_channel_per_ct = (N/2 / (shape * skip)) * skip
+        n_channel_per_ct = (n_real_num_slot / (shape * skip)) * skip
         channel j (CT-local), position i → slot = (j/skip)*shape*skip + i*skip + (j%skip)
 
     The BSGS computation graph is identical to 2D/0D; only weight plaintext
@@ -48,8 +48,8 @@ class PolyRelu1D(PolyReluBase):
             shape:            spatial length of the 1D feature
             order:            polynomial order
             skip:             skip of the Feature1DEncrypted
-            n_channel_per_ct: channels per ciphertext (mode 1: N/2/(shape*skip),
-                              mode 2: N/2/shape)
+            n_channel_per_ct: channels per ciphertext (mode 1: n_real_num_slot/(shape*skip),
+                              mode 2: n_real_num_slot/shape)
         """
         self.order = order
         self.shape1d = shape
@@ -83,7 +83,7 @@ class PolyRelu1D(PolyReluBase):
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextNode(f'encode_pt_1d_skip_{layer_id}_{idx}_{x_idx}', is_ringt=True)
+                w_pt = CkksPlaintextNode(f'encode_pt_1d_skip_{layer_id}_{idx}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[idx], level=0)
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,
@@ -129,7 +129,7 @@ class PolyRelu1D(PolyReluBase):
         def get_weight(idx, x_idx):
             key = (idx, x_idx)
             if key not in weight_cache:
-                w_pt = CkksPlaintextNode(f'encode_pt_1d_mux_{layer_id}_{idx}_{x_idx}', is_ringt=True)
+                w_pt = CkksPlaintextNode(f'encode_pt_1d_mux_{layer_id}_{idx}_{x_idx}', is_ringt=True, scale=self.bsgs_coefficient_scales(x[0].metadata.level, get_fhe_param())[idx], level=0)
                 custom_compute(
                     inputs=[poly_data_source],
                     output=w_pt,

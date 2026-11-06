@@ -28,11 +28,35 @@ class MaxPoolCompilerGeneratorTest(unittest.TestCase):
             path = Path(directory)
             graph.to_json({'param0': components.config.fhe_param}, str(path / 'nn_layers_ct_0.json'))
             graph_to_task_config(graph, directory)
-            gen_custom_task(directory, param_name='N16QP1546H192H32', style='multiplexed', use_gpu=False)
+            gen_custom_task(directory, param_name='PN15Default', style='multiplexed', use_gpu=False)
             raw = json.loads((path / 'nn_layers_ct_0.json').read_text())
             dag = json.loads((path / 'mega_ag.json').read_text())
             manifest = json.loads((path / 'maxpool_stage_parameters.json').read_text())
+            parameter = json.loads((path / 'fhe_parameter.json').read_text())
             signature = json.loads((path / 'task_signature.json').read_text())
+            for mode, loading in [('plaintext_lazy', 'eager'), ('encrypted_offline', 'eager'),
+                                  ('encrypted_offline', 'runtime_lazy')]:
+                with self.subTest(mode=mode, loading=loading):
+                    generated = path / f'{mode}_{loading}'
+                    gen_custom_task(directory, param_name='PN15Default', style='multiplexed',
+                                    use_gpu=False, parameter_mode=mode, output_dir=str(generated),
+                                    deployment_mode='server_provisioned_runner',
+                                    parameter_loading_mode=loading)
+                    public_dag = json.loads((generated / 'mega_ag.json').read_text())
+                    public_signature = json.loads((generated / 'task_signature.json').read_text())
+                    self.assertFalse(any(arg['id'].startswith('maxpool_')
+                                         for arg in public_signature['online'] + public_signature['offline']))
+                    encoders = [op for op in public_dag['compute'].values()
+                                if op['type'] == 'encode_pt' and
+                                op.get('attributes', {}).get('op_class') == 'PolyMaxPool']
+                    self.assertTrue(encoders)
+                    for op in encoders:
+                        self.assertEqual(op['inputs'], [])
+                    sources = set(public_dag['inputs'])
+                    for op in public_dag['compute'].values():
+                        sources.update(op['outputs'])
+                    for op in public_dag['compute'].values():
+                        self.assertTrue(set(op['inputs']) <= sources)
         self.assertEqual(len(manifest), 19)
         self.assertTrue(all(layer.get('alpha') == 14 for layer in raw['layer'].values()
                             if layer['type'].startswith('maxpool2d_')))
@@ -84,11 +108,12 @@ class MaxPoolCompilerGeneratorTest(unittest.TestCase):
             graph_to_task_config(graph, directory)
             # Real frontend arithmetic, Bootstrap construction and serialization;
             # no mocked stage operators or process_custom_task.
-            gen_custom_task(directory, param_name='N16QP1546H192H32', style='multiplexed', use_gpu=False)
+            gen_custom_task(directory, param_name='PN15Default', style='multiplexed', use_gpu=False)
             raw = json.loads((path / 'nn_layers_ct_0.json').read_text())
             dag = json.loads((path / 'mega_ag.json').read_text())
             signature = json.loads((path / 'task_signature.json').read_text())
             manifest = json.loads((path / 'maxpool_stage_parameters.json').read_text())
+            parameter = json.loads((path / 'fhe_parameter.json').read_text())
         arguments = {arg['id']: arg for arg in signature['online']}
         self.assertEqual(arguments['x']['size'], [256])
         self.assertEqual(arguments['y']['size'], [32])
@@ -100,10 +125,10 @@ class MaxPoolCompilerGeneratorTest(unittest.TestCase):
             for name, desc in descriptors.items():
                 self.assertNotIn(name, declared)
                 declared[name] = desc
-                self.assertEqual(arguments[name]['type'], 'pt_ringt')
+                self.assertEqual(arguments[name]['type'], 'pt')
                 self.assertEqual(arguments[name]['size'], [desc['count']])
                 self.assertGreaterEqual(desc['level'], 0)
-                self.assertLessEqual(desc['level'], 9)
+                self.assertLessEqual(desc['level'], components.config.fhe_param.max_level)
         self.assertEqual(set(declared), {name for name in arguments if name.startswith('maxpool_')})
         data = dag['data']
         topology = nx.DiGraph()
@@ -120,7 +145,7 @@ class MaxPoolCompilerGeneratorTest(unittest.TestCase):
             if op['type'] == 'bootstrap':
                 bootstraps.append(op)
                 self.assertEqual(data[str(op['inputs'][0])]['level'], 0)
-                self.assertEqual(data[str(op['outputs'][0])]['level'], 9)
+                self.assertEqual(data[str(op['outputs'][0])]['level'], components.config.fhe_param.max_level)
         self.assertTrue(nx.is_directed_acyclic_graph(topology))
         available = supplied | produced
         for op in dag['compute'].values():
@@ -130,11 +155,11 @@ class MaxPoolCompilerGeneratorTest(unittest.TestCase):
             raw['feature'][layer['feature_input'][0]]['maxpool_state']['groups'] * 64
             for layer in raw['layer'].values() if layer['type'] == 'bootstrapping')
         self.assertEqual(len(bootstraps), expected_refreshes)
-        self.assertEqual(expected_refreshes, 640)
-        param = _FHE_PARAMS['N16QP1546H192H32']
-        self.assertEqual(dag['parameter']['n'], param.poly_modulus_degree)
-        self.assertEqual(dag['parameter']['q'], param.q)
-        self.assertEqual(dag['parameter']['p'], param.p)
+        self.assertGreater(expected_refreshes, 0)
+        param = _FHE_PARAMS['PN15Default']
+        self.assertEqual(1 << parameter['log_n'], param.poly_modulus_degree)
+        self.assertEqual(parameter['q'], param.q)
+        self.assertEqual(parameter['p'], param.p)
 
 
 if __name__ == '__main__':

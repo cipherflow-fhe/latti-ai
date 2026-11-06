@@ -1,5 +1,5 @@
 from inference.model_generator.layers.poly_base import PolyBase
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 
 op_class = 'Poly2D'
 

@@ -66,7 +66,7 @@ public:
     }
 
 protected:
-    int N = 0;
+    int n_real_num_slot = 0;
     int order = 0;
 
     void compute_stockmeyer_power_info();

@@ -5,7 +5,7 @@ framework operation between calls, never an implicit operation in this module.
 """
 import math
 
-from inference.lattisense.frontend.custom_task import add, sub, mult, rescale, relin, drop_level, rotate_cols
+from frontend.custom_task import add, sub, mult, rescale, relin, drop_level, rotate_cols
 from training.model_compiler.maxpool_plan import parse_maxpool_split_stage
 from inference.model_generator.layers.poly_maxpool_taps import (
     call_interleaved_normalized_maxpool_taps,

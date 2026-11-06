@@ -21,7 +21,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.parameter_sources import pcm_parameter_scale
 
 
 def _next_pow2(n: int) -> int:
@@ -60,8 +61,8 @@ class _ParUpperDiagonalBase:
     def _ct_index(self, mb: int, ct_local: int) -> int:
         return mb * self.cts_per_mb + ct_local
 
-    def _make_pt(self, data_source, pt_idx: int, mb: int = 0, ct_local: int = 0):
-        node = CkksPlaintextNode(f'encode_pt_{self.op_class}_{pt_idx}_{mb}_{ct_local}', is_ringt=True)
+    def _make_pt(self, data_source, pt_idx: int, mb: int = 0, ct_local: int = 0, *, level: int):
+        node = CkksPlaintextNode(f'{data_source.id}/encode_pt_{self.op_class}_{pt_idx}_{mb}_{ct_local}', is_ringt=True, scale=pcm_parameter_scale({'op_class': self.op_class, 'type': 'pt', 'pt_idx': pt_idx}, [level, level], get_fhe_param()), level=0)
         custom_compute(
             inputs=[data_source],
             output=node,
@@ -77,11 +78,11 @@ class _ParUpperDiagonalBase:
         )
         return node
 
-    def _make_pt_per_ct(self, data_source, pt_idx: int) -> list:
+    def _make_pt_per_ct(self, data_source, pt_idx: int, *, level: int) -> list:
         pts = [None] * self.total_cts
         for mb in range(self.n_mb):
             for ct_local in range(self.cts_per_mb):
-                pts[self._ct_index(mb, ct_local)] = self._make_pt(data_source, pt_idx, mb, ct_local)
+                pts[self._ct_index(mb, ct_local)] = self._make_pt(data_source, pt_idx, mb, ct_local, level=level)
         return pts
 
     def _reduce_cols_in_ct(self, ct, h0_mask_pt):
@@ -145,10 +146,10 @@ class ParUpperDiagonalLNStats(_ParUpperDiagonalBase):
         return result
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        h0_mask_pt = self._make_pt(data_source, 0)
-        inv_n_pt = self._make_pt_per_ct(data_source, 1)
-        iv_pt = self._make_pt_per_ct(data_source, 2)
-        eps_add_pt = self._make_pt_per_ct(data_source, 3)
+        h0_mask_pt = self._make_pt(data_source, 0, level=input_cts[0].metadata.level)
+        inv_n_pt = self._make_pt_per_ct(data_source, 1, level=input_cts[0].metadata.level)
+        iv_pt = self._make_pt_per_ct(data_source, 2, level=input_cts[0].metadata.level)
+        eps_add_pt = self._make_pt_per_ct(data_source, 3, level=input_cts[0].metadata.level)
         return self.call(input_cts, h0_mask_pt, inv_n_pt, iv_pt, eps_add_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
@@ -185,8 +186,8 @@ class ParUpperDiagonalLNXCentered(_ParUpperDiagonalBase):
         return [sub(drop_level(input_cts[idx], 2), mean_cts[idx]) for idx in range(self.total_cts)]
 
     def call_custom_compute(self, input_cts: list, data_source) -> list:
-        h0_mask_pt = self._make_pt(data_source, 0)
-        inv_n_pt = self._make_pt_per_ct(data_source, 1)
+        h0_mask_pt = self._make_pt(data_source, 0, level=input_cts[0].metadata.level)
+        inv_n_pt = self._make_pt_per_ct(data_source, 1, level=input_cts[0].metadata.level)
         return self.call(input_cts, h0_mask_pt, inv_n_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
@@ -222,9 +223,9 @@ class ParUpperDiagonalLNMinimaxInit(_ParUpperDiagonalBase):
         return result
 
     def call_custom_compute(self, a_cts: list, data_source) -> list:
-        c0_add_pt = self._make_pt_per_ct(data_source, 0)
-        c1_pt = self._make_pt_per_ct(data_source, 1)
-        c2_norm_pt = self._make_pt_per_ct(data_source, 2)
+        c0_add_pt = self._make_pt_per_ct(data_source, 0, level=a_cts[0].metadata.level)
+        c1_pt = self._make_pt_per_ct(data_source, 1, level=a_cts[0].metadata.level)
+        c2_norm_pt = self._make_pt_per_ct(data_source, 2, level=a_cts[0].metadata.level)
         return self.call(a_cts, c0_add_pt, c1_pt, c2_norm_pt)
 
     def get_fhe_op_count(self, level: int) -> dict:
@@ -262,8 +263,8 @@ class ParUpperDiagonalLNGoldschmidt(_ParUpperDiagonalBase):
         return result
 
     def call_custom_compute(self, y_cts: list, a_cts: list, data_source) -> list:
-        three_pt = self._make_pt_per_ct(data_source, 0)
-        half_norm_pt = self._make_pt_per_ct(data_source, 1)
+        three_pt = self._make_pt_per_ct(data_source, 0, level=y_cts[0].metadata.level)
+        half_norm_pt = self._make_pt_per_ct(data_source, 1, level=y_cts[0].metadata.level)
         return self.call(y_cts, a_cts, three_pt, half_norm_pt)
 
     def get_fhe_op_count(self, level: int, a_level: int | None = None) -> dict:
@@ -296,8 +297,8 @@ class ParUpperDiagonalLNAffine(_ParUpperDiagonalBase):
         return result
 
     def call_custom_compute(self, x_centered: list, y_cts: list, data_source) -> list:
-        gamma_pt = self._make_pt_per_ct(data_source, 0)
-        beta_add_pt = self._make_pt_per_ct(data_source, 1)
+        gamma_pt = self._make_pt_per_ct(data_source, 0, level=y_cts[0].metadata.level)
+        beta_add_pt = self._make_pt_per_ct(data_source, 1, level=y_cts[0].metadata.level)
         return self.call(x_centered, y_cts, gamma_pt, beta_add_pt)
 
     def get_fhe_op_count(self, level: int, x_centered_level: int | None = None) -> dict:

@@ -18,6 +18,8 @@
 from pathlib import Path
 import copy
 import time
+import json
+import logging
 
 import networkx as nx
 import numpy as np
@@ -37,6 +39,9 @@ import processor
 from processor import *
 from graph_partition_dp import *
 
+from score import encrypted_parameter_storage_enabled, get_encrypted_parameter_storage_report
+from inference.model_generator.parameter_sources import public_source
+
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
 PCM_TO_PDM_TYPES = {
     'pcmgamma': 'pdmgamma',
@@ -47,6 +52,27 @@ def _pack_pcm_type(layer_type: str) -> str:
     if getattr(config, 'mat_pack_style', '') == 'par_diagonal_pack':
         return PCM_TO_PDM_TYPES.get(layer_type, layer_type)
     return layer_type
+
+
+def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
+    stride = getattr(config, 'seed_weight_subgrid_stride', [1, 1])
+    if config.style != 'multiplexed' or stride == [1, 1]:
+        return
+    for node in graph.dag.nodes:
+        if (
+            isinstance(node, components.ConvComputeNode)
+            and node.layer_type == 'conv2d' and node.dim == 2
+            and (node.groups == 1 or node.groups == node.channel_input == node.channel_output)
+            and not node.is_conv_transpose
+        ):
+            input_feature = next(graph.dag.predecessors(node))
+            seed_shape = config.block_shape if node.is_big_size else input_feature.shape
+            if all(size % step == 0 for size, step in zip(seed_shape, stride)):
+                node.seed_weight_subgrid_stride = list(stride)
+                node.seed_weight_layout = 'canonical' if node.is_big_size else 'joint'
+            else:
+                logging.debug('Seed weights disabled for %s: stride %s does not divide %s',
+                              node.layer_id, stride, seed_shape)
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -81,6 +107,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     transforms.combine_convs_with_upsamples(pt_graph)
     transforms.process_polyact(pt_graph)
     transforms.set_level_costs(pt_graph)
+    set_seed_weight_subgrid_stride(pt_graph)
 
     transforms.absorb_scale(pt_graph)
 
@@ -94,32 +121,35 @@ def set_fhe_param(params):
 
 
 def set_block_shape(params, raw_graph: LayerAbstractGraph):
-    """Set config.block_shape based on the input graph's leading feature node shape and N.
+    """Set config.block_shape based on the input graph's leading feature node shape and real slot capacity.
 
     Rules:
       (0) BERT/feature_mat graphs do not use block_shape-based spatial tiling.
-      (1) If leading node is not 2D, use sqrt(N/2) as a square default.
-      (2) If shape0 * shape1 <= N / 2, block_shape = [shape0, shape1]
+      (1) If leading node is not 2D, use sqrt(n_real_num_slot) as a square default.
+      (2) If shape0 * shape1 <= n_real_num_slot, block_shape = [shape0, shape1]
       (3) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...,
-          until shape0 * shape1 < N / 2
+          until shape0 * shape1 <= n_real_num_slot. If this leaves half the slots
+          unused, double the width (dimension 1).
     """
-    slot_num = params.poly_modulus_degree
+    slot_num = params.n_slots
     leading_nodes = raw_graph.get_leading_feature_nodes()
     if getattr(config, 'model_type', '') == 'bert' or any(node.data_type == 'feature_mat' for node in leading_nodes):
         config.block_shape = [1, 1]
         return
     if not leading_nodes or len(leading_nodes[0].shape) == 0:
-        side = 1 << (slot_num.bit_length() // 2)
+        side = 1 << ((slot_num.bit_length() - 1) // 2)
         config.block_shape = [side, side]
         return
     leading_shape = leading_nodes[0].shape
     block = list(leading_shape)
-    slot_num = params.poly_modulus_degree
-    # threshold = N / 2
+    slot_num = params.n_slots
+    # Threshold is the v6 real slot capacity.
     import math
 
     while math.prod(block) > slot_num:
         block = [s // 2 for s in block]
+    if len(block) == 2 and math.prod(leading_shape) > slot_num and math.prod(block) * 2 == slot_num:
+        block[1] *= 2
 
     config.block_shape = block
     print('block_shape=', config.block_shape)
@@ -192,6 +222,10 @@ def try_btp(
 
         # (3) Post-process
         if graph is not None:
+            if encrypted_parameter_storage_enabled():
+                graph.encrypted_parameter_dp_report = get_encrypted_parameter_storage_report(
+                    graph.dag, generate_param_dict_for_graph()
+                )
             graph = post_process(graph)
             valid_results.append((score, graph))
 
@@ -286,7 +320,6 @@ def bert_softmax_denominator_scale_for_layer(layer_id: str) -> float:
 def _softmax_normalize_base_id_from_btp_layer(layer_id: str) -> str | None:
     for marker in (
         '_denominator_scaled_bootstrap',
-        '_denominator_epsilon_added_bootstrap',
         '_denominator_bootstrap',
         '_probabilities_unscaled_bootstrap',
         '_inverse_scaled_bootstrap',
@@ -318,19 +351,13 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
     def normalize_denominator_scale_for_btp_node(layer_id: str) -> float:
         base_id = _softmax_normalize_base_id_from_btp_layer(layer_id)
         if base_id is not None:
+            init_node = _find_compute_node_by_layer_id(dag, f'{base_id}_inverse_init')
+            if init_node is not None and getattr(init_node, 'coefficients', None):
+                return 2.0 / init_node.coefficients[0]
             scale_node = _find_compute_node_by_layer_id(dag, f'{base_id}_denominator_scale')
             if scale_node is not None and getattr(scale_node, 'scalar_value', None) is not None:
                 return float(scale_node.scalar_value)
         return bert_softmax_denominator_scale_for_layer(layer_id)
-
-    def normalize_denominator_guard_for_btp_node(layer_id: str) -> float:
-        base_id = _softmax_normalize_base_id_from_btp_layer(layer_id)
-        if base_id is None:
-            return 0.0
-        guard_node = _find_compute_node_by_layer_id(dag, f'{base_id}_denominator_epsilon')
-        if guard_node is None or getattr(guard_node, 'value', None) is None:
-            return 0.0
-        return float(guard_node.value)
 
     def pre_btp_scale_for_node(layer_id: str) -> float:
         if getattr(config, 'model_type', '') == 'bert':
@@ -346,16 +373,18 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
                     return 1.0 / denominator_scale
                 if '_denominator_scaled_bootstrap' in layer_id:
                     return float(getattr(config, 'bert_softmax_scaled_denominator_btp_scale', btp_scale))
-                if '_denominator_epsilon_added_bootstrap' in layer_id or '_denominator_bootstrap' in layer_id:
-                    denominator_btp_scale = float(getattr(config, 'bert_softmax_denominator_btp_scale', btp_scale))
-                    return max(denominator_btp_scale, normalize_denominator_scale_for_btp_node(layer_id))
+                if '_denominator_bootstrap' in layer_id:
+                    scale = float(getattr(config, 'bert_softmax_denominator_btp_scale', btp_scale))
+                    if '_softmax_normalize_refine_' in layer_id:
+                        scale *= 16.0 / normalize_denominator_scale_for_btp_node(layer_id)
+                    return scale
                 if '_inverse_iter_' in layer_id and '_out_bootstrap' in layer_id:
                     inverse_btp_scale = float(getattr(config, 'bert_softmax_inverse_btp_scale', btp_scale))
-                    denominator_guard = normalize_denominator_guard_for_btp_node(layer_id)
-                    if denominator_guard > 0.0:
-                        denominator_scale = normalize_denominator_scale_for_btp_node(layer_id)
-                        inverse_btp_scale = min(inverse_btp_scale, denominator_guard * denominator_scale)
-                    return inverse_btp_scale
+                    # From a0=1, positive denominators give a_i <= 2**i.
+                    # The graph carries a_i/s, including for tiny thor-wide sums.
+                    iteration = int(layer_id.split('_inverse_iter_', 1)[1].split('_', 1)[0]) + 1
+                    denominator_scale = normalize_denominator_scale_for_btp_node(layer_id)
+                    return min(512.0, inverse_btp_scale * denominator_scale / 2**iteration)
             if 'CustomLayerNorm_y' in layer_id and '_bootstrap' in layer_id:
                 return float(getattr(config, 'bert_layernorm_inverse_btp_scale', btp_scale))
         return btp_scale
@@ -385,11 +414,15 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         pre_gamma.depth = btp_node.depth
         pre_gamma.path = f'{pre_gamma_id}.weight'
         pre_gamma.btp_scale = pre_btp_scale
+        pre_gamma.parameter_sources = {'gamma_pt': public_source(
+            'math_constant', dict(formula='bootstrap_scale', scalar_value=pre_btp_scale))}
 
         post_gamma = ComputeNode(post_gamma_id, gamma_type, btp_node.channel_output, btp_node.channel_output)
         post_gamma.depth = btp_node.depth
         post_gamma.path = f'{post_gamma_id}.weight'
         post_gamma.btp_scale = 1 / pre_btp_scale
+        post_gamma.parameter_sources = {'gamma_pt': public_source(
+            'math_constant', dict(formula='bootstrap_scale', scalar_value=1 / pre_btp_scale))}
 
         pre_feature = _clone_feature_node(pred_feature, pre_feature_id)
         post_gamma_input_feature = _clone_feature_node(succ_feature, post_gamma_input_feature_id)
@@ -441,6 +474,15 @@ def _pcmgamma_fuse_info(pcmgamma_node: ComputeNode, direction: str) -> dict:
 
 
 def _append_fuse_gama_info(node: ComputeNode, fuse_gama_info: dict):
+    sources = getattr(node, 'parameter_sources', {})
+    key = 'coeff_pt' if node.layer_type in ('pcmpoly', 'pdmpoly') else 'row_chunk_seed'
+    if node.layer_type in ('pcmpoly', 'pdmpoly', 'parcpmm'):
+        previous = sources.get(key, {})
+        refs = list(previous.get('source_refs', []))
+        refs.extend(getattr(node, name, '') for name in ('weight_path', 'coeffs_path'))
+        sources[key] = dict(visibility='secret', source_kind='derived',
+                            source_refs=[ref for ref in refs if ref] + [fuse_gama_info])
+    node.parameter_sources = sources
     existing_fuse_gama_info = getattr(node, 'fuse_gama_info', None)
     if existing_fuse_gama_info is None:
         node.fuse_gama_info = [fuse_gama_info]
@@ -653,7 +695,38 @@ def dump_graph(
     insert_btp_scale_gamma_layers(graph)
     absorb_pcmgamma_layers(graph)
     recompute_final_level(graph)
+    if encrypted_parameter_storage_enabled() or getattr(config, 'pcm_encrypted_parameters', False):
+        report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
+        previous = getattr(graph, 'encrypted_parameter_dp_report', report)
+        before = {item['layer_id']: item['counts'] for item in previous['layers']}
+        after = {item['layer_id']: item['counts'] for item in report['layers']}
+        if encrypted_parameter_storage_enabled() and before != after:
+            raise ValueError('Final level recompute changed encrypted parameter storage from the DP candidate')
+        (output_dir / 'encrypted_parameter_storage_report.json').write_text(
+            json.dumps(report, indent=2) + '\n', encoding='utf-8'
+        )
+        print(f"Encrypted parameter storage: {report['storage_bytes']} bytes; "
+              f"runtime={report['runtime_score']}, refresh={report['refresh_score']}, "
+              f"storage={report['storage_score']}; unaccounted={report['unaccounted']}")
     transforms.insert_drop_level_layers(graph)
+    if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
+        final_report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
+        convolution_layouts = {item['layer_id']: item['convolution_seed_layout'] for item in final_report['layers']
+                               if 'convolution_seed_layout' in item}
+        for node in graph.dag.nodes:
+            if isinstance(node, components.ConvComputeNode) and node.layer_id in convolution_layouts:
+                layout = convolution_layouts[node.layer_id]
+                node.seed_weight_subgrid_stride = layout['stride']
+        layouts = {item['layer_id']: item['dense_seed_tiles'] for item in final_report['layers']
+                   if 'dense_seed_tiles' in item}
+        for node in graph.dag.nodes:
+            if isinstance(node, components.DenseComputeNode) and node.layer_id in layouts:
+                node.dense_seed_tiles = layouts[node.layer_id]
+        poly_layouts = {item['layer_id']: item['poly_seed_layout'] for item in final_report['layers']
+                        if 'poly_seed_layout' in item}
+        for node in graph.dag.nodes:
+            if isinstance(node, components.ActivationComputeNode) and node.layer_id in poly_layouts:
+                node.poly_seed_layout = poly_layouts[node.layer_id]
     graph.to_json(dict(), str(erg0_path), score=score)
 
     if use_btp:
@@ -700,12 +773,15 @@ def run_pipeline(
     bert_layernorm_inverse_btp_scale: float | None = None,
     bert_softmax_initial_denominator_scale: float | None = None,
     bert_softmax_wide_initial_denominator_scale: float | None = None,
-    bert_softmax_use_wide_inverse_epsilon: float | None = None,
     bert_softmax_first_refinement_denominator_scale: float | None = None,
     bert_softmax_later_refinement_denominator_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
     maxpool_config: dict | None = None,
+    encrypted_parameter_storage_weight: float = 0.0,
+    encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
+    deployment_mode: str = 'client_encrypted_input',
+    seed_weight_subgrid_stride: list[int] | tuple[int, int] = (1, 1),
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -726,6 +802,8 @@ def run_pipeline(
         enable_score_cache: If True, cache per-compute score in DP compilation
     """
     compile_start_time = time.perf_counter()
+    if deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
+        raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
 
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
@@ -740,7 +818,19 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.mat_pack_style = mat_pack_style
+    config.pcm_encrypted_parameters = (deployment_mode == 'server_provisioned_runner' and
+                                       mat_pack_style == 'par_block_col_major')
     config.model_type = model_type
+    seed_stride = seed_weight_subgrid_stride
+    if not (
+        isinstance(seed_stride, (list, tuple)) and len(seed_stride) == 2
+        and all(type(step) is int and step > 0 and (step & (step - 1)) == 0 for step in seed_stride)
+    ):
+        logging.debug('Invalid seed_weight_subgrid_stride %r; using [1, 1]', seed_stride)
+        seed_stride = [1, 1]
+    if deployment_mode != 'server_provisioned_runner':
+        seed_stride = [1, 1]
+    config.seed_weight_subgrid_stride = list(seed_stride)
     config.set_btp_scale = set_btp_scale
     if bert_softmax_values_btp_scale is not None:
         config.bert_softmax_values_btp_scale = float(bert_softmax_values_btp_scale)
@@ -756,8 +846,6 @@ def run_pipeline(
         config.bert_softmax_initial_denominator_scale = float(bert_softmax_initial_denominator_scale)
     if bert_softmax_wide_initial_denominator_scale is not None:
         config.bert_softmax_wide_initial_denominator_scale = float(bert_softmax_wide_initial_denominator_scale)
-    if bert_softmax_use_wide_inverse_epsilon is not None:
-        config.bert_softmax_use_wide_inverse_epsilon = float(bert_softmax_use_wide_inverse_epsilon)
     if bert_softmax_first_refinement_denominator_scale is not None:
         config.bert_softmax_first_refinement_denominator_scale = float(bert_softmax_first_refinement_denominator_scale)
     if bert_softmax_later_refinement_denominator_scale is not None:
@@ -767,6 +855,7 @@ def run_pipeline(
         f'Configuration initialized: STYLE={config.style}, GRAPH_TYPE={config.graph_type}, '
         f'N_HEADS={config.n_heads}, HEAD_DIM={config.head_dim}, MATMUL_BLOCK_SIZE={config.matmul_block_size}, '
         f'MAT_PACK_STYLE={config.mat_pack_style}, MODEL_TYPE={config.model_type}, '
+        f'SEED_WEIGHT_SUBGRID_STRIDE={config.seed_weight_subgrid_stride}, '
         f'SET_BTP_SCALE={config.set_btp_scale}, '
         f'BERT_SOFTMAX_VALUES_BTP_SCALE={config.bert_softmax_values_btp_scale}, '
         f'BERT_SOFTMAX_DENOMINATOR_BTP_SCALE={config.bert_softmax_denominator_btp_scale}, '
@@ -776,7 +865,6 @@ def run_pipeline(
         f'BERT_SOFTMAX_INITIAL_DENOMINATOR_SCALE={config.bert_softmax_initial_denominator_scale}, '
         f'BERT_SOFTMAX_WIDE_INITIAL_DENOMINATOR_SCALE='
         f'{config.bert_softmax_wide_initial_denominator_scale}, '
-        f'BERT_SOFTMAX_USE_WIDE_INVERSE_EPSILON={config.bert_softmax_use_wide_inverse_epsilon}, '
         f'BERT_SOFTMAX_FIRST_REFINEMENT_DENOMINATOR_SCALE='
         f'{config.bert_softmax_first_refinement_denominator_scale}, '
         f'BERT_SOFTMAX_LATER_REFINEMENT_DENOMINATOR_SCALE='
@@ -784,6 +872,15 @@ def run_pipeline(
         f'BACKEND={"gpu" if config.use_gpu else "cpu"}, '
         f'SCORE_CACHE={enable_score_cache}'
     )
+
+    if not math.isfinite(encrypted_parameter_storage_weight) or encrypted_parameter_storage_weight < 0:
+        raise ValueError('encrypted_parameter_storage_weight must be finite and non-negative')
+    if encrypted_parameter_storage_normalization_bytes <= 0:
+        raise ValueError('encrypted_parameter_storage_normalization_bytes must be positive')
+    if encrypted_parameter_storage_weight and deployment_mode != 'server_provisioned_runner':
+        raise ValueError('Storage scoring requires server_provisioned_runner')
+    config.encrypted_parameter_storage_weight = encrypted_parameter_storage_weight
+    config.encrypted_parameter_storage_normalization_bytes = encrypted_parameter_storage_normalization_bytes
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
     if maxpool_config is not None:

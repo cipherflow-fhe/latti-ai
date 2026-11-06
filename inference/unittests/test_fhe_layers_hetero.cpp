@@ -57,6 +57,7 @@
 #include "fhe_layers/multiplexed_conv1d_depthwise_pack_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer.h"
 #include "fhe_layers/inverse_multiplexed_conv2d_layer_depthwise.h"
+#include "fhe_layers/interleaved_seed.h"
 #include "fhe_layers/add_layer.h"
 #include "fhe_layers/avgpool2d_layer.h"
 #include "fhe_layers/avgpool1d_layer.h"
@@ -90,6 +91,53 @@ using namespace fhe_ops_lib;
 namespace fs = std::filesystem;
 
 fs::path base_path = "../hetero";
+
+static void check_kernel_seed_recovery(
+    CkksContext& ctx, int level, int cost, uint32_t kernels, Duo shape, Duo skip, Duo subgrid,
+    const std::function<CkksPlaintext(int)>& generate_seed,
+    const std::function<CkksPlaintext(int)>& generate_legacy,
+    const std::function<CkksPlaintext(int, bool)>& generate_mask,
+    const std::function<int(int)>& canonical_index = {}) {
+    const auto& param = ctx.parameter();
+    const double scale = param.q()[level] * 0.625;
+    for (uint32_t k = 0; k < kernels; ++k) {
+        INFO("kernel=" << k << " level=" << level);
+        const uint32_t canonical = canonical_index ? canonical_index(k) : k;
+        const uint32_t residue = canonical % prod(subgrid);
+        auto seed = generate_seed(canonical / prod(subgrid));
+        auto select = generate_mask(k, false);
+        const auto& seed_pt_1 = seed;
+        std::vector<double> seed_values_1;
+        ctx.decode(seed_pt_1, seed_values_1);
+        auto encoded_seed_1 = fhe_api::encode(ctx, seed_values_1, level + cost, seed_pt_1.scale());
+        auto restored = ctx.encrypt(std::move(encoded_seed_1));
+        restored = ctx.rescale(ctx.mult(restored, select));
+        const uint32_t residues[2] = {residue / subgrid[1], residue % subgrid[1]};
+        const uint32_t units[2] = {skip[0] * shape[1] * skip[1], skip[1]};
+        for (int dim = 0; dim < 2; ++dim) {
+            for (uint32_t bit = 0; (1u << bit) < subgrid[dim]; ++bit) {
+                int step = (1u << bit) * units[dim];
+                if (((residues[dim] >> bit) & 1) == 0) step = -step;
+                restored = ctx.add(restored, ctx.rotate(restored, step));
+            }
+        }
+        if (cost == 2) {
+            auto boundary = generate_mask(k, true);
+            restored = ctx.rescale(ctx.mult(restored, boundary));
+        }
+        REQUIRE(restored.level() == level);
+        REQUIRE(restored.scale() == Approx(scale).epsilon(1e-10));
+        const auto& seed_pt_2 = generate_legacy(k);
+        std::vector<double> seed_values_2;
+        ctx.decode(seed_pt_2, seed_values_2);
+        auto encoded_seed_2 = fhe_api::encode(ctx, seed_values_2, level, seed_pt_2.scale());
+        std::vector<double> expected; ctx.decode(std::move(encoded_seed_2), expected);
+        std::vector<double> actual; ctx.decode(ctx.decrypt(restored), actual);
+        double error = 0.0;
+        for (size_t i = 0; i < expected.size(); ++i) error = std::max(error, std::abs(expected[i] - actual[i]));
+        REQUIRE(error < 1e-5);
+    }
+}
 
 static vector<string> read_arg_names(const fs::path& project_path) {
     ifstream f(project_path / "task_signature.json");
@@ -160,7 +208,7 @@ struct SharedHeteroResources {
         static SharedHeteroResources instance;
         return instance;
     }
-    const int N = 16384;
+    const int N = 32768;
     const int n_slot = N;
     CkksParameter param;
     CkksContext context;
@@ -193,6 +241,509 @@ private:
     UpperDiagonalHeteroResources& operator=(const UpperDiagonalHeteroResources&) = delete;
 };
 
+TEST_CASE("depthwise public masks preserve source positions and rescale", "[depthwise_mask]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const uint32_t slots = param.max_slots();
+    const int level = 3;
+    const Duo shape{8, 8}, stride{2, 2};
+    for (Duo skip : std::vector<Duo>{{1, 1}, {1, 2}, {2, 1}, {2, 2}}) {
+        const uint32_t channels = 4 * prod(skip);
+        const uint32_t n_out = channels + 1;  // A second group with a single valid channel.
+        MultiplexedConv2DPackedLayerDepthwise layer(
+            param, shape, gen_random_array<4>({n_out, 1, 3, 3}, 0.1),
+            gen_random_array<1>({n_out}, 0.1), stride, skip, channels, level);
+        for (uint32_t channel : std::vector<uint32_t>{0, 1, channels - 1, channels}) {
+            const uint32_t ct_idx = channel / channels, local = channel % channels;
+            INFO("skip=" << str(skip) << " ct_idx=" << ct_idx << " local=" << local);
+            const auto source = MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
+                shape, skip, stride, channels, slots, ct_idx, local);
+            const auto& seed_pt_3 = layer.generate_mask_pt_for_indices(ctx, ct_idx, local);
+            std::vector<double> seed_values_3;
+            ctx.decode(seed_pt_3, seed_values_3);
+            auto encoded_seed_3 = fhe_api::encode(ctx, seed_values_3, level - 1, seed_pt_3.scale());
+            std::vector<double> legacy; ctx.decode(std::move(encoded_seed_3), legacy);
+            REQUIRE(source.size() == slots);
+            // Decode rounds the q(L-1)-scaled ring polynomial; compare its
+            // binary support independently below, allowing CKKS encode noise here.
+            for (uint32_t j = 0; j < slots; ++j) REQUIRE(legacy[j] == Approx(source[j]).margin(1e-7));
+
+            // Use the channel reorder step from the compute path to check the mask's
+            // source positions independently of its generation/encoding helper.
+            const int aligned = ct_idx * channels + (local / skip[1]) * skip[1];
+            const int dst_block = aligned / prod(skip * stride);
+            const int dst_phase = aligned % prod(skip * stride);
+            const int src_block = aligned / prod(skip), src_phase = aligned % prod(skip);
+            const int step = -((dst_block - src_block) * static_cast<int>(prod(skip) * prod(shape)) +
+                (dst_phase / static_cast<int>(stride[1] * skip[1]) - src_phase / static_cast<int>(skip[1])) *
+                    static_cast<int>(skip[1] * shape[1]) +
+                dst_phase % static_cast<int>(stride[1] * skip[1]) - src_phase % static_cast<int>(skip[1]));
+            auto target = layer.select_tensor(channel % (channels * prod(stride)));
+            target.resize(slots, 0.0);
+            std::vector<double> values(slots);
+            for (uint32_t j = 0; j < slots; ++j) values[j] = (static_cast<int>(j % 29) - 14) * 0.03125;
+            const auto input = ctx.encrypt(fhe_api::encode(ctx, values, level - 1, param.default_scale()));
+            const auto mask = fhe_api::encode_ringt(ctx, source, param.q()[level - 1]);
+            auto result = ctx.rescale(ctx.mult(input, mask));
+            REQUIRE(result.level() == level - 2);
+            REQUIRE(result.scale() == Approx(input.scale()).epsilon(1e-10));
+            result = ctx.rotate(result, step);
+            std::vector<double> actual; ctx.decode(ctx.decrypt(result), actual);
+            double error = 0;
+            for (uint32_t j = 0; j < slots; ++j) {
+                const uint32_t src = (static_cast<int>(j) + step + static_cast<int>(slots)) % slots;
+                REQUIRE(source[src] == target[j]);
+                error = std::max(error, std::abs(actual[j] - target[j] * values[src]));
+            }
+            REQUIRE(error < 1e-5);
+        }
+    }
+}
+
+TEST_CASE("depthwise masks select logical channels in rectangular layouts", "[depthwise_layout]") {
+    for (Duo shape : std::vector<Duo>{{4, 8}, {8, 4}}) {
+        for (Duo skip : std::vector<Duo>{{1, 2}, {2, 1}, {2, 4}}) {
+            const Duo stride{2, 2};
+            const uint32_t channels = 2 * prod(skip), slots = channels * prod(shape);
+            const uint32_t width = shape[1] * skip[1];
+            for (uint32_t channel = 0; channel < 2 * channels + 1; ++channel) {
+                const uint32_t local = channel % channels;
+                const auto actual = MultiplexedConv2DPackedLayerDepthwise::mask_tensor_for_config(
+                    shape, skip, stride, channels, slots, channel / channels, local);
+                std::vector<double> expected(slots, 0.0);
+                for (uint32_t row = 0; row < shape[0]; row += stride[0]) {
+                    for (uint32_t col = 0; col < shape[1]; col += stride[1]) {
+                        const uint32_t block = local / prod(skip), phase = local % prod(skip);
+                        const uint32_t index = block * prod(shape * skip) +
+                            (row * skip[0] + phase / skip[1]) * width + col * skip[1] + phase % skip[1];
+                        expected[index] = 1.0;
+                    }
+                }
+                INFO("shape=" << str(shape) << " skip=" << str(skip) << " channel=" << channel);
+                REQUIRE(actual == expected);
+            }
+        }
+    }
+}
+
+TEST_CASE("depthwise joint seeds restore distinct channel groups and kernels", "[joint_seed]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const Duo shape{8, 8}, skip{1, 2}, subgrid{2, 2};
+    const int level = 2;
+    for (Duo kernel : std::vector<Duo>{{1, 1}, {3, 3}}) {
+        const int channels_per_ct = 2, channels = 5, groups = 3;
+        auto weight = gen_random_array<4>({channels, 1, kernel[0], kernel[1]}, 0.1);
+        auto bias = gen_random_array<1>({channels}, 0.1);
+        MultiplexedConv2DPackedLayerDepthwise joint(param, shape, std::move(weight), std::move(bias),
+            {1, 1}, skip, channels_per_ct, level, 0.625, subgrid, true);
+        joint.prepare_weight_lazy();
+        REQUIRE(joint.joint_seed_weights());
+        const int requests = groups * prod(kernel);
+        REQUIRE(joint.seed_weight_count() == div_ceil(requests, prod(subgrid)));
+        check_kernel_seed_recovery(ctx, level, joint.seed_weight_level_cost(), requests, shape, skip, subgrid,
+            [&](int q) { return joint.generate_weight_pt_for_seed_indices(ctx, 0, q); },
+            [&](int u) { return joint.generate_weight_pt_for_indices(ctx, u / prod(kernel), u % prod(kernel)); },
+            [&](int u, bool boundary) { return joint.generate_mask_pt_for_seed_indices(
+                ctx, u % prod(subgrid), u % prod(kernel), boundary); });
+        REQUIRE_THROWS(joint.generate_weight_pt_for_seed_indices(ctx, 1, 0));
+        REQUIRE_THROWS(joint.generate_weight_pt_for_seed_indices(ctx, 0, joint.seed_weight_count()));
+    }
+}
+
+TEST_CASE("dense tile seeds preserve sparse weights and bias before fold", "[dense_tile]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const Duo shape{2, 2}, skip{32, 32}, fill{2, 2};
+    const int slots = param.max_slots(), level = 2, outputs = 5, inputs = 129 * 4;
+    auto weight = gen_random_array<2>({outputs, inputs}, 0.1);
+    auto bias = gen_random_array<1>({outputs}, 0.1);
+    DensePackedLayer layer(param, std::move(weight), std::move(bias), 2, level, 0, 0.625);
+    layer.prepare_weight_for_2d_multiplexed_lazy(shape, skip, fill);
+    // Slot capacity determines the block count; the last output group is partial.
+    const int blocks_per_ct = slots / prod(shape * skip);
+    const int columns = blocks_per_ct, rows = div_ceil(outputs, blocks_per_ct);
+    layer.validate_tile_geometry(shape, skip, fill, slots, {rows, columns}, level);
+    REQUIRE_THROWS(layer.validate_tile_geometry(shape, skip, fill, slots, {rows, columns + 1}, level));
+    for (bool bias_seed : {false, true}) {
+        const int count = bias_seed ? rows : rows * columns;
+        const int target_level = level - (bias_seed ? 1 : 0);
+        const double scale = bias_seed ? param.default_scale() : param.q()[level] * 0.625;
+        for (int u = 0; u < count; ++u) {
+            INFO("bias=" << bias_seed << " request=" << u);
+            const int sub = u % prod(fill);
+            const int delta = interleaved_seed::tile_offset(shape, skip, fill, sub);
+            auto seed_pt = layer.generate_tile_seed(ctx, u / prod(fill), bias_seed);
+            const auto& seed_pt_4 = seed_pt;
+            std::vector<double> seed_values_4;
+            ctx.decode(seed_pt_4, seed_values_4);
+            auto encoded_seed_4 = fhe_api::encode(ctx, seed_values_4, target_level + 1, seed_pt_4.scale());
+            auto seed = ctx.encrypt(std::move(encoded_seed_4));
+            const auto seed_bytes = seed.serialize();
+            const auto mask = interleaved_seed::tile_mask(shape, skip, fill, slots, sub, bias_seed);
+            auto mask_pt = fhe_api::encode_ringt(ctx, mask, param.q()[target_level + 1]);
+            auto restored = ctx.rescale(ctx.mult(seed, mask_pt));
+            if (delta) restored = ctx.rotate(restored, delta);
+            REQUIRE(seed.serialize() == seed_bytes);
+            REQUIRE(restored.level() == target_level);
+            REQUIRE(restored.scale() == Approx(scale).epsilon(1e-10));
+            const auto expected = bias_seed ? layer.generate_bias_values_mult_pack(u) :
+                layer.generate_weight_values_mult_pack(u / columns, u % columns);
+            std::vector<double> actual; ctx.decode(ctx.decrypt(restored), actual);
+            double error = 0.0;
+            for (int i = 0; i < slots; ++i) error = std::max(error, std::abs(actual[i] - expected[i]));
+            REQUIRE(error < 1e-5);
+            if (bias_seed) {
+                auto folded = restored.copy();
+                auto legacy_folded = ctx.encrypt(fhe_api::encode(ctx, expected, target_level, scale));
+                for (int fold = slots / blocks_per_ct; fold > 1; fold /= 2) folded = ctx.add(folded, ctx.rotate(folded, fold / 2));
+                for (int fold = slots / blocks_per_ct; fold > 1; fold /= 2)
+                    legacy_folded = ctx.add(legacy_folded, ctx.rotate(legacy_folded, fold / 2));
+                std::vector<double> folded_values; ctx.decode(ctx.decrypt(folded), folded_values);
+                std::vector<double> legacy_values; ctx.decode(ctx.decrypt(legacy_folded), legacy_values);
+                for (int block = 0; block < blocks_per_ct; ++block) {
+                    const int i = block * slots / blocks_per_ct;
+                    CAPTURE(folded_values[i], legacy_values[i], expected[i]);
+                    // Summing a full block also sums CKKS noise in zero slots.
+                    // Both the original and tile-recovered sparse bias must
+                    // remain a single bias, rather than a broadcast times 4096.
+                    REQUIRE(std::abs(legacy_values[i] - expected[i]) < 1e-4);
+                    REQUIRE(std::abs(folded_values[i] - expected[i]) < 1e-4);
+                }
+            }
+        }
+        REQUIRE_THROWS(layer.generate_tile_seed(ctx, div_ceil(count, prod(fill)), bias_seed));
+        const auto& seed_pt_5 = layer.generate_tile_seed(ctx, (count - 1) / prod(fill), bias_seed);
+        std::vector<double> seed_values_5;
+        ctx.decode(seed_pt_5, seed_values_5);
+        auto encoded_seed_5 = fhe_api::encode(ctx, seed_values_5, target_level + 1, seed_pt_5.scale());
+        std::vector<double> tail; ctx.decode(std::move(encoded_seed_5), tail);
+        for (int sub = (count - 1) % prod(fill) + 1; sub < static_cast<int>(prod(fill)); ++sub) {
+            const auto mask = interleaved_seed::tile_mask(shape, skip, fill, slots, sub, bias_seed);
+            double maximum = 0.0;
+            for (int i = 0; i < slots; ++i) if (mask[i]) maximum = std::max(maximum, std::abs(tail[i]));
+            REQUIRE(maximum < 1e-6);
+        }
+    }
+}
+
+TEST_CASE("0D dense tiles preserve slot zero and ignore invalid input slots", "[dense_tile]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const uint32_t slots = param.max_slots(), inputs = 3, outputs = 5;
+    const int level = 1;
+    auto weight = gen_random_array<2>({outputs, inputs}, 0.1);
+    auto bias = gen_random_array<1>({outputs}, 0.1);
+    std::vector<double> expected(outputs);
+    for (uint32_t out = 0; out < outputs; ++out) {
+        expected[out] = bias.get(out);
+        for (uint32_t in = 0; in < inputs; ++in) expected[out] += weight.get(out, in) * (in + 1) * 0.25;
+    }
+    DensePackedLayer layer(param, std::move(weight), std::move(bias), 1, level, 0);
+    layer.prepare_weight_0d_skip_lazy(slots);
+    REQUIRE(layer.normal_dense);
+    layer.validate_tile_geometry({1, 1}, {1, slots}, {1, slots}, slots, {outputs, inputs}, level);
+    const auto& seed_pt_6 = layer.generate_tile_seed(ctx, 0, false);
+    std::vector<double> seed_values_6;
+    ctx.decode(seed_pt_6, seed_values_6);
+    auto encoded_seed_6 = fhe_api::encode(ctx, seed_values_6, level + 1, seed_pt_6.scale());
+    auto weights = ctx.encrypt(std::move(encoded_seed_6));
+    const auto& seed_pt_7 = layer.generate_tile_seed(ctx, 0, true);
+    std::vector<double> seed_values_7;
+    ctx.decode(seed_pt_7, seed_values_7);
+    auto encoded_seed_7 = fhe_api::encode(ctx, seed_values_7, level, seed_pt_7.scale());
+    auto biases = ctx.encrypt(std::move(encoded_seed_7));
+    const auto restore = [&](const CkksCiphertext& seed, uint32_t sub, bool bias_seed) {
+        const int target = level - bias_seed;
+        auto mask = fhe_api::encode_ringt(ctx, interleaved_seed::tile_mask({1, 1}, {1, slots}, {1, slots},
+            slots, sub, bias_seed), param.q()[target + 1]);
+        auto restored = ctx.rescale(ctx.mult(seed, mask));
+        if (sub) restored = ctx.rotate(restored, sub);
+        REQUIRE(restored.level() == target);
+        const auto legacy = bias_seed ? layer.generate_bias_0d_pt_for_index(ctx, sub) :
+            layer.generate_weight_0d_pt_for_indices(ctx, sub / inputs, sub % inputs);
+        const auto& seed_pt_8 = legacy;
+        std::vector<double> seed_values_8;
+        ctx.decode(seed_pt_8, seed_values_8);
+        auto encoded_seed_8 = fhe_api::encode(ctx, seed_values_8, target, seed_pt_8.scale());
+        std::vector<double> wanted; ctx.decode(std::move(encoded_seed_8), wanted);
+        std::vector<double> actual; ctx.decode(ctx.decrypt(restored), actual);
+        double error = 0;
+        for (uint32_t i = 0; i < slots; ++i) error = std::max(error, std::abs(wanted[i] - actual[i]));
+        REQUIRE(error < 1e-5);
+        return restored;
+    };
+    for (uint32_t out = 0; out < outputs; ++out) {
+        CkksCiphertext sum;
+        for (uint32_t in = 0; in < inputs; ++in) {
+            std::vector<double> values(slots, 0.75);  // Deliberately nonzero invalid positions.
+            values[0] = (in + 1) * 0.25;
+            auto w = restore(weights, out * inputs + in, false);
+            auto term = ctx.mult(w, fhe_api::encode_ringt(ctx, values, param.default_scale()));
+            if (in) sum = ctx.add(sum, term);
+            else sum = std::move(term);
+        }
+        sum = ctx.rescale(sum);
+        sum = ctx.add(sum, restore(biases, out, true));
+        std::vector<double> actual; ctx.decode(ctx.decrypt(sum), actual);
+        REQUIRE(actual[0] == Approx(expected[out]).margin(1e-5));
+        double invalid = 0;
+        for (uint32_t i = 1; i < slots; ++i) invalid = std::max(invalid, std::abs(actual[i]));
+        REQUIRE(invalid < 1e-5);
+    }
+}
+
+TEST_CASE("polynomial channel seeds keep degree scale and tail support", "[poly_seed]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    for (bool big : {false, true}) {
+        const Duo shape = big ? Duo{128, 128} : Duo{16, 16};
+        const Duo expansion = big ? Duo{2, 1} : Duo{1, 1};
+        const Duo physical = shape / expansion;
+        const Duo skip = big ? Duo{1, 1} : Duo{2, 2};
+        const Duo stride = big ? Duo{16, 16} : Duo{2, 2};
+        const int slots = param.max_slots(), groups = big ? 6 : 5;
+        const int channels_per_ct = big ? 1 : slots / prod(shape), level = 5;
+        const int channels = big ? 3 : 4 * channels_per_ct + 1;
+        PolyRelu2D layer(param, shape, 4, gen_random_array<2>({5, static_cast<uint64_t>(channels)}, 0.1),
+                         skip, channels_per_ct, level, {1, 1}, expansion);
+        layer.prepare_weight_bsgs_lazy();
+        const std::vector<int> targets{2, 3, 3, 3, 4};
+        std::vector<double> degree_scales;
+        for (int degree = 0; degree <= 4; ++degree) {
+            const int target = targets[degree];
+            layer.validate_seed_geometry(physical, skip, channels_per_ct / prod(skip), slots, groups, degree, target);
+            REQUIRE_THROWS(layer.validate_seed_geometry(physical, skip, channels_per_ct / prod(skip), slots, groups, degree, target + 1));
+            for (int u = 0; u < groups; ++u) {
+                INFO("big=" << big << " degree=" << degree << " channel_group=" << u);
+                const auto& seed_pt_9 = layer.generate_weight_pt_for_bsgs(ctx, degree, u);
+                std::vector<double> seed_values_9;
+                ctx.decode(seed_pt_9, seed_values_9);
+                auto encoded_seed_9 = fhe_api::encode(ctx, seed_values_9, target, seed_pt_9.scale());
+                const auto reference = std::move(encoded_seed_9);
+                const double scale = ctx.encrypt(reference).scale();
+                if (!u) degree_scales.push_back(scale);
+                const auto& seed_pt_10 = layer.generate_channel_seed(ctx, degree, u / prod(stride), stride);
+                std::vector<double> seed_values_10;
+                ctx.decode(seed_pt_10, seed_values_10);
+                auto encoded_seed_10 = fhe_api::encode(ctx, seed_values_10, target + 1, seed_pt_10.scale());
+                auto seed = ctx.encrypt(std::move(encoded_seed_10));
+                REQUIRE(seed.scale() == Approx(scale).epsilon(1e-10));
+                const auto saved_seed = seed.serialize();
+                const int sub = u % prod(stride);
+                auto values = interleaved_seed::mask(physical, skip, channels_per_ct / prod(skip), slots, stride, sub, {0, 0}, false);
+                auto mask = fhe_api::encode_ringt(ctx, values, param.q()[target + 1]);
+                auto restored = ctx.rescale(ctx.mult(seed, mask));
+                const int units[2] = {static_cast<int>(skip[0] * physical[1] * skip[1]), static_cast<int>(skip[1])};
+                const int residues[2] = {sub / static_cast<int>(stride[1]), sub % static_cast<int>(stride[1])};
+                for (int dim = 0; dim < 2; ++dim)
+                    for (int bit = 0; (1u << bit) < stride[dim]; ++bit) {
+                        int step = units[dim] * (1 << bit);
+                        restored = ctx.add(restored, ctx.rotate(restored, (residues[dim] & (1 << bit)) ? step : -step));
+                    }
+                REQUIRE(seed.serialize() == saved_seed);
+                REQUIRE(restored.level() == target);
+                REQUIRE(restored.scale() == Approx(scale).epsilon(1e-10));
+                std::vector<double> actual, expected;
+                ctx.decode(ctx.decrypt(restored), actual);
+                ctx.decode(reference, expected);
+                double error = 0;
+                for (int i = 0; i < slots; ++i) error = std::max(error, std::abs(actual[i] - expected[i]));
+                // Broadcasting 256 subgrids amplifies CKKS noise at this test parameter scale.
+                REQUIRE(error < (big ? 1e-4 : 1e-5));
+            }
+            REQUIRE_THROWS(layer.generate_channel_seed(ctx, degree, div_ceil(groups, prod(stride)), stride));
+            const auto& seed_pt_11 = layer.generate_channel_seed(ctx, degree, (groups - 1) / prod(stride), stride);
+            std::vector<double> seed_values_11;
+            ctx.decode(seed_pt_11, seed_values_11);
+            auto encoded_seed_11 = fhe_api::encode(ctx, seed_values_11, target + 1, seed_pt_11.scale());
+            std::vector<double> tail; ctx.decode(std::move(encoded_seed_11), tail);
+            for (int sub = (groups - 1) % prod(stride) + 1; sub < static_cast<int>(prod(stride)); ++sub) {
+                const auto mask = interleaved_seed::mask(physical, skip, channels_per_ct / prod(skip), slots, stride, sub, {0, 0}, false);
+                double maximum = 0;
+                for (int i = 0; i < slots; ++i) if (mask[i]) maximum = std::max(maximum, std::abs(tail[i]));
+                REQUIRE(maximum < 1e-6);
+            }
+        }
+        REQUIRE(std::abs(degree_scales[0] / degree_scales[3] - 1.0) > 1e-8);
+    }
+}
+
+TEST_CASE("inverse canonical seeds preserve each execution boundary", "[inverse_canonical]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const Duo block{8, 16}, input = block * 4, kernel{3, 3}, subgrid{2, 2};
+    Array<int, 1> padding({2});
+    padding.set(0, -1);
+    padding.set(1, -1);
+    const auto canonical = [&](int e) {
+        const auto k = interleaved_seed::inverse_kernel_position(kernel, {2, 2}, {2, 2}, {1, 1}, e).kernel;
+        return k[0] * kernel[1] + k[1];
+    };
+    InverseMultiplexedConv2DLayer layer(param, input, gen_random_array<4>({2, 3, 3, 3}, 0.1),
+        gen_random_array<1>({2}, 0.1), padding, {2, 2}, block, 2, 0.625, subgrid, true);
+    layer.prepare_weight_lazy();
+    REQUIRE(layer.seed_weight_kernel_count() == 3);
+    check_kernel_seed_recovery(ctx, 2, 2, 36, block, {1, 1}, subgrid,
+        [&](int q) { return layer.generate_weight_pt_for_seed_indices(ctx, 1, 2, q); },
+        [&](int e) { return layer.generate_weight_pt_for_indices(ctx, 1, 2, e); },
+        [&](int e, bool boundary) { return layer.generate_mask_pt_for_seed_indices(ctx, canonical(e) % 4, e, boundary); },
+        canonical);
+    REQUIRE_THROWS(layer.generate_weight_pt_for_seed_indices(ctx, 1, 2, 3));
+    InverseMultiplexedConv2DLayerDepthwise depthwise(param, input, gen_random_array<4>({3, 1, 3, 3}, 0.1),
+        gen_random_array<1>({3}, 0.1), padding, {2, 2}, block, 2, 0.625, subgrid, true);
+    depthwise.prepare_weight_lazy();
+    REQUIRE(depthwise.seed_weight_kernel_count() == 3);
+    check_kernel_seed_recovery(ctx, 2, 2, 36, block, {1, 1}, subgrid,
+        [&](int q) { return depthwise.generate_weight_pt_for_seed_indices(ctx, 2, q); },
+        [&](int e) { return depthwise.generate_weight_pt_for_indices(ctx, 2, e); },
+        [&](int e, bool boundary) { return depthwise.generate_mask_pt_for_seed_indices(ctx, canonical(e) % 4, e, boundary); },
+        canonical);
+}
+
+TEST_CASE("multiplexed joint seeds cross output input and kernel axes", "[multiplexed_joint]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const Duo shape{8, 8}, skip{1, 2}, subgrid{4, 2};
+    for (const Duo kernel : std::vector<Duo>{{1, 1}, {3, 3}}) {
+        MultiplexedConv2DPackedLayer layer(param, shape,
+            gen_random_array<4>({5, 3, kernel[0], kernel[1]}, 0.1), gen_random_array<1>({5}, 0.1),
+            {1, 1}, skip, 8, 2, 0.625, {1, 1}, subgrid, true);
+        layer.prepare_weight_for_post_skip_rotation_lazy();
+        REQUIRE(layer.joint_seed_weights());
+        const int kernels = prod(kernel), requests = 2 * 2 * kernels;
+        const int cost = kernel == Duo{1, 1} ? 1 : 2;
+        REQUIRE(layer.seed_weight_count() == div_ceil(requests, 8));
+        check_kernel_seed_recovery(ctx, 2, cost, requests, shape, skip, subgrid,
+            [&](int q) { return layer.generate_weight_pt_for_seed_indices(ctx, 0, q, 0); },
+            [&](int u) { return layer.generate_weight_pt_for_indices(ctx, u / (2 * kernels), (u / kernels) % 2, u % kernels); },
+            [&](int u, bool boundary) {
+                const auto mask = MultiplexedConv2DPackedLayer::seed_mask_tensor_for_config(
+                    shape, skip, {1, 1}, 8, {1, 1}, subgrid[0], subgrid[1], u % 8, u % kernels, kernel, boundary);
+                return fhe_api::encode_ringt(ctx, mask, param.q()[2 + cost - static_cast<int>(boundary)]);
+            });
+        REQUIRE_THROWS(layer.generate_weight_pt_for_seed_indices(ctx, 0, layer.seed_weight_count(), 0));
+    }
+}
+
+TEST_CASE("kernel seed weights restore encrypted values and preserve levels", "[kernel_seed]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const Duo subgrid{4, 2};
+    for (const Duo kernel : std::vector<Duo>{{1, 1}, {3, 3}, {1, 5}}) {
+        for (int level : {0, 1, 3}) {
+            INFO("kernel=" << str(kernel));
+            const Duo shape{8, 8}, skip{1, 2};
+            auto dw_weight = gen_random_array<4>({5, 1, kernel[0], kernel[1]}, 0.1);
+            MultiplexedConv2DPackedLayerDepthwise dw(
+                param, shape, move(dw_weight), gen_random_array<1>({5}, 0.1),
+                {1, 1}, skip, (param.max_slots()) / prod(shape), level, 0.625, subgrid);
+            dw.prepare_weight_lazy();
+            check_kernel_seed_recovery(ctx, level, dw.seed_weight_level_cost(), prod(kernel), shape, skip, subgrid,
+                [&](int k) { return dw.generate_weight_pt_for_seed_indices(ctx, 0, k); },
+                [&](int k) { return dw.generate_weight_pt_for_indices(ctx, 0, k); },
+                [&](int k, bool boundary) { return dw.generate_mask_pt_for_seed_indices(ctx, k % prod(subgrid), k, boundary); });
+
+            const Duo block{8, 16}, input = block * 4;
+            Array<int, 1> padding({2});
+            padding.set(0, -1);
+            padding.set(1, -1);
+            InverseMultiplexedConv2DLayer inverse(
+                param, input, gen_random_array<4>({2, 3, kernel[0], kernel[1]}, 0.1),
+                gen_random_array<1>({2}, 0.1), padding, {2, 2}, block, level, 0.625, subgrid);
+            inverse.prepare_weight_lazy();
+            check_kernel_seed_recovery(ctx, level, inverse.seed_weight_level_cost(), prod(kernel) * 4,
+                block, {1, 1}, subgrid,
+                [&](int k) { return inverse.generate_weight_pt_for_seed_indices(ctx, 1, 2, k); },
+                [&](int k) { return inverse.generate_weight_pt_for_indices(ctx, 1, 2, k); },
+                [&](int k, bool boundary) { return inverse.generate_mask_pt_for_seed_indices(ctx, k % prod(subgrid), k, boundary); });
+
+            InverseMultiplexedConv2DLayerDepthwise inverse_dw(
+                param, input, gen_random_array<4>({3, 1, kernel[0], kernel[1]}, 0.1),
+                gen_random_array<1>({3}, 0.1), padding, {2, 2}, block, level, 0.625, subgrid);
+            inverse_dw.prepare_weight_lazy();
+            check_kernel_seed_recovery(ctx, level, inverse_dw.seed_weight_level_cost(), prod(kernel) * 4,
+                block, {1, 1}, subgrid,
+                [&](int k) { return inverse_dw.generate_weight_pt_for_seed_indices(ctx, 2, k); },
+                [&](int k) { return inverse_dw.generate_weight_pt_for_indices(ctx, 2, k); },
+                [&](int k, bool boundary) { return inverse_dw.generate_mask_pt_for_seed_indices(ctx, k % prod(subgrid), k, boundary); });
+        }
+    }
+}
+
+TEST_CASE("kernel seed C++ eager and lazy convolution match legacy", "[kernel_seed]") {
+    auto& resources = SharedHeteroResources::get();
+    auto& ctx = resources.context;
+    const auto& param = resources.param;
+    const int level = 3;
+    auto check_run = [&](auto& packed, auto& legacy, Feature2DEncrypted& input) {
+        legacy.prepare_weight();
+        const auto expected = legacy.run(ctx, input);
+        for (bool lazy : {false, true}) {
+            INFO("lazy=" << lazy);
+            if (lazy) {
+                packed.weight_pt.clear();
+                packed.bias_pt.clear();
+                packed.prepare_weight_lazy();
+            } else {
+                packed.prepare_weight();
+            }
+            const auto actual = packed.run(ctx, input);
+            REQUIRE(actual.level == expected.level);
+            REQUIRE(actual.data.size() == expected.data.size());
+            for (size_t k = 0; k < actual.data.size(); ++k) {
+                REQUIRE(actual.data[k].level() == expected.data[k].level());
+                std::vector<double> a; ctx.decode(ctx.decrypt(actual.data[k]), a);
+                std::vector<double> e; ctx.decode(ctx.decrypt(expected.data[k]), e);
+                double error = 0.0;
+                for (size_t i = 0; i < a.size(); ++i) error = std::max(error, std::abs(a[i] - e[i]));
+                REQUIRE(error < 1e-5);
+            }
+        }
+    };
+    for (Duo stride : std::vector<Duo>{{1, 1}, {2, 2}}) {
+        const Duo shape{16, 16}, skip{1, 1};
+        auto weight = gen_random_array<4>({5, 1, 3, 3}, 0.1);
+        auto bias = gen_random_array<1>({5}, 0.1);
+        const auto channels_per_ct = (param.max_slots()) / prod(shape);
+        MultiplexedConv2DPackedLayerDepthwise packed(param, shape, weight.copy(), bias.copy(), stride, skip,
+                                                    channels_per_ct, level, 1.0, {4, 4});
+        MultiplexedConv2DPackedLayerDepthwise legacy(param, shape, weight.copy(), bias.copy(), stride, skip,
+                                                    channels_per_ct, level);
+        Feature2DEncrypted input(&ctx, level, skip);
+        input.pack_multiplexed(gen_random_array<3>({5, shape[0], shape[1]}, 1.0), param.default_scale());
+        check_run(packed, legacy, input);
+    }
+    for (Duo stride : std::vector<Duo>{{2, 2}, {4, 4}}) {
+        const Duo block{64, 128}, shape = block * 2;
+        Array<int, 1> padding({2});
+        padding.set(0, -1);
+        padding.set(1, -1);
+        auto weight = gen_random_array<4>({2, 1, 3, 3}, 0.1);
+        auto bias = gen_random_array<1>({2}, 0.1);
+        InverseMultiplexedConv2DLayer packed(param, shape, weight.copy(), bias.copy(), padding, stride, block,
+                                            level, 1.0, {4, 4});
+        InverseMultiplexedConv2DLayer legacy(param, shape, weight.copy(), bias.copy(), padding, stride, block, level);
+        Feature2DEncrypted input(&ctx, level, {1, 1});
+        input.pack_interleaved(gen_random_array<3>({1, shape[0], shape[1]}, 1.0), block, {2, 2}, param.default_scale());
+        check_run(packed, legacy, input);
+        InverseMultiplexedConv2DLayerDepthwise packed_dw(param, shape, weight.copy(), bias.copy(), padding, stride, block,
+                                                        level, 1.0, {4, 4});
+        InverseMultiplexedConv2DLayerDepthwise legacy_dw(param, shape, weight.copy(), bias.copy(), padding, stride, block, level);
+        Feature2DEncrypted dw_input(&ctx, level, {1, 1});
+        dw_input.pack_interleaved(gen_random_array<3>({2, shape[0], shape[1]}, 1.0), block, {2, 2}, param.default_scale());
+        check_run(packed_dw, legacy_dw, dw_input);
+    }
+}
+
 template <typename T> class HeteroFixture {
 public:
     HeteroFixture()
@@ -208,15 +759,32 @@ public:
         auto start_time = std::chrono::high_resolution_clock::now();
         uint64_t result;
         std::string processor_type;
+        std::unordered_map<std::string, ExecutorFunc> executors;
+        executors["encode_pt"] = [](ExecutionContext& exec_ctx, std::unordered_map<NodeId, std::any>& local_data,
+                                    const ComputeNode& self) {
+            const auto& attrs = self.custom_prop->attributes;
+            auto* ctx = exec_ctx.get_arithmetic_context<CkksContext>();
+            const auto op_class = attrs.at("op_class").get<string>();
+            if (attrs.at("type") != "normalization_pt" ||
+                (op_class != "Avgpool1DLayer" && op_class != "Avgpool2DLayer"))
+                throw runtime_error("unsupported encode_pt in pooling fixture");
+            const auto divisor = attrs.at("divisor").get<uint32_t>();
+            const auto level = attrs.at("level").get<uint32_t>();
+            auto pt = op_class == "Avgpool1DLayer" ? Avgpool1DLayer::normalization_pt(*ctx, divisor, level)
+                                                   : Avgpool2DLayer::normalization_pt(*ctx, divisor, level);
+            local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
+        };
 
         if constexpr (is_same_v<T, ProcessorCpu>) {
             processor_type = "CPU";
             FheTaskCpu fhe_task(project_path.string());
+            fhe_task.bind_custom_executors(executors);
             result = fhe_task.run(&context, cxx_args);
 #ifdef INFERENCE_SDK_ENABLE_GPU
         } else if constexpr (is_same_v<T, ProcessorGpu>) {
             processor_type = "GPU";
             FheTaskGpu fhe_task(project_path.string());
+            fhe_task.bind_custom_executors(executors);
             result = fhe_task.run(&context, cxx_args);
 #endif
         }
@@ -3624,7 +4192,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, param.default_scale());
 
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
@@ -3676,8 +4244,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted half_tanh_enc(&context, init_level);
     FeatureMatEncrypted X_enc(&context, init_level);
-    half_tanh_enc.par_diagonal_pack(half_tanh, n_heads, head_shape, false, false, param.default_scale());
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
+    half_tanh_enc.par_diagonal_pack(half_tanh, n_heads, head_shape, false, param.default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, param.default_scale());
 
     vector<CkksCiphertext> half_tanh_cts, x_cts, out_cts;
     vector<CustomData> layer_data;
@@ -3726,7 +4294,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : X_enc.data)
@@ -3767,7 +4335,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : X_enc.data)
@@ -3810,7 +4378,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(X);
 
     FeatureMatEncrypted X_enc(&context, init_level);
-    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, false, param.default_scale());
+    X_enc.par_diagonal_pack(X, n_heads, head_shape, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : X_enc.data)
@@ -3853,7 +4421,7 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
     Array<double, 2> expected = layer->run_plaintext(B);
 
     FeatureMatEncrypted B_enc(&context, init_level);
-    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, param.default_scale());
     vector<CkksCiphertext> in_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : B_enc.data)
@@ -3897,8 +4465,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&context, init_level);
     FeatureMatEncrypted B_enc(&context, init_level);
-    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, param.default_scale());
-    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, param.default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, param.default_scale());
     vector<CkksCiphertext> a_cts, b_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : A_enc.data)
@@ -3946,8 +4514,8 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture,
 
     FeatureMatEncrypted A_enc(&context, init_level);
     FeatureMatEncrypted B_enc(&context, init_level);
-    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, false, param.default_scale());
-    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, false, param.default_scale());
+    A_enc.par_diagonal_pack(A, n_heads, head_shape, false, param.default_scale());
+    B_enc.par_diagonal_pack(B, n_heads, head_shape, false, param.default_scale());
     vector<CkksCiphertext> a_cts, b_cts, out_cts;
     vector<CustomData> layer_data;
     for (auto& ct : A_enc.data)
@@ -6990,10 +7558,10 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
         // No prepare_weight needed for adaptive avgpool
         Avgpool2DLayer avgpool(input_shape, stride);
 
-        // Pre-allocate output — NO level consumed (no mult/rescale), same number of CTs
-        Feature2DEncrypted output_feature(&this->context, init_level);
+        // Normalization consumes one level, with the same number of CTs.
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
             output_feature.data.back().set_scale(this->param.default_scale());
         }
 
@@ -7044,6 +7612,107 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool2d_layer", "", He
     }
 }
 
+TEST_CASE("rectangular_polynomial_channel_layout", "[spatial]") {
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    const Duo shape{4, 8};
+    const int level = 5, channels = 11, order = 4;
+    for (const Duo skip : {Duo{1, 2}, Duo{2, 4}}) {
+        auto values = gen_random_array<3>({channels, shape[0], shape[1]}, 0.25);
+        auto coefficients = gen_random_array<2>({order + 1, channels}, 0.1);
+        Feature2DEncrypted input(&ctx, level, skip);
+        input.pack_multiplexed(values, param.default_scale());
+        PolyRelu2D layer(param, shape, order, move(coefficients), skip, input.n_channel_per_ct, level);
+        auto expected = layer.run_plaintext_for_non_absorb_case(values);
+        for (bool lazy : {false, true}) {
+            if (lazy)
+                layer.prepare_weight_bsgs_lazy();
+            else
+                layer.prepare_weight_bsgs();
+            auto actual = layer.run_bsgs(ctx, input).unpack_multiplexed();
+            INFO("skip=" << skip[0] << "," << skip[1] << " lazy=" << lazy);
+            REQUIRE(compare(expected, actual).max_error < 1e-5);
+        }
+    }
+}
+
+TEST_CASE("rectangular_adaptive_avgpool", "[spatial]") {
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const Duo skip{2, 4}, stride{2, 4};
+    for (const Duo shape : {Duo{4, 8}, Duo{8, 4}}) {
+        auto values = gen_random_array<3>({8, shape[0], shape[1]}, 1.0);
+        Feature2DEncrypted input(&ctx, 1, skip);
+        input.pack_multiplexed(values, param.default_scale());
+        Avgpool2DLayer layer(shape, stride);
+        const auto pt = Avgpool2DLayer::normalization_pt(ctx, prod(stride), input.level);
+        REQUIRE(pt.scale() == Approx(param.q()[input.level]));
+        auto encrypted_output = layer.run_adaptive_avgpool(ctx, input);
+        REQUIRE(encrypted_output.level == input.level - 1);
+        REQUIRE(encrypted_output.data[0].scale() == Approx(input.data[0].scale()).epsilon(1e-10));
+        auto output = encrypted_output.unpack_multiplexed();
+        layer.prepare_weight(param, input.n_channel_per_ct, input.n_channel, input.level, skip, shape);
+        auto multiplexed = layer.run_multiplexed_avgpool(ctx, input).unpack_multiplexed();
+        for (uint32_t channel = 0; channel < 8; ++channel) {
+            for (uint32_t h = 0; h < shape[0] / stride[0]; ++h) {
+                for (uint32_t w = 0; w < shape[1] / stride[1]; ++w) {
+                    double expected = 0;
+                    for (uint32_t dh = 0; dh < stride[0]; ++dh)
+                        for (uint32_t dw = 0; dw < stride[1]; ++dw)
+                            expected += values.get(channel, h * stride[0] + dh, w * stride[1] + dw);
+                    expected /= prod(stride);
+                    REQUIRE(std::abs(output.get(channel, h, w) - expected) < 1e-4);
+                    REQUIRE(std::abs(multiplexed.get(channel, h, w) - expected) < 1e-4);
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("adaptive_avgpool1d_normalization", "[spatial]") {
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const uint32_t shape = 16, stride = 4, channels = 8;
+    auto values = gen_random_array<2>({channels, shape}, 2.0);
+    Feature1DEncrypted input(&ctx, 2);
+    input.pack_multiplexed(values, param.default_scale());
+    Avgpool1DLayer layer(shape, stride);
+    const auto pt = Avgpool1DLayer::normalization_pt(ctx, stride, input.level);
+    REQUIRE(pt.scale() == Approx(param.q()[input.level]));
+    auto result = layer.run_adaptive_avgpool(ctx, input);
+    REQUIRE(result.level == input.level - 1);
+    REQUIRE(result.data[0].scale() == Approx(input.data[0].scale()).epsilon(1e-10));
+    auto output = result.unpack_multiplexed();
+    auto expected = layer.run_plaintext(values);
+    REQUIRE(compare(expected, output).max_error < 1e-4);
+    layer.prepare_weight(param, input.n_channel_per_ct, channels, input.level, input.skip, shape);
+    auto multiplexed = layer.run_multiplexed_avgpool(ctx, input).unpack_multiplexed();
+    REQUIRE(compare(expected, multiplexed).max_error < 1e-4);
+}
+
+TEST_CASE("split_avgpool_normalization", "[spatial]") {
+    auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    ctx.gen_rotation_keys();
+    const Duo block{32, 256}, expansion{2, 2}, shape = block * expansion;
+    auto values = gen_random_array<3>({2, shape[0], shape[1]}, 1.0);
+    Feature2DEncrypted input(&ctx, 2);
+    input.pack_interleaved(values, block, expansion, param.default_scale());
+    for (const Duo stride : {Duo{2, 2}, Duo{4, 4}}) {
+        Avgpool2DLayer layer(shape, stride);
+        if (stride[0] > expansion[0])
+            layer.prepare_weight_repack(param, input.n_channel, input.level, stride / expansion, block);
+        auto result = layer.run_split_avgpool(ctx, input, expansion);
+        REQUIRE(result.level == input.level - 1);
+        REQUIRE(result.data[0].scale() == Approx(input.data[0].scale()).epsilon(1e-10));
+        auto output = layer.need_repack ? result.unpack_multiplexed()
+                                       : result.unpack_interleaved(block, expansion / stride);
+        REQUIRE(compare(layer.run_plaintext(values), output).max_error < 1e-4);
+    }
+}
+
 TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "", HeteroProcessors) {
     int init_level = 3;
 
@@ -7060,11 +7729,11 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "interleaved_avgpool2d_layer", "",
 
         Avgpool2DLayer avgpool(block_shape, stride);
 
-        // No level consumed (only adds)
+        // Normalization consumes one level.
         uint32_t out_size = input_feature.data.size() / prod(stride);
-        Feature2DEncrypted output_feature(&this->context, init_level);
+        Feature2DEncrypted output_feature(&this->context, init_level - 1);
         for (uint32_t i = 0; i < out_size; i++) {
-            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
             output_feature.data.back().set_scale(this->param.default_scale());
         }
 
@@ -7133,9 +7802,9 @@ TEMPLATE_LIST_TEST_CASE_METHOD(HeteroFixture, "adaptive_avgpool1d_layer", "", He
 
         Avgpool1DLayer avgpool(s, stride);
 
-        Feature1DEncrypted output_feature(&this->context, init_level, skip * stride, stride);
+        Feature1DEncrypted output_feature(&this->context, init_level - 1, skip * stride, stride);
         for (uint32_t i = 0; i < n_ct; i++) {
-            output_feature.data.emplace_back(this->context.parameter(), init_level);
+            output_feature.data.emplace_back(this->context.parameter(), init_level - 1);
             output_feature.data.back().set_scale(this->param.default_scale());
         }
 

@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 import numpy as np
 
@@ -40,6 +40,16 @@ class Avgpool1DLayer:
         if skip & (skip - 1) != 0:
             raise ValueError(f'skip must be a power of 2, got: {skip}')
 
+    def _normalize(self, x):
+        level = x.metadata.level
+        pt = CkksPlaintextNode(f'{x.id}/pool_mean', is_ringt=True,
+                               scale=float(get_fhe_param().q[level]), level=0)
+        custom_compute(inputs=[], output=pt, type='encode_pt', attributes={
+            'op_class': 'Avgpool1DLayer', 'type': 'normalization_pt',
+            'divisor': self.stride, 'level': level,
+        })
+        return rescale(mult(x, pt))
+
     def get_fhe_op_count_adaptive(self, n_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in run_adaptive_avgpool() for n_ct input ciphertexts, grouped by level.
 
@@ -54,7 +64,7 @@ class Avgpool1DLayer:
           - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
             steps: 2^r * channel * shape, all powers of 2)
         where n_rot = floor(n / (channel * shape)).
-        No rescale, so all ops are at a single level key.
+        Normalization uses one plaintext multiplication and rescale at this level.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
         lv = level
@@ -66,6 +76,8 @@ class Avgpool1DLayer:
         ops[lv]['rotate'] += n_ct * rot_add_per_ct
         ops[lv]['add'] += n_ct * rot_add_per_ct
 
+        ops[lv]['mult_plain'] += n_ct
+        ops[lv]['rescale'] += n_ct
         return dict(ops)
 
     def run_adaptive_avgpool(self, x: list[DataNode], n: int):
@@ -84,7 +96,7 @@ class Avgpool1DLayer:
 
             for r in range(0, int(np.floor(np.log2(n_rot))) if n_rot > 1 else 0):
                 res = add(res, rotate_cols(res, (2**r) * self.channel * self.shape)[0])
-            result.append(res)
+            result.append(self._normalize(res))
         return result
 
     def get_fhe_op_count_multiplexed(
@@ -219,7 +231,7 @@ class Avgpool1DLayer:
 
         select_tensor_pt = []
         for i in range(n_select_pt):
-            w_pt = CkksPlaintextNode(f'encode_pt_select_1d_{i}', is_ringt=True)
+            w_pt = CkksPlaintextNode(f'encode_pt_select_1d_{i}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[avg_data_source],
                 output=w_pt,

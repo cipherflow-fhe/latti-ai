@@ -1,0 +1,47 @@
+{
+  "version": "latti-ai.encrypted-parameter-size.v2",
+  "source": "v6 CkksContext.encrypt + CkksCiphertext.serialize; degree 1, conjugate-invariant PN15Default, all residual levels measured locally",
+  "parameter": {
+    "poly_modulus_degree": 32768,
+    "n_mult_level": 12,
+    "log_default_scale": 40,
+    "param_name": "PN15Default",
+    "q": [
+      2251799813554177,
+      1099512938497,
+      1099510054913,
+      1099507695617,
+      1099515691009,
+      1099516870657,
+      1099506515969,
+      1099504549889,
+      1099503894529,
+      1099503370241,
+      1099502714881,
+      1099521458177,
+      1099522375681
+    ],
+    "p": [
+      1125899908022273,
+      1125899903827969,
+      1125899911168001
+    ],
+    "ring_type": 1,
+    "n_slots": 32768
+  },
+  "bytes_per_element": {
+    "0": 524623,
+    "1": 1048927,
+    "2": 1573231,
+    "3": 2097535,
+    "4": 2621839,
+    "5": 3146143,
+    "6": 3670447,
+    "7": 4194751,
+    "8": 4719055,
+    "9": 5243359,
+    "10": 5767663,
+    "11": 6291967,
+    "12": 6816271
+  }
+}

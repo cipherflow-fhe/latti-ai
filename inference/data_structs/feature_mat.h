@@ -27,7 +27,6 @@ public:
     Duo head_shape = {0, 0};  // per-head shape: {rows, cols_per_head}
     uint32_t matmul_block_size = 0;
     std::vector<ls::CkksCiphertext> data;
-    std::vector<ls::CkksCiphertext> data_compress;
 
     FeatureMatEncrypted(ls::CkksContext* context_in, int ct_level);
 
@@ -38,6 +37,8 @@ public:
     // Parallel (interleaved) block column-major packing: interleave blocks from
     // multiple heads at the same block position into a single ciphertext.
     // head_dim: columns per head within each megablock.
+    std::vector<std::vector<double>> par_block_col_major_slots(const Array<double, 2>& matrix,
+        uint32_t d, uint32_t n_heads, uint32_t head_dim) const;
     void par_block_col_major_pack(const Array<double, 2>& matrix,
                                   uint32_t d,
                                   uint32_t n_heads,
@@ -56,7 +57,6 @@ public:
     Array<double, 2>
     par_diagonal_unpack(uint32_t n_heads, const Duo& head_shape, bool is_lower = true, bool is_transposed = true) const;
 
-    void decompress();
 
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;

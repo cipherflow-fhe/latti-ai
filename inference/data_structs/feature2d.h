@@ -125,7 +125,6 @@ public:
     PackType packing_type;
 
     std::vector<ls::CkksCiphertext> data;
-    std::vector<ls::CkksCiphertext> data_compress;
 
     Feature2DEncrypted(ls::CkksContext* context_in,
                        int ct_level,
@@ -171,7 +170,6 @@ public:
                                           int n_channel,
                                           const Duo& input_shape,
                                           PackType pack_type = PackType::MultiplexedPacking);
-    void decompress();
 
     Bytes serialize() const override;
     void deserialize(const Bytes& bytes) override;

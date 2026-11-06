@@ -27,7 +27,7 @@ project_root = script_dir.parent.parent
 base_path = project_root / 'build' / 'inference' / 'hetero'
 
 from inference.model_generator.deploy_cmds import *  # noqa: E402
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.add_pack import AddLayer  # noqa: E402
 from inference.model_generator.layers.avgpool2d_layer import Avgpool2DLayer  # noqa: E402
 from inference.model_generator.layers.avgpool1d_layer import Avgpool1DLayer  # noqa: E402
@@ -386,7 +386,7 @@ class TestLayerExport(unittest.TestCase):
                                 block_shape,
                             )
 
-                            weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                            weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1', level=level)
                             output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
                             input_args = list()
@@ -462,7 +462,7 @@ class TestLayerExport(unittest.TestCase):
 
                     input_ct = [CkksCiphertextNode(id=f'input_0input{k}', level=level) for k in range(n_ct_in)]
 
-                    weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1')
+                    weight_pt, bias_pt, repack_mask_pt = big_conv.make_pt_nodes('_conv1', level=level)
                     output_ct = big_conv.call(input_ct, weight_pt, bias_pt, N, repack_mask_pt=repack_mask_pt)
 
                     input_args = list()
@@ -1706,7 +1706,7 @@ class TestLayerExport(unittest.TestCase):
                             n_pack_in_channel,
                             n_packed_out_channel,
                         )
-                        weight_pt, bias_pt = conv1d.make_pt_nodes('_conv1d')
+                        weight_pt, bias_pt = conv1d.make_pt_nodes('_conv1d', level=level)
                         output_ct = conv1d.call(input_ct, weight_pt, bias_pt)
 
                         input_args = list()
@@ -1941,7 +1941,7 @@ class TestLayerExport(unittest.TestCase):
                     input_ct = [CkksCiphertextNode(id=f'input_ct_{i}', level=level) for i in range(n_ct)]
                     avgpool = Avgpool2DLayer(stride=list(stride), shape=[s, s], channel=n_channel, skip=[1, 1])
                     select_tensor_pt, n_channel_per_ct = avgpool.make_pt_nodes_multiplexed_avgpool(
-                        '_avgpool', n_channel, N
+                        '_avgpool', n_channel, N, level=level
                     )
                     output_ct = avgpool.call_multiplexed_avgpool(
                         input_ct, select_tensor_pt, n_channel, n_channel_per_ct

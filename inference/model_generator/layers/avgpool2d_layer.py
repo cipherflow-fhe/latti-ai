@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
 from inference.model_generator.layers.fhe_op_utils import naf_weight
 import numpy as np
 
@@ -40,23 +40,34 @@ class Avgpool2DLayer:
         if skip[0] & (skip[0] - 1) != 0 or skip[1] & (skip[1] - 1) != 0:
             raise ValueError(f'skip must be powers of 2, got: [{skip[0]}, {skip[1]}]')
 
+    def _normalize(self, x):
+        level = x.metadata.level
+        pt = CkksPlaintextNode(f'{x.id}/pool_mean', is_ringt=True,
+                               scale=float(get_fhe_param().q[level]), level=0)
+        custom_compute(inputs=[], output=pt, type='encode_pt', attributes={
+            'op_class': 'Avgpool2DLayer', 'type': 'normalization_pt',
+            'divisor': math.prod(self.stride), 'level': level,
+        })
+        return rescale(mult(x, pt))
+
     def get_fhe_op_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
         """Count FHE primitive operations in call() for n_ct input ciphertexts, grouped by level.
 
         call() per ct:
           - (stride[0]-1) rotations + (stride[0]-1) adds  (horizontal accumulation)
-          - log2(stride[0]) rotations + log2(stride[0]) adds  (binary fold)
-        Note: call() only folds along one dimension (stride[0]), matching the code.
-        No rescale, so all ops are at a single level key.
+          - log2(stride[1]) rotations + log2(stride[1]) adds  (width fold)
+        Normalization uses one plaintext multiplication and rescale at this level.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
         lv = level
 
         stride = self.stride[0]
-        rot_add_per_ct = (stride - 1) + int(math.log2(stride))
+        rot_add_per_ct = (stride - 1) + int(math.log2(self.stride[1]))
         ops[lv]['rotate'] += n_ct * rot_add_per_ct
         ops[lv]['add'] += n_ct * rot_add_per_ct
 
+        ops[lv]['mult_plain'] += n_ct
+        ops[lv]['rescale'] += n_ct
         return dict(ops)
 
     def call(self, x: list[DataNode]):
@@ -64,15 +75,15 @@ class Avgpool2DLayer:
         for i in range(len(x)):
             rr = x[i]
             for j in range(1, self.stride[0]):
-                ri = rotate_cols(x[i], [j * self.shape[0]])[0]
+                ri = rotate_cols(x[i], [j * self.shape[1]])[0]
                 rr = add(rr, ri)
-            step = self.stride[0]
+            step = self.stride[1]
             while step > 1:
                 step = int(step)
                 ri = rotate_cols(rr, [step // 2])[0]
                 rr = add(rr, ri)
                 step /= 2
-            res.append(rr)
+            res.append(self._normalize(rr))
         return res
 
     def get_fhe_op_count_adaptive(self, n_ct: int, n: int, level: int) -> dict[int, dict[str, int]]:
@@ -85,13 +96,13 @@ class Avgpool2DLayer:
 
         Per ct:
           - log2(stride[0]) rotate_cols calls × 1 primitive each (height accumulation,
-            steps: 2^i * shape[0] * skip[0] * skip[1], all powers of 2)
+            steps: 2^i * shape[1] * skip[0] * skip[1], all powers of 2)
           - log2(stride[1]) rotate_cols calls × 1 primitive each (width accumulation,
             steps: 2^j * skip[1], all powers of 2)
           - floor(log2(n_rot)) rotate_cols calls × 1 primitive each (slot fill,
             steps: 2^r * channel * shape[0] * shape[1], all powers of 2)
         where n_rot = floor(n / (channel * shape[0] * shape[1])).
-        No rescale, so all ops are at a single level key.
+        Normalization uses one plaintext multiplication and rescale at this level.
         """
         ops = defaultdict(lambda: {'rotate': 0, 'mult_plain': 0, 'mult': 0, 'add': 0, 'rescale': 0})
         lv = level
@@ -104,6 +115,8 @@ class Avgpool2DLayer:
         ops[lv]['rotate'] += n_ct * rot_add_per_ct
         ops[lv]['add'] += n_ct * rot_add_per_ct
 
+        ops[lv]['mult_plain'] += n_ct
+        ops[lv]['rescale'] += n_ct
         return dict(ops)
 
     def run_adaptive_avgpool(self, x: list[DataNode], n: int):
@@ -117,13 +130,13 @@ class Avgpool2DLayer:
         for idx in range(0, x_size):
             res = x[idx]
             for i in range(log2_stride_0 - 1, 0 - 1, -1):
-                ct_tmp = rotate_cols(res, (2**i) * self.shape[0] * self.skip[0] * self.skip[1])
+                ct_tmp = rotate_cols(res, (2**i) * self.shape[1] * self.skip[0] * self.skip[1])
                 res = add(res, ct_tmp[0])
 
             for j in range(log2_stride_1 - 1, 0 - 1, -1):
                 ct_tmp = rotate_cols(res, (2**j) * self.skip[1])
                 res = add(res, ct_tmp[0])
-            result.append(res)
+            result.append(self._normalize(res))
         return result
 
     def get_fhe_op_count_interleaved(self, x_size: int, N: int, level: int) -> dict[int, dict[str, int]]:
@@ -139,7 +152,7 @@ class Avgpool2DLayer:
         Stage 2 (channel repacking, only when n_channel_per_ct_out > 1):
           - sum(naf_weight(k) for k in 1..n_channel_per_ct_out-1) * n_packed_out rotates
           - (n_channel_per_ct_out - 1) * n_packed_out adds
-        No rescale, so all ops are at a single level key.
+        Normalization uses one plaintext multiplication and rescale at this level.
         """
         out_size = x_size // (self.stride[0] * self.stride[1])
         adds_stage1 = out_size * (self.stride[0] * self.stride[1] - 1)
@@ -164,6 +177,8 @@ class Avgpool2DLayer:
             ops[lv]['rotate'] += rots_stage2
             ops[lv]['add'] += adds_stage2
 
+        ops[lv]['mult_plain'] += math.ceil(out_size / n_channel_per_ct_out)
+        ops[lv]['rescale'] += math.ceil(out_size / n_channel_per_ct_out)
         return dict(ops)
 
     def call_interleaved_avgpool(self, x: list, block_expansion, N: int, repack_mask_pt=None, block_shape=None):
@@ -173,7 +188,7 @@ class Avgpool2DLayer:
         Corresponds to C++ run_split_avgpool() (avgpool2d_layer.cpp).
 
         When output_shape >= block_shape (no repack):
-          Single-stage cross-block sum. Level cost = 0.
+          Cross-block sum and normalization. Level cost = 1.
 
         When output_shape < block_shape (repack needed):
           Stage 1: Cross-block sum with first_stage_stride (= block_expansion).
@@ -269,7 +284,7 @@ class Avgpool2DLayer:
             n_channel_per_ct_out = N // (2 * output_h * output_w)
 
         if n_channel_per_ct_out == 1:
-            return res
+            return [self._normalize(node) for node in res]
         else:
             packed_res = [0 for i in range((out_size + n_channel_per_ct_out - 1) // n_channel_per_ct_out)]
             for out_ct_idx in range(out_size):
@@ -284,9 +299,9 @@ class Avgpool2DLayer:
                     else:
                         s_rot = rotate_cols(res[out_ct_idx], [step])[0]
                     packed_res[pack_out_ct_idx] = add(packed_res[pack_out_ct_idx], s_rot)
-            return packed_res
+            return [self._normalize(node) for node in packed_res]
 
-    def make_pt_nodes_multiplexed_avgpool(self, layer_id, n_channel, n):
+    def make_pt_nodes_multiplexed_avgpool(self, layer_id, n_channel, n, *, level: int):
         """Return (select_tensor_pt, n_channel_per_ct) for call_multiplexed_avgpool().
 
         select_tensor_pt[i]: i in min(n_channel, n_channel_per_ct * stride[0] * stride[1])
@@ -295,7 +310,7 @@ class Avgpool2DLayer:
         n_channel_per_ct = int(math.ceil(n / (self.shape[0] * self.shape[1])))
         out_channels_per_ct = n_channel_per_ct * self.stride[0] * self.stride[1]
         n_select_pt = min(n_channel, out_channels_per_ct)
-        select_tensor_pt = [CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True) for i in range(n_select_pt)]
+        select_tensor_pt = [CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for i in range(n_select_pt)]
         return select_tensor_pt, n_channel_per_ct
 
     def call_custom_compute_multiplexed_avgpool(self, x: list, avg_data_source, n_channel: int, n: int) -> list:
@@ -306,7 +321,7 @@ class Avgpool2DLayer:
 
         select_tensor_pt = []
         for i in range(n_select_pt):
-            w_pt = CkksPlaintextNode(f'encode_pt_select_{i}', is_ringt=True)
+            w_pt = CkksPlaintextNode(f'{avg_data_source.id}/encode_pt_select_{i}', is_ringt=True, scale=float(get_fhe_param().q[x[0].metadata.level]), level=0)
             custom_compute(
                 inputs=[avg_data_source],
                 output=w_pt,

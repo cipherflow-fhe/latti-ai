@@ -1,5 +1,6 @@
 """Validate tap routing against Feature2DEncrypted::encode_interleaved."""
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -24,6 +25,7 @@ class InterleavedMaxPoolTapsTest(unittest.TestCase):
         class Cipher:
             def __init__(self, values, level=9):
                 self.values, self.level = values, level
+                self.metadata = SimpleNamespace(level=level)
 
         inputs = []
         for channel in range(channels):

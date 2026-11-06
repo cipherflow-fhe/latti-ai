@@ -20,7 +20,8 @@ from collections import defaultdict
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from inference.lattisense.frontend.custom_task import *
+from frontend.custom_task import *
+from inference.model_generator.layers.encrypted_param_ops import multiply_with_encrypted_param
 
 DEFAULT_SCALE = 2**31
 
@@ -42,9 +43,17 @@ class MultScalarLayer:
     def __init__(self):
         return
 
-    def make_pt_nodes(self, layer_id, n_input_nodes):
+    def make_pt_nodes(self, layer_id, n_input_nodes, *, level: int):
         """Return weight_pt list with n_input_nodes elements."""
-        return [CkksPlaintextNode(f'mult_scalar_{layer_id}_{i}', is_ringt=True) for i in range(n_input_nodes)]
+        return [CkksPlaintextNode(f'mult_scalar_{layer_id}_{i}', is_ringt=True, scale=float(get_fhe_param().q[level]), level=0) for i in range(n_input_nodes)]
+
+    def get_encrypted_param_count(self, n_ct: int, level: int) -> dict[int, dict[str, int]]:
+        """One stored encrypted scalar per input ciphertext."""
+        return {level: {'scalar': n_ct}}
+
+    def make_param_ct_nodes(self, layer_id, n_input_nodes, level: int):
+        """Return encrypted scalar parameter nodes with the same IDs as make_pt_nodes()."""
+        return [CkksCiphertextNode(id=f'mult_scalar_{layer_id}_{i}', level=level) for i in range(n_input_nodes)]
 
     def call_custom_compute(self, x: list, conv_data_source) -> list:
         """Lazy path: generate encode_pt nodes on-demand."""
@@ -55,7 +64,10 @@ class MultScalarLayer:
         result = []
         for i in range(len(x)):
             w_pt = CkksPlaintextNode(
-                f'encode_pt_mult_scalar_{layer_id}_{i}', is_ringt=True, scale=pack_scale
+                f'encode_pt_mult_scalar_{layer_id}_{i}',
+                is_ringt=True,
+                scale=pack_scale,
+                level=0,
             )
             custom_compute(
                 inputs=[conv_data_source],
@@ -86,6 +98,17 @@ class MultScalarLayer:
 
         for i in range(len(x1)):
             mult_res = mult(x1[i], weight_pt[i])
+            mult_res_scale = rescale(mult_res)
+            result.append(mult_res_scale)
+        return result
+
+    def call_param_ct(self, x1: list[DataNode], weight_ct: list[DataNode]):
+        if len(x1) != len(weight_ct):
+            raise ValueError(f'mult_scalar input/weight count mismatch: {len(x1)} vs {len(weight_ct)}')
+
+        result: list[DataNode] = list()
+        for i in range(len(x1)):
+            mult_res = multiply_with_encrypted_param(x1[i], weight_ct[i])
             mult_res_scale = rescale(mult_res)
             result.append(mult_res_scale)
         return result
