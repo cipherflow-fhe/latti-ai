@@ -1,6 +1,6 @@
 # TAA v6 浏览器任务、批处理与 WASM 0.2.0 交付设计
 
-日期：2026-11-06。状态：待实现。依赖[浏览器客户端](taa_v6_browser_client_design.md)、[OPFS ZIP64](taa_v6_opfs_zip64_design.md)和[流式密钥](taa_v6_streaming_context_design.md)；旧任务日志、参数和准确率不是本规范的验收结果。
+日期：2026-11-06。状态：已实现，CIFAR/Retina 当前工作包端到端验收通过；整体回归与最终 clean revision 发布包核对仍按[验收记录](../research/taa_v6_acceptance_report.md)执行。依赖[浏览器客户端](taa_v6_browser_client_design.md)、[OPFS ZIP64](taa_v6_opfs_zip64_design.md)和[流式密钥](taa_v6_streaming_context_design.md)；旧任务日志、参数和准确率不是本规范的验收结果。
 
 ## 1. 完整流程与职责
 
