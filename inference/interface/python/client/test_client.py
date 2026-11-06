@@ -21,6 +21,7 @@ import csv
 import os
 import sys
 import tempfile
+import shutil
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 for candidate in [
@@ -33,7 +34,10 @@ for candidate in [
 
 import latti_client
 
-TEST_TASK_DIR = os.path.join(_HERE, 'testdata')
+_TEST_WORKSPACE = tempfile.TemporaryDirectory(prefix='latti-python-client-')
+TEST_TASK_DIR = _TEST_WORKSPACE.name
+for _name in ('task_config.json', 'ckks_parameter.json', 'img.csv'):
+    shutil.copyfile(os.path.join(_HERE, 'testdata', _name), os.path.join(TEST_TASK_DIR, _name))
 
 
 def test_import():
@@ -46,6 +50,7 @@ def test_import():
         'encrypt',
         'decrypt',
         'export_eval_context',
+        'export_eval_context_to_file',
         'export_full_context',
         'load_full_context',
     ]:
@@ -60,19 +65,15 @@ def test_setup():
 
 
 def test_export_eval_context(client):
-    eval_ctx = client.export_eval_context()
-    assert isinstance(eval_ctx, bytes) and len(eval_ctx) > 0
-
-    with tempfile.NamedTemporaryFile(suffix='.bin', delete=False) as f:
-        f.write(eval_ctx)
-        path = f.name
-    with open(path, 'rb') as f:
-        loaded = f.read()
-    os.unlink(path)
-    assert eval_ctx == loaded, 'roundtrip mismatch'
-
-    print(f'[PASS] export_eval_context ({len(eval_ctx) / 1024 / 1024:.1f} MB)')
-    return eval_ctx
+    try:
+        client.export_eval_context()
+        raise AssertionError('key-only context must reject Bytes eval export')
+    except RuntimeError:
+        pass
+    path = os.path.join(TEST_TASK_DIR, 'eval_context.bin')
+    assert os.path.getsize(path) > 0
+    print(f'[PASS] published evaluation context ({os.path.getsize(path) / 1024 / 1024:.1f} MB)')
+    return path
 
 
 def test_encrypt(client):
@@ -109,14 +110,13 @@ def test_decrypt(client, encrypted):
     print(f'[PASS] decrypt (num_outputs={output.num_outputs}, max_error={max_error:.6f})')
 
 
-def test_export_full_context(client, eval_ctx):
+def test_export_full_context(client, eval_path):
     full_ctx = client.export_full_context()
     assert isinstance(full_ctx, bytes) and len(full_ctx) > 0
-    # full_ctx includes the secret key; eval_ctx does not. So full_ctx must be strictly larger.
-    # This catches regressions where make_public_context() is inadvertently called.
-    assert len(full_ctx) > len(eval_ctx), f'full_ctx ({len(full_ctx)}) should be larger than eval_ctx ({len(eval_ctx)})'
-    delta_mb = (len(full_ctx) - len(eval_ctx)) / 1024 / 1024
-    print(f'[PASS] export_full_context ({len(full_ctx) / 1024 / 1024:.1f} MB, +{delta_mb:.1f} MB vs eval)')
+    with open(os.path.join(TEST_TASK_DIR, 'full_context.bin'), 'rb') as f:
+        assert full_ctx == f.read()
+    assert os.path.getsize(eval_path) > 0
+    print(f'[PASS] export_full_context ({len(full_ctx) / 1024 / 1024:.1f} MB)')
     return full_ctx
 
 

@@ -7,9 +7,13 @@ const fs = require('fs');
 // latti_client.node is dynamically linked against libfhe_ops_lib.so.
 // Ensure LD_LIBRARY_PATH includes the directory containing it, e.g.:
 //   LD_LIBRARY_PATH=.../build/inference/lattisense/fhe_ops_lib node test_client.js
-const { InferenceClient } = require('./build/Release/latti_client.node');
+const { InferenceClient } = require(process.env.LATTI_CLIENT_ADDON || './build/Release/latti_client.node');
 
-const TEST_TASK_DIR = path.join(__dirname, '..', 'python', 'client', 'testdata');
+const TEST_TASK_DIR = fs.mkdtempSync(path.join(require('os').tmpdir(), 'latti-node-client-'));
+for (const name of ['task_config.json', 'ckks_parameter.json', 'img.csv']) {
+    fs.copyFileSync(path.join(__dirname, '..', 'python', 'client', 'testdata', name), path.join(TEST_TASK_DIR, name));
+}
+process.on('exit', () => fs.rmSync(TEST_TASK_DIR, {recursive: true, force: true}));
 
 async function testImport() {
     console.log('[TEST] import');
@@ -28,9 +32,11 @@ async function testSetup(client) {
 async function testExportEvalContext(client) {
     console.log('\n[TEST] exportEvalContext');
     const start = Date.now();
-    const evalCtx = await client.exportEvalContext();
-    console.log(`[PASS] exportEvalContext (${(evalCtx.length / 1024 / 1024).toFixed(1)} MB, ${((Date.now() - start) / 1000).toFixed(1)}s)`);
-    return evalCtx;
+    await require('assert').rejects(client.exportEvalContext(), /export_eval_context_to_file/);
+    const evalPath = path.join(TEST_TASK_DIR, 'eval_context.bin');
+    if (fs.statSync(evalPath).size === 0) throw new Error('empty evaluation context');
+    console.log(`[PASS] published eval context (${((Date.now() - start) / 1000).toFixed(1)}s)`);
+    return evalPath;
 }
 
 async function testEncrypt(client) {
@@ -66,21 +72,16 @@ async function testDecrypt(client, encrypted) {
     console.log(`[PASS] roundtrip verified (maxError=${maxError.toFixed(6)})`);
 }
 
-async function testExportFullContext(client, evalCtx) {
+async function testExportFullContext(client, evalPath) {
     console.log('\n[TEST] exportFullContext');
     const fullCtx = await client.exportFullContext();
-    // full_ctx includes the secret key; eval_ctx does not. So full_ctx must be strictly larger.
-    if (fullCtx.length <= evalCtx.length) {
-        throw new Error(`fullCtx (${fullCtx.length}) should be larger than evalCtx (${evalCtx.length})`);
-    }
-    const deltaMb = (fullCtx.length - evalCtx.length) / 1024 / 1024;
-    console.log(`[PASS] exportFullContext (${(fullCtx.length / 1024 / 1024).toFixed(1)} MB, +${deltaMb.toFixed(1)} MB vs eval)`);
+    require('assert').deepStrictEqual(fullCtx, fs.readFileSync(path.join(path.dirname(evalPath), 'full_context.bin')));
+    console.log(`[PASS] exportFullContext (${(fullCtx.length / 1024 / 1024).toFixed(1)} MB)`);
     return fullCtx;
 }
 
 async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
     console.log('\n[TEST] loadFullContext + encrypt + decrypt roundtrip (fresh client)');
-    const { InferenceClient } = require('./build/Release/latti_client.node');
     const fresh = new InferenceClient(taskDir);
     await fresh.loadFullContext(fullCtx);
 
@@ -103,7 +104,6 @@ async function testLoadFullContextRoundtrip(taskDir, fullCtx) {
 
 async function testReleaseThenReloadRoundtrip(taskDir, fullCtx) {
     console.log('\n[TEST] release + reload roundtrip');
-    const { InferenceClient } = require('./build/Release/latti_client.node');
     const c = new InferenceClient(taskDir);
     await c.setup();
     await c.release();                  // frees freshly-generated keys

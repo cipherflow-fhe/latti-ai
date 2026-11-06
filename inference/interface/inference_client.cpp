@@ -17,6 +17,8 @@
  */
 
 #include <iostream>
+#include <fstream>
+#include <random>
 #include <stdexcept>
 
 #include "interface/inference_client.h"
@@ -154,6 +156,22 @@ void InferenceClient::read_configuration() {
     auto ckks_config = read_json((client_dir_ / "ckks_parameter.json").string());
     std::string ckks_param_id = first_param["ckks_parameter_id"];
     auto& ckks_entry = ckks_config[ckks_param_id];
+    auto key_parameters = [](const json& entry) {
+        return json{{"poly_modulus_degree", entry.at("poly_modulus_degree")},
+                    {"log_default_scale", entry.at("log_default_scale")},
+                    {"ring_type", entry.value("ring_type", 1)},
+                    {"q", entry.at("q")}, {"p", entry.at("p")}};
+    };
+    const auto expected_parameters = key_parameters(ckks_entry);
+    for (const auto* group : {"task_input_param", "task_output_param"}) {
+        for (const auto& [name, param] : task_config_.at(group).items()) {
+            if (!param.contains("ckks_parameter_id")) continue;
+            const auto id = param.at("ckks_parameter_id").get<std::string>();
+            if (key_parameters(ckks_config.at(id)) != expected_parameters) {
+                throw std::runtime_error("[Client] Incompatible CKKS parameters for " + std::string(group) + ": " + name);
+            }
+        }
+    }
     poly_modulus_degree_ = ckks_entry["poly_modulus_degree"].get<int>();
     const int ring_type = ckks_entry.value("ring_type", 1);
     const int log_n = static_cast<int>(std::log2(poly_modulus_degree_));
@@ -182,8 +200,7 @@ void InferenceClient::create_crypto_context() {
     ckks_param_ = std::make_unique<CkksParameter>(
         CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_, ring_type));
     ckks_context_ = std::make_unique<CkksContext>(
-        CkksContext::create_random_context(*ckks_param_, EncryptorType::PUBLIC_KEY, needs_btp_));
-    ckks_context_->gen_rotation_keys();
+        CkksContext::create_client_context(*ckks_param_, needs_btp_));
     context_ptr_ = ckks_context_.get();
 
     std::cout << "[Client] Done." << std::endl;
@@ -194,7 +211,109 @@ double InferenceClient::get_default_scale() const {
 }
 
 void InferenceClient::setup() {
-    create_crypto_context();
+    namespace fs = std::filesystem;
+    const auto lock_path = client_dir_ / ".key-setup.lock";
+    if (!fs::create_directory(lock_path)) {
+        throw std::runtime_error("[Client] Key setup is locked: " + lock_path.string());
+    }
+    struct Lock {
+        fs::path path;
+        ~Lock() { std::error_code ec; fs::remove(path, ec); }
+    } lock{lock_path};
+    const auto eval_path = client_dir_ / "eval_context.bin";
+    const auto full_path = client_dir_ / "full_context.bin";
+    const auto manifest_path = client_dir_ / "key_manifest.json";
+    const auto ckks_config = read_json((client_dir_ / "ckks_parameter.json").string());
+    const auto& first = task_config_["task_input_param"].begin().value();
+    const auto& parameter = ckks_config.at(first.at("ckks_parameter_id").get<std::string>());
+    const json plan = {{"parameter", parameter}, {"bootstrapping", needs_btp_},
+                       {"default_rotations", true}};
+    if (fs::exists(manifest_path)) {
+        const auto manifest = read_json(manifest_path.string());
+        if (manifest.at("plan") != plan || !fs::exists(eval_path) || !fs::exists(full_path) ||
+            fs::file_size(eval_path) != manifest.at("eval_bytes").get<uint64_t>() ||
+            fs::file_size(full_path) != manifest.at("full_bytes").get<uint64_t>()) {
+            throw std::runtime_error("[Client] Existing key manifest does not match task or files");
+        }
+        const auto size = fs::file_size(full_path);
+        if (size == 0 || size > Bytes{}.max_size() ||
+            size > static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max())) {
+            throw std::runtime_error("[Client] Invalid full context size");
+        }
+        std::ifstream file(full_path, std::ios::binary);
+        Bytes full(static_cast<size_t>(size));
+        if (!file.read(reinterpret_cast<char*>(full.data()), static_cast<std::streamsize>(size))) {
+            throw std::runtime_error("[Client] Cannot read full context");
+        }
+        load_full_context(full);
+        return;
+    }
+    if (fs::exists(eval_path) || fs::exists(full_path)) {
+        throw std::runtime_error("[Client] Uncommitted key files exist; inspect them before retrying");
+    }
+    std::random_device random;
+    fs::path temporary;
+    for (int i = 0; i < 16; ++i) {
+        temporary = client_dir_ / (".key-setup-" + std::to_string(random()) + "-" + std::to_string(random()));
+        if (fs::create_directory(temporary)) break;
+        temporary.clear();
+    }
+    if (temporary.empty()) throw std::runtime_error("[Client] Cannot create key workspace");
+    const auto eval_part = temporary / "eval";
+    const auto full_part = temporary / "full";
+    const auto manifest_part = temporary / "manifest";
+    bool eval_published = false, full_published = false, committed = false;
+    try {
+        fs::permissions(temporary, fs::perms::owner_all, fs::perm_options::replace);
+        create_crypto_context();
+        ckks_context_->export_eval_context_to_file(eval_part.string());
+        ckks_context_->export_full_context_to_file(full_part.string());
+        const json manifest = {{"plan", plan}, {"eval_bytes", fs::file_size(eval_part)},
+                               {"full_bytes", fs::file_size(full_part)},
+                               {"eval_role", "public-eval"}, {"full_role", "private-full"}};
+        std::ofstream output(manifest_part, std::ios::binary);
+        output << manifest.dump(2) << '\n';
+        output.close();
+        if (!output) throw std::runtime_error("[Client] Cannot write key manifest");
+        fs::create_hard_link(eval_part, eval_path);
+        eval_published = true;
+        fs::create_hard_link(full_part, full_path);
+        full_published = true;
+        fs::create_hard_link(manifest_part, manifest_path);
+        committed = true;
+    } catch (...) {
+        std::string cleanup_errors;
+        auto remove_published = [&](const fs::path& path, const fs::path& part, bool published) {
+            if (!published) return;
+            std::error_code ec;
+            const bool owned = fs::equivalent(path, part, ec);
+            if (ec || !owned) {
+                cleanup_errors += " " + path.string() + ": " + (ec ? ec.message() : "ownership changed");
+                return;
+            }
+            fs::remove(path, ec);
+            if (ec) cleanup_errors += " " + path.string() + ": " + ec.message();
+        };
+        remove_published(eval_path, eval_part, eval_published);
+        remove_published(full_path, full_part, full_published);
+        if (cleanup_errors.empty()) {
+            std::error_code ec;
+            fs::remove_all(temporary, ec);
+            if (ec) cleanup_errors += " " + temporary.string() + ": " + ec.message();
+        } else {
+            cleanup_errors += " workspace retained: " + temporary.string();
+        }
+        release();
+        if (!cleanup_errors.empty()) {
+            std::throw_with_nested(std::runtime_error("[Client] Key setup cleanup failed:" + cleanup_errors));
+        }
+        throw;
+    }
+    if (committed) {
+        std::error_code cleanup_error;
+        fs::remove_all(temporary, cleanup_error);
+        if (cleanup_error) throw std::runtime_error("[Client] Committed key workspace cleanup failed: " + cleanup_error.message());
+    }
 }
 
 void InferenceClient::release() {
@@ -212,18 +331,21 @@ void InferenceClient::load_context(const Bytes& context_bytes, const Bytes& secr
 }
 
 void InferenceClient::load_full_context(const Bytes& full_bytes) {
-    std::stringstream ss;
-    bytes_to_ss(full_bytes, ss);
-    Bytes context_bytes, secret_key_bytes;
-    ss_read_vector(ss, &context_bytes);
-    ss_read_vector(ss, &secret_key_bytes);
-    if (!ss || ss.peek() != std::char_traits<char>::eof()) {
-        throw std::runtime_error("[Client] Invalid persisted v6 client state");
-    }
-    load_context(context_bytes, secret_key_bytes);
+    const auto config = read_json((client_dir_ / "ckks_parameter.json").string());
+    const auto& first = task_config_.at("task_input_param").begin().value();
+    const auto& entry = config.at(first.at("ckks_parameter_id").get<std::string>());
+    auto param = CkksParameter::create_custom_parameter(static_cast<int>(std::log2(poly_modulus_degree_)),
+        entry.at("log_default_scale").get<int>(), q_, p_, static_cast<RingType>(entry.value("ring_type", 1)));
+    auto restored = CkksContext::restore_client_context(param, full_bytes, needs_btp_);
+    ckks_param_ = std::make_unique<CkksParameter>(std::move(param));
+    ckks_context_ = std::make_unique<CkksContext>(std::move(restored));
+    context_ptr_ = ckks_context_.get();
 }
 
 Bytes InferenceClient::export_eval_context() const {
+    if (!ckks_context_ || ckks_context_->evaluation_key_set().relin_key().is_empty()) {
+        throw std::runtime_error("[Client] Evaluation keys are not resident; use export_eval_context_to_file");
+    }
     std::cout << "[Client] Exporting evaluation context..." << std::endl;
     // v6 serialization includes the evaluation keys and, when enabled, the
     // bootstrapping keys. The secret key is never serialized.
@@ -232,11 +354,18 @@ Bytes InferenceClient::export_eval_context() const {
     return result;
 }
 
+void InferenceClient::export_eval_context_to_file(const std::string& path) const {
+    if (!ckks_context_) {
+        throw std::runtime_error("[Client] Context is not initialized");
+    }
+    ckks_context_->export_eval_context_to_file(path);
+}
+
 Bytes InferenceClient::export_full_context() const {
     // Application persistence contains two independent v6 serializations.
     // CkksContext::serialize() itself never includes the secret key.
     std::stringstream ss;
-    ss_write_vector(ss, ckks_context_->serialize());
+    ss_write_vector(ss, ckks_context_->serialize(false));
     ss_write_vector(ss, ckks_context_->secret_key().serialize());
     return ss_to_bytes(ss);
 }

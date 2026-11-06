@@ -102,8 +102,11 @@ public:
     /// The server uses this to perform encrypted computation without the secret key.
     Bytes export_eval_context() const;
 
+    /// Generate evaluation keys one at a time into a new file.
+    void export_eval_context_to_file(const std::string& path) const;
+
     /// Export the full client state including the secret key.
-    /// Contents: separate v6 evaluation-context and secret-key serializations.
+    /// Contents: separate client-only v6 context and secret-key serializations.
     /// Pair with load_full_context() to restore a client that can both encrypt and decrypt.
     Bytes export_full_context() const;
 

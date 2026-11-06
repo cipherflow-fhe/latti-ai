@@ -68,6 +68,8 @@ PYBIND11_MODULE(latti_client, m) {
              py::arg("client_dir"))
         .def("setup", &InferenceClient::setup, py::call_guard<py::gil_scoped_release>())
         .def("release", &InferenceClient::release, py::call_guard<py::gil_scoped_release>())
+        .def("export_eval_context_to_file", &InferenceClient::export_eval_context_to_file,
+             py::arg("path"), py::call_guard<py::gil_scoped_release>())
         .def(
             "load_full_context",
             [](InferenceClient& self, const py::bytes& full_bytes) {

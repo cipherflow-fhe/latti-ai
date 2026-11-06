@@ -12,6 +12,14 @@ add_executable(test_encrypted_parameter_store test_encrypted_parameter_store.cpp
 target_link_libraries(test_encrypted_parameter_store inference_interface)
 add_test(NAME test_encrypted_parameter_store COMMAND test_encrypted_parameter_store)
 
+add_executable(test_streaming_context test_streaming_context.cpp)
+target_link_libraries(test_streaming_context inference_interface)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_libraries(test_streaming_context ${CMAKE_DL_LIBS})
+  target_link_options(test_streaming_context PRIVATE -Wl,--export-dynamic)
+endif()
+add_test(NAME test_streaming_context COMMAND test_streaming_context)
+
 # Copy test_gen_layers.py to build directory
 configure_file(
     ${CMAKE_CURRENT_SOURCE_DIR}/test_gen_layers.py
@@ -77,3 +85,7 @@ if(INFERENCE_SDK_ENABLE_GPU)
     target_compile_definitions(test_pcm_bert_layers PRIVATE INFERENCE_SDK_ENABLE_GPU)
 endif()
 add_test(NAME test_pcm_bert_layers COMMAND test_pcm_bert_layers)
+
+# Invoked by the WASM Go wire acceptance suite, with isolated temporary fixtures.
+add_executable(wasm_wire_fixture wasm_wire_fixture.cpp)
+target_link_libraries(wasm_wire_fixture inference_interface)
