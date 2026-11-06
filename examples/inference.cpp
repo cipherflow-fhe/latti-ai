@@ -37,7 +37,7 @@
 
 using namespace std;
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* argv[]) try {
     string task_dir;
     vector<string> input_args;
     bool use_gpu = false;
@@ -282,4 +282,10 @@ int main(int argc, char* argv[]) {
     }
 
     return 0;
+} catch (const std::exception& error) {
+    std::cerr << "Inference failed: " << error.what() << std::endl;
+    return 1;
+} catch (...) {
+    std::cerr << "Inference failed: unknown exception" << std::endl;
+    return 1;
 }

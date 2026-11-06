@@ -1,6 +1,6 @@
 # TAA v6 运行时 GPU 资源与 CPU/GPU 故障传播设计
 
-日期：2026-11-06。状态：待实现。遵循[总则](taa_v6_adaptation_design.md)，以其中锁定的 v6 源码为准。修改当前 `lattisense-gpu-core`、compound/ops runner 与统一 v6 context，不恢复旧 HEonGPU submodule 或旧单输出 executor。
+日期：2026-11-06。状态：已实现，资源释放与故障传播专项验收通过；六任务完整回归仍按[验收记录第 5–7 节](../research/taa_v6_acceptance_report.md)执行。遵循[总则](taa_v6_adaptation_design.md)，以其中锁定的 v6 源码为准。修改当前 `lattisense-gpu-core`、compound/ops runner 与统一 v6 context，不恢复旧 HEonGPU submodule 或旧单输出 executor。
 
 ## 1. 三个独立目标
 
