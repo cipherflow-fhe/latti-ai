@@ -1,0 +1,11 @@
+import {checkedZipName,crc32Update,openZip} from '../src/zip.js';
+const u16=n=>{const b=new Uint8Array(2);new DataView(b.buffer).setUint16(0,n,true);return b;};
+const u32=n=>{const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,Number(n),true);return b;};
+const join=parts=>{const out=new Uint8Array(parts.reduce((n,p)=>n+p.length,0));let at=0;for(const p of parts){out.set(p,at);at+=p.length;}return out;};
+const r16=(b,at)=>new DataView(b.buffer,b.byteOffset,b.byteLength).getUint16(at,true);
+const checkedRange=(o,n)=>[Number(o),Number(n)];
+const localHeader=(name,zip64,size,crc)=>join([u32(0x04034b50),u16(20),u16(0x800),u16(0),u16(0),u16(0),u32(crc),u32(size),u32(size),u16(name.length),u16(0),name]);
+const centralHeader=(name,zip64,size,crc,offset)=>join([u32(0x02014b50),u16(20),u16(20),u16(0x800),u16(0),u16(0),u16(0),u32(crc),u32(size),u32(size),u16(name.length),u16(0),u16(0),u16(0),u16(0),u32(0),u32(offset),name]);
+// Bounded in-memory ZIP32 fixtures; never imported by the runtime.
+export function makeZip(entries) { const parts = entries.map(e => { const {bytes: n} = checkedZipName(e.name), data = e.data instanceof Uint8Array ? e.data : new Uint8Array(e.data); return {name: e.name, n, data}; }); if (parts.reduce((n, e) => n + e.data.byteLength, 0) > 64 * 1024 * 1024) throw new Error('ZIP_TEST_FIXTURE_TOO_LARGE'); let off = 0, l = [], c = []; for (const e of parts) { const h = localHeader(e.n, false, BigInt(e.data.byteLength), crc32Update(0, e.data)); l.push(h, e.data); c.push(centralHeader(e.n, false, BigInt(e.data.byteLength), crc32Update(0, e.data), BigInt(off))); off += h.byteLength + e.data.byteLength; } const lb = join(l), cb = join(c); return join([lb, cb, u32(0x06054b50), u16(0), u16(0), u16(parts.length), u16(parts.length), u32(cb.byteLength), u32(lb.byteLength), u16(0)]); }
+export async function readZip(raw) { const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw), source = {size: BigInt(bytes.byteLength), async readAt(o, n) { const [x, y] = checkedRange(o, n); return bytes.slice(x, x + y); }}, zip = await openZip(source), out = new Map(); for await (const e of zip.entries()) { const h = await source.readAt(e.offset, 30n), start = e.offset + 30n + BigInt(r16(h, 26) + r16(h, 28)); out.set(e.name, await source.readAt(start, e.compressedSize)); } return out; }

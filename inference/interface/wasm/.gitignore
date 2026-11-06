@@ -1,0 +1,13 @@
+/dist/
+/node_modules/
+/SHA256SUMS
+/*.tgz
+/*.zip
+/src/build-info.js
+
+src/default-profile.json
+__pycache__/
+
+# The repository-wide dataset rule also matches this task module directory.
+!src/tasks/cifar10/
+!src/tasks/cifar10/*.js

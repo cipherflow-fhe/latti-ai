@@ -1,6 +1,6 @@
 # TAA WASM 0.2.0 OPFS 流式 ZIP32/ZIP64 设计
 
-日期：2026-11-06。状态：待实现。上位契约见[浏览器协议规范](taa_v6_browser_client_design.md)。格式依据 [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.3.9、4.3.14–4.3.16、4.4.1、4.5.3；来源 `src/zip.js` 为仓库自写代码，本次升级该模块，不假定使用同名第三方库即可完成。
+日期：2026-11-06。状态：已实现，ZIP64 专项与两任务真实服务互操作验收通过，证据见[验收记录第 3、4 节](../research/taa_v6_acceptance_report.md)。上位契约见[浏览器协议规范](taa_v6_browser_client_design.md)。格式依据 [PKWARE APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) 4.3.9、4.3.14–4.3.16、4.4.1、4.5.3；来源 `src/zip.js` 为仓库自写代码，本次升级该模块，不假定使用同名第三方库即可完成。
 
 ## 1. 必做范围与内存边界
 
