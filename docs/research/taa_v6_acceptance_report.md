@@ -1,6 +1,6 @@
 # TAA v6 实现验收记录
 
-日期：2026-11-06。状态：验收进行中，六任务回归与最终 clean revision 发布包尚未完成；Retina 完整流程和阶段补测已通过。本记录不代表六份规范全部通过。
+日期：2026-11-06。状态：六份规范的功能验收完成，六任务 14 配置全部通过；最终 clean revision 发布包及两任务客户端复测完成。Lattigo 全测试仍有已复现的基线 hash 断言失败，详见第 7 节。
 
 实施要求见 [设计总则](../spec/taa_v6_adaptation_design.md)。当前测试均在 `feat/taa-adapt` 执行，任务生成、密钥、推理与浏览器产物写入临时目录，没有覆盖 `runs/`。工作区原有的 `docs/research/taa_wasm_pn15_memory_probe.md` 和根目录 profiling CSV 保留原状，不纳入本次实现提交。
 
@@ -8,9 +8,15 @@
 
 本轮使用 Go 1.27.3、Node v24.16.0、Python 3.10.14、CMake 3.31.10，GPU 为两张 NVIDIA RTX 5880 Ada（各 49,140 MiB）。WASM 跟随锁定 Lattigo 的 Go module，附带实际 Go toolchain 的 `wasm_exec.js`。测试用 Chromium 来自 `/tmp/taa-chromium/chrome-linux/chrome`。
 
-当前解压包位于 `/tmp/taa-final-package-extracted/latti-client-wasm-0.2.0`，runtime 版本 `0.2.0`、Worker 协议 `2`、资源集 build ID 为 `6fa1bf4640914f05d17bf83b2403429ab5ed65d99c1e472eca835a6030a5ebec`。交付包 `/tmp/taa-final-delivery/latti-delivery-0.2.0.zip` 已逐项核对文件哈希并解压测试。当前 manifest 明确记录 dirty 源码；最终提交后仍需重建归档，记录提交 SHA 并完成发布包 smoke，不能把此工作包描述为 clean revision 发布。
+长期测量与最初两任务端到端使用 `/tmp/taa-final-package-extracted/latti-client-wasm-0.2.0`，runtime 版本 `0.2.0`、Worker 协议 `2`、资源集 build ID 为 `6fa1bf4640914f05d17bf83b2403429ab5ed65d99c1e472eca835a6030a5ebec`。对应工作交付包 `/tmp/taa-final-delivery/latti-delivery-0.2.0.zip` 已逐项核对文件哈希并解压测试，其 manifest 如实记录当时的 dirty 源码。
 
-当前 HEAD：latti-ai `9b01028999f809f03609abbf43740fc1143eea18`，LattiSense `7638337bd706b1cfc548f421398c201d7163088d`，Lattigo `22bff324e146968c186106524c06cea607462b05`，GPU core `306f89fc7d453dba7195522fa9efdbee19ce3492`。前三个仓库仍有本轮实现待提交。
+最终包从独立 `/tmp/taa-release-source` checkout 构建，runtime、两任务和数据包位于 `/tmp/taa-release-0.2.0`，解压目录为 `/tmp/taa-release-0.2.0-extracted`。四仓库 manifest 的 `dirty` 均为 false：latti-ai `fc87f9afbf86327d803ea38b5b9cc1aacef845da`、LattiSense `77ab72657f6f282ee30987cfcf1b62105262f2d4`、Lattigo `11cd8312f91fb345040d8c5d5e911e6e88afe4f6`、GPU core `306f89fc7d453dba7195522fa9efdbee19ce3492`。子模块按 gitlink detached checkout；开发工作区仍在 `feat/taa-adapt`。后续验收文档提交不改变此发布源码版本。
+
+最终 build ID 为 `81cffcdbdbf28bfa23aa198382d97c230899b84251bf80c6da26b6829a689418`。提交 LattiSense 后，默认 profile 的来源 revision 更新，因此 build ID 和嵌入它的 WASM 字节相应变化。构建检查逐项比较 profile 的参数/键能力与来源参数表哈希，并以旧 profile 字节重算全部运行时代码哈希，精确得到原 build ID；除来源信息及派生 build ID 外，密码学和客户端源代码与已测工作包一致。
+
+两层 `SHA256SUMS`、runtime manifest 与独立 task/data content-manifest 全部校验通过。干净解压包的真实 Worker/OPFS 故障套件、四任务模块加载、9,216 个 CIFAR 预处理值及示例页面启动/关闭已通过；两任务完整客户端复测另行记录，复用本轮原生输出时明确标明，不计为新一轮 GPU 推理。构建/检查日志为 `/tmp/taa-clean-release-build.log`、`/tmp/taa-clean-delivery-build.log`、`/tmp/taa-clean-release-browser.log`、`/tmp/taa-clean-release-delivery-browser.log`。
+
+最终 `WASM-0.2.0.zip` SHA256 为 `0fa1a800007cb226bbec4ba9be13e5f20a9f1980c6e1985dbee1c10e0d8919fe`；`latti-delivery-0.2.0.zip` SHA256 为 `0ecfc4b7b8c6f342d4bee5615c23713e486859e1e73dd4a1760f9fbe873e4a9b`。
 
 ## 2. 流式密钥与原生发布
 
@@ -38,6 +44,8 @@ RSS 是阶段内绝对占用，包含 Go 保留的前序堆空间；尤其 bulk 
 当前 `clientcontext`、无 cgo 的 WASM core、Go SDK、buffer 与流式 BTP 专项通过。BTP 覆盖 standard 同 N/跨 N、CI ring-swap、encapsulation 0/8。生产 eval 独立顺序解码了 53 把 bootstrapping 密钥，逐把核对 capability 的 level、degree、decomposition；最大单把序列化密钥为 207,621,536 字节。profile ID 绑定展开后的 residual/boot 键描述，Q/P 与全部 64 位字段按实际值匹配；CIFAR 和 Retina 当前生成器输出的绑定测试通过。
 
 `test_streaming_context` 通过 106 项断言，覆盖文件默认 setup、原 v6 reader、恢复、发布第二文件/manifest 的链接失败和 `RLIMIT_FSIZE` 实际写入失败。相关三个 CTest 全部通过。Node addon 与 Python client 重新构建后，文件 eval、full、encrypt/decrypt、restore/release 测试通过；测试输入复制到自有临时目录。
+
+提交前最终原生目标构建成功，日志为 `/tmp/taa-native-final-build.log`。正式 `build/examples/inference` 补跑 CIFAR 并比较全部 10 个输出通过，最大绝对误差 `4.171234974847948e-5`，证据为 `/tmp/taa-final-cli-smoke/{inference.log,comparison.json}`；这次生成的 profiling CSV 归入同一临时目录。
 
 复现入口：Lattigo `clientcontext/{context_test,restore_stream_test,capabilities_acceptance_test,memory_acceptance_test}.go`、`circuits/ckks/bootstrapping/keys_stream_test.go`；native `inference/unittests/test_streaming_context.cpp`。生产 capability 测试需显式设置 `TAA_GENERATED_EVAL`；内存比较需 `TAA_MEMORY_MODE=bulk|stream` 和 `TAA_PARAMETER_JSON`。
 
@@ -107,6 +115,8 @@ Retina 客户端补测通过，明确复用 `/tmp/taa-final-retina-workflow` 的
 
 独立任务包的四个 ES Module 实际加载成功；CIFAR 3 张图的 9,216 个预处理值与交付的 Python 参考 CSV 完全一致。发布的 `example.html` 使用实际 Worker 完成初始化和关闭。构建器对 runtime/task/data 独立版本、哈希、私钥排除和 Retina 离线参考 provenance 做检查。
 
+最终 clean revision 解压包的两任务客户端复测均通过，包含目录加密、ZIP64 加密、原生结果 ZIP 解密与独立标签统计。CIFAR 3/3、Retina 5/10，与本轮原生结果一致。该复测分别明确引用 `/tmp/taa-final-cifar-workflow`、`/tmp/taa-final-retina-workflow` 的原生输出，不计新 GPU 推理。CIFAR/Retina 的 JS heap 观测最大分别为 6,618,936 / 37,282,708 字节，renderer RSS 为 631,304 / 880,052 KiB；每次各有一次 heap sample 失败，不能称为连续无缺口采样。结果为 `/tmp/taa-clean-release-{cifar10,retina}/workflow.json`，日志为对应 `/tmp/taa-clean-release-{cifar10,retina}.log`。
+
 证据：`/tmp/taa-final-cifar-workflow/workflow.json`、`/tmp/taa-final-retina-workflow/{workflow,native,reload,checked}.json`、`/tmp/taa-cifar-client-phases/workflow.json`、`/tmp/taa-delivery-browser.log`、`/tmp/taa-final-delivery.log`；测试入口 `tests/workflow.mjs`、`tests/delivery-browser.mjs` 与 `package_delivery.py`。
 
 ## 5. GPU 资源与故障传播
@@ -138,7 +148,7 @@ CIFAR 两配置已在重建目录重新生成并完成全部输出比较。BERT 
 | imagenet | input / pcm | 1000 | 0.000555142847 | 46.940 | 通过 |
 | imagenet | parameter / pcm | 1000 | 0.00069846033 | 96.935 | 通过 |
 | retina | input / pcm | 2 | 4.93858263e-06 | 305.899 | 通过 |
-| retina | parameter / pcm | — | — | — | 待完成 |
+| retina | parameter / pcm | 2 | 5.46774734e-05 | 1209.140 | 通过 |
 | ViT | input / pcm | 1970 | 0.0286334878 | 143.161 | 通过 |
 | ViT | parameter / pcm | 1970 | 0.0402123692 | 294.728 | 通过 |
 | ViT | input / pdm | 1970 | 0.000562338823 | 102.626 | 通过 |
@@ -148,10 +158,20 @@ CIFAR 两配置已在重建目录重新生成并完成全部输出比较。BERT 
 每配置的命令、退出状态、当前比较结果和内存采样位于 `/tmp/taa-v6-final-regression/<task>/task_<mode>_encrypted/`，BERT/ViT 再加 `pcm/` 或 `pdm/`。汇总为同目录 `acceptance-summary.json`。CIFAR 使用重建后的正常目录；`*-interrupted` 与 BERT PDM 的 `*.overlap-failed` 均保留为失败诊断，不计通过。
 <!-- regression-results:end -->
 
-## 7. 未完成门槛与已知基线失败
+## 7. 验收结论与已知基线失败
 
-- 六任务 14 配置完整回归仍在 `/tmp/taa-v6-final-regression` 执行：输入加密 GPU lazy、参数加密 GPU runtime_lazy，以及 BERT/ViT PDM；使用本次重新编译/生成的任务和全部输出比较。尚不能用 CIFAR/Retina 代替它。
-- 补齐最终提交 SHA 与 clean revision 发布包 smoke。
-- Lattigo 全测试的 `TestRLWEConstSerialization` hash 断言在原始 `22bff324e146968c186106524c06cea607462b05` 独立 checkout 同样失败（expected `1MTZP69Y…`、actual `U+E7O5Qb…`）。保留 `/tmp/taa-lattigo-baseline-serialization.log`，没有修改预期 hash 来隐藏基线失败；本次相关专项通过不等于完整套件全部通过。
+六任务 14 配置均通过。最后完成的 Retina 参数加密重新生成图、参数包并执行真实 GPU 推理，全部 2 个输出最大绝对误差 `5.4677473379394215e-5`，FHE 时间 1209.14 秒；没有用其他 Retina 流程替代。clean revision 发布包、SHA、解压校验、真实浏览器故障套件及两任务客户端复测均完成，来源与证据见第 1、4 节。
 
-上述未完成项解决前，不把六份设计规范统一标记为已验收，不提交完成声明。
+Lattigo 全测试的 `TestRLWEConstSerialization` hash 断言在原始 `22bff324e146968c186106524c06cea607462b05` 独立 checkout 同样失败（expected `1MTZP69Y…`、actual `U+E7O5Qb…`）。保留 `/tmp/taa-lattigo-baseline-serialization.log`，没有修改预期 hash 来隐藏基线失败；本次功能验收通过不等于完整套件全部通过。
+
+## 8. 专题实现提交
+
+| 规范 | latti-ai 实现提交 | 子模块实现提交 |
+| --- | --- | --- |
+| 流式密钥与持久化 | `29413d1` | Lattigo `11cd8312`、LattiSense `fe4bf9d` |
+| OPFS ZIP64 | `25475d7` | — |
+| 浏览器客户端与 Worker | `3ba94e1` | 共用流式密钥提交 |
+| 浏览器任务与交付 | `b87e55a` | — |
+| 运行时资源与故障传播 | `9b01028`、`fc87f9a` | GPU core `306f89f`、LattiSense `7638337`、`77ab726` |
+
+设计总则的整体验收以本记录与规范状态的后续文档提交固化；发布源码仍为第 1 节列出的精确四仓库 SHA。
