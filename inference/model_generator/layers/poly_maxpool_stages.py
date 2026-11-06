@@ -127,6 +127,63 @@ def bind_maxpool_stage_plaintexts(stage, plan, channels, slots, level, running_m
     raise ValueError(f'Unknown MaxPool stage: {stage}')
 
 
+MAXPOOL_STAGE_OPERATIONS = {
+    'normalize_taps': ('tap_extract', 'mask_multiply', 'tap_repack'),
+    'repack': ('select_mask', 'channel_rotate', 'channel_accumulate'),
+    'restore': ('restore_scale',),
+}
+
+
+def call_maxpool_normalize_taps(nodes, plan, channels, plaintexts):
+    """Run the explicit tap extraction/normalization operation."""
+    return flatten_maxpool_state(call_interleaved_normalized_maxpool_taps(
+        nodes, plaintexts['tap_specs'], plaintexts['masks'], channels,
+    ), channels)
+
+
+def call_maxpool_compare_round(nodes, plan, stage, channels, plaintexts):
+    """Run one explicit compare-round operation.
+
+    The polynomial sign chain and carry merge are deliberately delegated to
+    the primitive reduction helpers; this function is the compiler/runtime
+    boundary corresponding to one visible MaxPool graph node.
+    """
+    split = parse_maxpool_split_stage(stage)
+    if split:
+        return _call_split_round(nodes, plan, split, plaintexts, channels)
+    index = int(stage[len('reduce_round_'):]) - 1
+    return call_maxpool_round_stage(nodes, plan, index, plaintexts, channels)
+
+
+def call_maxpool_repack(nodes, plan, channels, slots, plaintexts):
+    shape = plan['output_shape']
+    plane = math.prod(shape)
+    if plane <= 0 or slots % plane or len(nodes) != channels:
+        raise ValueError('Invalid dense MaxPool output packing')
+    if len(plaintexts['select']) != channels:
+        raise ValueError('Missing MaxPool channel selection masks')
+    per_ct = slots // plane
+    result = []
+    for first in range(0, channels, per_ct):
+        value = None
+        for channel in range(first, min(first + per_ct, channels)):
+            branch = rescale(mult(nodes[channel], plaintexts['select'][channel]))
+            shift = -(channel - first) * plane
+            if shift:
+                branch = rotate_cols(branch, [shift])[0]
+            value = branch if value is None else add(value, branch)
+        result.append(value)
+    return result
+
+
+def call_maxpool_restore(nodes, plan, channels, slots, plaintexts):
+    plane = math.prod(plan['output_shape'])
+    expected = math.ceil(channels / (slots // plane))
+    if len(nodes) != expected or len(plaintexts['restore']) != expected:
+        raise ValueError('Incorrect MaxPool restore ciphertext count')
+    return [rescale(mult(ct, pt)) for ct, pt in zip(nodes, plaintexts['restore'])]
+
+
 def call_maxpool_stage(stage, nodes, plan, channels, slots, plaintexts):
     """Execute one stage using caller-bound plaintext nodes.
 
@@ -143,40 +200,20 @@ def call_maxpool_stage(stage, nodes, plan, channels, slots, plaintexts):
     if plane <= 0 or slots < plane or slots % plane:
         raise ValueError('Invalid MaxPool output plane or slot capacity')
     if stage == 'normalize_taps':
-        result = flatten_maxpool_state(call_interleaved_normalized_maxpool_taps(
-            nodes, plaintexts['tap_specs'], plaintexts['masks'], channels,
-        ), channels)
+        result = call_maxpool_normalize_taps(nodes, plan, channels, plaintexts)
         cost = 1
     elif stage.startswith('reduce_round_'):
-        split = parse_maxpool_split_stage(stage)
-        if split:
-            result = _call_split_round(nodes, plan, split, plaintexts, channels)
-        else:
-            index = int(stage[len('reduce_round_'):]) - 1
-            result = call_maxpool_round_stage(nodes, plan, index, plaintexts, channels)
+        result = call_maxpool_compare_round(nodes, plan, stage, channels, plaintexts)
         cost = plaintexts.get('level_cost', 7)
     elif stage == 'repack':
         if plane <= 0 or slots % plane or len(nodes) != channels:
             raise ValueError('Invalid dense MaxPool output packing')
         if len(plaintexts['select']) != channels:
             raise ValueError('Missing MaxPool channel selection masks')
-        per_ct = slots // plane
-        result = []
-        for first in range(0, channels, per_ct):
-            value = None
-            for channel in range(first, min(first + per_ct, channels)):
-                branch = rescale(mult(nodes[channel], plaintexts['select'][channel]))
-                shift = -(channel - first) * plane
-                if shift:
-                    branch = rotate_cols(branch, [shift])[0]
-                value = branch if value is None else add(value, branch)
-            result.append(value)
+        result = call_maxpool_repack(nodes, plan, channels, slots, plaintexts)
         cost = 1
     elif stage == 'restore':
-        expected = math.ceil(channels / (slots // plane))
-        if len(nodes) != expected or len(plaintexts['restore']) != expected:
-            raise ValueError('Incorrect MaxPool restore ciphertext count')
-        result = [rescale(mult(ct, pt)) for ct, pt in zip(nodes, plaintexts['restore'])]
+        result = call_maxpool_restore(nodes, plan, channels, slots, plaintexts)
         cost = 1
     else:
         raise ValueError(f'Unknown MaxPool stage: {stage}')

@@ -1217,6 +1217,7 @@ class LayerAbstractGraph:
                         layers[layer_id]['running_max'] = float(running_max)
                 elif layer_type.startswith('maxpool2d_'):
                     layers[layer_id]['maxpool_stage'] = getattr(layer, 'maxpool_stage', layer_type[len('maxpool2d_'):])
+                    layers[layer_id]['maxpool_operations'] = list(getattr(layer, 'maxpool_operations', []))
                     layers[layer_id]['level_cost'] = int(getattr(layer, 'level_cost', 0))
                     layers[layer_id]['maxpool_output_shape'] = list(layer.maxpool_output_shape)
                     running_max = getattr(layer, 'running_max', None)

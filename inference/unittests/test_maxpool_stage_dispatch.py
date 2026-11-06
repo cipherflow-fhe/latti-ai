@@ -10,6 +10,37 @@ from training.model_compiler.maxpool_plan import build_maxpool_plan
 
 
 class StageDispatchTest(unittest.TestCase):
+    def test_stage_dispatch_is_composed_of_explicit_operations(self):
+        plan = build_maxpool_plan(
+            {'kernel_shape': [3, 3], 'stride': [2, 2], 'padding': [1, 1]}, [8, 8])
+        calls = []
+        class Node:
+            def __init__(self, level):
+                self.metadata = type('Metadata', (), {'level': level})()
+        node = Node(2)
+        output = Node(1)
+        with patch.object(stages, 'call_maxpool_normalize_taps',
+                          lambda *args: calls.append('tap') or [output]), \
+             patch.object(stages, 'call_maxpool_compare_round',
+                          lambda *args: calls.append('compare') or [output]), \
+             patch.object(stages, 'call_maxpool_repack',
+                          lambda *args: calls.append('repack') or [output]), \
+             patch.object(stages, 'call_maxpool_restore',
+                          lambda *args: calls.append('restore') or [output]):
+            stages.call_maxpool_stage('normalize_taps', [node], plan, 1, 64,
+                                      {'tap_specs': [], 'masks': []})
+            stages.call_maxpool_stage('repack', [node], plan, 1, 64,
+                                      {'select': [object()]})
+            stages.call_maxpool_stage('restore', [node], plan, 1, 64,
+                                      {'restore': [object()]})
+        self.assertEqual(calls, ['tap', 'repack', 'restore'])
+
+    def test_operation_sequence_is_serializable(self):
+        self.assertEqual(stages.MAXPOOL_STAGE_OPERATIONS['normalize_taps'],
+                         ('tap_extract', 'mask_multiply', 'tap_repack'))
+        self.assertIn('sign_polynomial',
+                      ('pair_sum', 'difference', 'sign_polynomial', 'sign_multiply', 'carry_merge'))
+
     def test_parameter_manifest_matches_polynomial_scales(self):
         import json
         from types import SimpleNamespace

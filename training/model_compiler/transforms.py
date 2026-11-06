@@ -944,6 +944,16 @@ def expand_maxpool_for_btp(graph: LayerAbstractGraph):
             node.stride = list(pool.stride)
             node.padding = list(pool.padding)
             node.maxpool_stage = stage['name']
+            # Keep the primitive execution plan on the graph node.  The
+            # compiler can therefore schedule MaxPool in the same way as the
+            # expanded GELU/Softmax nodes instead of treating it as a fused
+            # opaque layer.
+            node.maxpool_operations = {
+                'normalize_taps': ['tap_extract', 'mask_multiply', 'tap_repack'],
+                'repack': ['select_mask', 'channel_rotate', 'channel_accumulate'],
+                'restore': ['restore_scale'],
+            }.get(stage['name'], ['pair_sum', 'difference', 'sign_polynomial',
+                                   'sign_multiply', 'carry_merge'])
             node.maxpool_plan = plan
             node.maxpool_output_shape = list(plan['output_shape'])
             node.is_adaptive_avgpool = False
