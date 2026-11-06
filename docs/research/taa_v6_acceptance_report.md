@@ -2,7 +2,14 @@
 
 日期：2026-11-06。状态：六份规范的功能验收完成，六任务 14 配置全部通过；最终 clean revision 发布包及两任务客户端复测完成。Lattigo 全测试仍有已复现的基线 hash 断言失败，详见第 7 节。
 
-实施要求见 [设计总则](../spec/taa_v6_adaptation_design.md)。当前测试均在 `feat/taa-adapt` 执行，任务生成、密钥、推理与浏览器产物写入临时目录，没有覆盖 `runs/`。工作区原有的 `docs/research/taa_wasm_pn15_memory_probe.md` 和根目录 profiling CSV 保留原状，不纳入本次实现提交。
+实施要求见 [设计总则](../spec/taa_v6_adaptation_design.md)。当前测试均在 `feat/taa-adapt` 执行，任务生成、密钥、推理与浏览器产物写入临时目录，没有覆盖 `runs/`。
+
+交付与限制摘要：
+
+- WASM 0.2.0：[WASM-0.2.0.zip](/tmp/taa-release-0.2.0/WASM-0.2.0.zip)。
+- 完整交付包：[latti-delivery-0.2.0.zip](/tmp/taa-release-0.2.0/latti-delivery-0.2.0.zip)。上述路径为本机产物位置，来源与哈希见第 1 节。
+- Lattigo 全量测试存在原基线的 `TestRLWEConstSerialization` hash 断言失败，详见第 7 节。
+- Retina 本次 10 例准确率为 50%（5/10），预测与明文结果一致；样本范围和复测证据见第 4 节。
 
 ## 1. 构建与证据边界
 
