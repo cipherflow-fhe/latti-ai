@@ -19,6 +19,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 
 #include "data_structs/feature.h"
 #include "inference_task/inference_process.h"
@@ -45,14 +46,21 @@ public:
 
     InferenceServer(const InferenceServer&) = delete;
     InferenceServer& operator=(const InferenceServer&) = delete;
-    InferenceServer(InferenceServer&&) = default;
-    InferenceServer& operator=(InferenceServer&&) = default;
+    InferenceServer(InferenceServer&&) = delete;
+    InferenceServer& operator=(InferenceServer&&) = delete;
 
     /// Import evaluation context (public keys only) from serialized bytes.
     void import_eval_context(const Bytes& eval_context);
 
+    /// Import a serialized evaluation context from a file.
+    void import_eval_context_file(const std::string& path);
+
     /// Load model weights and computation graph.
     void load_model();
+
+    /// Release device execution state while retaining the imported host context.
+    /// Throws RESOURCE_BUSY when another GPU owner or an active evaluation exists.
+    void release_device();
 
     /// Run encrypted inference on serialized ciphertext inputs.
     /// @param encrypted_inputs  Map of input name -> serialized ciphertext bytes.
@@ -76,8 +84,11 @@ private:
     std::vector<std::string> output_keys_;
     std::map<std::string, OutputParam> output_params_;
     ls::CkksContext* context_ptr_ = nullptr;
-    std::unique_ptr<ls::CkksContext> eval_context_;
+    std::shared_ptr<ls::CkksContext> eval_context_;
 
     std::unique_ptr<InitInferenceProcess> init_;
     std::unique_ptr<InferenceProcess> fp_;
+    mutable std::mutex state_mutex_;
+    bool evaluating_ = false;
+    bool pool_release_pending_ = false;
 };

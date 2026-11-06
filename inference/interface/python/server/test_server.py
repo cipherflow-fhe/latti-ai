@@ -63,7 +63,7 @@ def find_task_dirs():
 def test_import():
     assert hasattr(latti_server, 'InferenceServer')
     methods = [m for m in dir(latti_server.InferenceServer) if not m.startswith('_')]
-    for required in ['import_eval_context', 'load_model', 'evaluate', 'evaluate_plaintext']:
+    for required in ['import_eval_context', 'import_eval_context_file', 'load_model', 'evaluate', 'evaluate_plaintext']:
         assert required in methods, f'missing method: {required}'
     print('[PASS] import')
 
@@ -81,13 +81,13 @@ def test_full_flow():
     print('\n--- Client: setup + encrypt ---')
     client = latti_client.InferenceClient(client_dir)
     client.setup()
-    eval_ctx = client.export_eval_context()
+    eval_path = os.path.join(client_dir, 'eval_context.bin')
     encrypted = client.encrypt({'input': os.path.join(client_dir, 'img.csv')})
-    print(f'  eval_ctx={len(eval_ctx) / 1024 / 1024:.1f}MB, ciphertext={len(encrypted["input"]) / 1024:.1f}KB')
+    print(f'  eval_ctx={os.path.getsize(eval_path) / 1024 / 1024:.1f}MB, ciphertext={len(encrypted["input"]) / 1024:.1f}KB')
 
     print('\n--- Server: import + load + evaluate ---')
     server = latti_server.InferenceServer(server_dir, use_gpu=False)
-    server.import_eval_context(eval_ctx)
+    server.import_eval_context_file(eval_path)
     print('[PASS] import_eval_context')
 
     server.load_model()

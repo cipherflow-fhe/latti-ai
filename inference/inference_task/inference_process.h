@@ -265,7 +265,7 @@ public:
     ComputeDevice compute_device = ComputeDevice::CPU;  // Default to CPU mode
     int gpu_device = 0;
 
-    std::map<std::string, UPtr<ls::CkksContext>> ckks_contexts;
+    std::map<std::string, std::shared_ptr<ls::CkksContext>> ckks_contexts;
 
     std::map<std::string, Array<double, 3>> p_feature2d_x;
     std::map<std::string, Array<double, 2>> p_feature1d_x;

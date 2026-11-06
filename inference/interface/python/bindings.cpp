@@ -73,6 +73,9 @@ PYBIND11_MODULE(latti_inference, m) {
              }),
              py::arg("client_dir"))
         .def("setup", &InferenceClient::setup, py::call_guard<py::gil_scoped_release>())
+        .def("release", &InferenceClient::release, py::call_guard<py::gil_scoped_release>())
+        .def("export_eval_context_to_file", &InferenceClient::export_eval_context_to_file,
+             py::arg("path"), py::call_guard<py::gil_scoped_release>())
         .def("export_eval_context",
              [](const InferenceClient& self) {
                  Bytes data;
@@ -109,9 +112,11 @@ PYBIND11_MODULE(latti_inference, m) {
     py::class_<InferenceServer>(m, "InferenceServer")
         .def(py::init([](const std::string& server_dir, bool use_gpu, int gpu_device) {
                  py::gil_scoped_release release;
-                 return InferenceServer(server_dir, use_gpu, gpu_device);
+                 return std::make_unique<InferenceServer>(server_dir, use_gpu, gpu_device);
              }),
              py::arg("server_dir"), py::arg("use_gpu") = false, py::arg("gpu_device") = 0)
+        .def("import_eval_context_file", &InferenceServer::import_eval_context_file,
+             py::arg("path"), py::call_guard<py::gil_scoped_release>())
         .def(
             "import_eval_context",
             [](InferenceServer& self, const py::bytes& eval_ctx) {
@@ -121,6 +126,7 @@ PYBIND11_MODULE(latti_inference, m) {
             },
             py::arg("eval_context"))
         .def("load_model", &InferenceServer::load_model, py::call_guard<py::gil_scoped_release>())
+        .def("release_device", &InferenceServer::release_device, py::call_guard<py::gil_scoped_release>())
         .def(
             "evaluate",
             [](InferenceServer& self, const py::dict& encrypted_inputs, py::object progress_callback) {

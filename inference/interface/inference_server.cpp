@@ -17,10 +17,15 @@
  */
 
 #include <iostream>
+#include <fstream>
+#include <limits>
 #include <map>
 
 #include "interface/inference_server.h"
 #include "data_structs/feature_mat.h"
+#ifdef INFERENCE_SDK_ENABLE_GPU
+#include "lattisense/mega_ag_runners/wrapper.h"
+#endif
 
 using namespace lattisense;
 
@@ -46,23 +51,55 @@ int read_skip(const json& param, int default_value = 1) {
 InferenceServer::InferenceServer(const std::string& server_dir, bool use_gpu, int gpu_device)
     : server_dir_(server_dir), use_gpu_(use_gpu), gpu_device_(gpu_device) {}
 
-InferenceServer::~InferenceServer() = default;
+InferenceServer::~InferenceServer() {
+    try {
+        release_device();
+    } catch (...) {
+        // Destruction is best-effort and must not throw across SDK boundaries.
+    }
+}
+
+void InferenceServer::import_eval_context_file(const std::string& path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input) {
+        throw std::runtime_error("[Server] Cannot open evaluation context: " + path);
+    }
+    const auto size = input.tellg();
+    if (size <= 0 || static_cast<uintmax_t>(size) > Bytes{}.max_size() ||
+        static_cast<uintmax_t>(size) > static_cast<uintmax_t>(std::numeric_limits<std::streamsize>::max())) {
+        throw std::runtime_error("[Server] Invalid evaluation context file size: " + path);
+    }
+    Bytes data(static_cast<size_t>(size));
+    input.seekg(0);
+    if (!input.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(size))) {
+        throw std::runtime_error("[Server] Short read of evaluation context: " + path);
+    }
+    import_eval_context(data);
+}
 
 void InferenceServer::import_eval_context(const Bytes& eval_context) {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (fp_ || evaluating_) {
+        throw std::runtime_error("RESOURCE_BUSY: release the loaded model before importing a context");
+    }
     // Determine whether bootstrapping is needed from the server task config.
     auto task_config = read_json((server_dir_ / "task_config.json").string());
     auto ckks_config = read_json((server_dir_ / "ckks_parameter.json").string());
     auto& input_param = task_config["task_input_param"].begin().value();
     std::string ckks_param_id = input_param["ckks_parameter_id"];
     int poly_modulus_degree = ckks_config[ckks_param_id]["poly_modulus_degree"].get<int>();
-    needs_btp_ = task_config.value("use_btp", false);
-    mat_pack_style_ = task_config.value<std::string>("mat_pack_style", "");
+    const bool needs_btp = task_config.value("use_btp", false);
+    const std::string mat_pack_style = task_config.value<std::string>("mat_pack_style", "");
+
+    std::vector<std::string> input_keys, output_keys;
+    std::map<std::string, InputParam> input_params;
+    std::map<std::string, OutputParam> output_params;
 
     // Store all input keys and per-input parameters
     uint32_t global_n_heads = task_config.value("n_heads", 0u);
     uint32_t global_matmul_block_size = task_config.value("matmul_block_size", 0u);
     for (auto& [name, param] : task_config["task_input_param"].items()) {
-        input_keys_.push_back(name);
+        input_keys.push_back(name);
         InputParam ip;
         ip.dim = param["dim"];
         ip.level = param["level"];
@@ -91,12 +128,12 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
         if (!ip.is_mat) {
             ip.pack_num = param.value("pack_num", 0);
         }
-        input_params_[name] = ip;
+        input_params[name] = ip;
     }
 
     // Store all output keys and per-output parameters
     for (auto& [name, param] : task_config["task_output_param"].items()) {
-        output_keys_.push_back(name);
+        output_keys.push_back(name);
         OutputParam op;
         op.dim = param["dim"];
         op.channel = param.value("channel", 1);
@@ -120,48 +157,108 @@ void InferenceServer::import_eval_context(const Bytes& eval_context) {
             op.height = param["shape"][0];
             op.width = param["shape"][1];
         }
-        output_params_[name] = op;
+        output_params[name] = op;
     }
 
     std::cout << "[Server] Importing evaluation context..." << std::endl;
-    std::cout << "[Server] Bootstrapping: " << (needs_btp_ ? "Yes" : "No") << std::endl;
+    std::cout << "[Server] Bootstrapping: " << (needs_btp ? "Yes" : "No") << std::endl;
 
-    eval_context_ = std::make_unique<CkksContext>(CkksContext::deserialize(eval_context));
+    auto context = std::make_shared<CkksContext>(CkksContext::deserialize(eval_context));
+    input_keys_ = std::move(input_keys);
+    output_keys_ = std::move(output_keys);
+    input_params_ = std::move(input_params);
+    output_params_ = std::move(output_params);
+    needs_btp_ = needs_btp;
+    mat_pack_style_ = mat_pack_style;
+    eval_context_ = std::move(context);
     context_ptr_ = eval_context_.get();
 
     std::cout << "[Server] Done." << std::endl;
 }
 
 void InferenceServer::load_model() {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (fp_) {
+        throw std::runtime_error("[Server] Model is already loaded");
+    }
+    if (!eval_context_) {
+        throw std::runtime_error("[Server] No evaluation context imported");
+    }
+    if (pool_release_pending_) {
+        throw std::runtime_error("RESOURCE_ERROR: retry release_device before loading the model");
+    }
     std::cout << "[Server] Loading model..." << std::endl;
 
-    init_ = std::make_unique<InitInferenceProcess>(server_dir_.string() + "/", false);
-    init_->init_parameters(needs_btp_);
-    init_->is_lazy = true;
-    init_->load_model_prepare();
+    auto init = std::make_unique<InitInferenceProcess>(server_dir_.string() + "/", false);
+    init->init_parameters(needs_btp_);
+    init->is_lazy = true;
+    init->load_model_prepare();
 
-    fp_ = std::make_unique<InferenceProcess>(init_.get());
+    auto process = std::make_unique<InferenceProcess>(init.get());
     for (auto& key : input_keys_) {
-        fp_->available_keys.push_back(key);
+        process->available_keys.push_back(key);
     }
 
-    // Transfer eval context directly to inference engine (no shallow_copy)
-    std::map<std::string, std::unique_ptr<CkksContext>> context_map;
-    context_map["param0"] = std::move(eval_context_);
-    fp_->ckks_contexts = std::move(context_map);
-    context_ptr_ = fp_->ckks_contexts["param0"].get();
+    // The server retains the same host context across device reloads.
+    process->ckks_contexts["param0"] = eval_context_;
 
     if (use_gpu_) {
-        fp_->compute_device = ComputeDevice::GPU;
-        fp_->gpu_device = gpu_device_;
+        process->compute_device = ComputeDevice::GPU;
+        process->gpu_device = gpu_device_;
     }
-    fp_->prepare_task();
+    process->prepare_task();
+    init_ = std::move(init);
+    fp_ = std::move(process);
 
     std::cout << "[Server] Done." << std::endl;
 }
 
+void InferenceServer::release_device() {
+    std::lock_guard<std::mutex> state_lock(state_mutex_);
+    if (evaluating_) {
+        throw std::runtime_error("RESOURCE_BUSY: inference is running");
+    }
+    if (!fp_ && !pool_release_pending_) {
+        return;
+    }
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    const bool release_pool = use_gpu_ || pool_release_pending_;
+    const bool gpu_task = fp_ && static_cast<bool>(fp_->fhe_task_gpu_);
+    if (release_pool && begin_fhe_gpu_resource_release(gpu_task) != FHE_TASK_OK) {
+        throw std::runtime_error("RESOURCE_BUSY: another GPU owner is active");
+    }
+#endif
+    fp_.reset();
+    init_.reset();
+#ifdef INFERENCE_SDK_ENABLE_GPU
+    if (release_pool) {
+        pool_release_pending_ = true;
+        if (finish_fhe_gpu_resource_release(gpu_device_) != FHE_TASK_OK) {
+            throw std::runtime_error("RESOURCE_ERROR: GPU resource release failed; host context retained");
+        }
+        pool_release_pending_ = false;
+    }
+#endif
+}
+
 std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::string, Bytes>& encrypted_inputs,
                                                        lattisense::ProgressCallback progress_cb) {
+    std::unique_lock<std::mutex> state_lock(state_mutex_);
+    if (!fp_) {
+        throw std::runtime_error("[Server] Model is not loaded");
+    }
+    if (evaluating_) {
+        throw std::runtime_error("RESOURCE_BUSY: inference is already running");
+    }
+    evaluating_ = true;
+    struct EvaluationGuard {
+        InferenceServer& server;
+        ~EvaluationGuard() {
+            std::lock_guard<std::mutex> lock(server.state_mutex_);
+            server.evaluating_ = false;
+        }
+    } evaluation_guard{*this};
+    state_lock.unlock();
     // Deserialize and set all input ciphertexts
     for (auto& [name, bytes] : encrypted_inputs) {
         auto it = input_params_.find(name);
@@ -227,6 +324,22 @@ std::map<std::string, Bytes> InferenceServer::evaluate(const std::map<std::strin
 
 std::map<std::string, std::vector<double>>
 InferenceServer::evaluate_plaintext(const std::map<std::string, std::string>& input_csvs) {
+    std::unique_lock<std::mutex> state_lock(state_mutex_);
+    if (!fp_) {
+        throw std::runtime_error("[Server] Model is not loaded");
+    }
+    if (evaluating_) {
+        throw std::runtime_error("RESOURCE_BUSY: inference is already running");
+    }
+    evaluating_ = true;
+    struct EvaluationGuard {
+        InferenceServer& server;
+        ~EvaluationGuard() {
+            std::lock_guard<std::mutex> lock(server.state_mutex_);
+            server.evaluating_ = false;
+        }
+    } evaluation_guard{*this};
+    state_lock.unlock();
     fp_->p_feature0d_x.clear();
     fp_->p_feature1d_x.clear();
     fp_->p_feature2d_x.clear();

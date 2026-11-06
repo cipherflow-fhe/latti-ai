@@ -24,12 +24,12 @@ import latti_inference
 # 客户端：密钥生成、加密、解密
 client = latti_inference.InferenceClient('/path/to/task/client')
 client.setup()
-eval_ctx = client.export_eval_context()  # -> bytes
+eval_path = '/path/to/task/client/eval_context.bin'
 encrypted = client.encrypt({'input': 'input.csv'})  # -> dict[str, bytes]
 
 # 服务端：模型加载、密文推理
 server = latti_inference.InferenceServer('/path/to/task/server', use_gpu=True)
-server.import_eval_context(eval_ctx)
+server.import_eval_context_file(eval_path)
 server.load_model()
 result = server.evaluate(encrypted)  # -> dict[str, bytes]
 
