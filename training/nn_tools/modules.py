@@ -27,6 +27,52 @@ def _pair(x):
     return (x, x)
 
 
+class _PolyMaxPool2dExport(torch.autograd.Function):
+    """Export a MaxPool node while preserving the FHE approximation settings."""
+
+    @staticmethod
+    def forward(ctx, x, kernel, stride, padding, alpha, upper_bound, B):
+        return torch.nn.functional.max_pool2d(x, kernel, stride, padding)
+
+    @staticmethod
+    def symbolic(g, x, kernel, stride, padding, alpha, upper_bound, B):
+        return g.op(
+            'nn_tools::PolyMaxPool2d', x,
+            kernel_shape_i=kernel,
+            strides_i=stride,
+            pads_i=list(padding) + list(padding),
+            alpha_i=alpha,
+            upper_bound_f=upper_bound,
+            B_f=B,
+        ).setType(x.type())
+
+
+class PolyMaxPool2d(nn.Module):
+    """Drop-in MaxPool2d whose FHE settings survive ONNX export.
+
+    Plain PyTorch execution remains exact max pooling. During compilation the
+    exported node is lowered to the explicit polynomial MaxPool stages.
+    """
+
+    def __init__(self, kernel_size=3, stride=2, padding=1, *, alpha=7,
+                 upper_bound=1.0, B=1.0):
+        super().__init__()
+        self.kernel_size = _pair(kernel_size)
+        self.stride = _pair(stride)
+        self.padding = _pair(padding)
+        self.alpha = alpha
+        self.upper_bound = float(upper_bound)
+        self.B = float(B)
+
+    def forward(self, x):
+        if torch.onnx.is_in_onnx_export():
+            return _PolyMaxPool2dExport.apply(
+                x, list(self.kernel_size), list(self.stride), list(self.padding),
+                self.alpha, self.upper_bound, self.B)
+        return torch.nn.functional.max_pool2d(
+            x, self.kernel_size, self.stride, self.padding)
+
+
 class DepthwiseAvgPool2d(nn.Module):
     """Drop-in replacement for ``nn.AvgPool2d`` using a depthwise convolution.
 

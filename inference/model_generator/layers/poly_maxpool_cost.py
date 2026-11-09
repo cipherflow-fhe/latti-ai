@@ -29,7 +29,7 @@ def _tap_counts(shape, slots):
             sum(len(t) - 1 for t in specs))
 
 
-def get_maxpool_stage_op_count(stage, shape, channels, slots, level, alpha=7):
+def get_maxpool_stage_op_count(stage, shape, channels, slots, level, alpha=7, polynomial_index=None):
     """Return counts grouped by the level at which each operation executes."""
     shape = tuple(shape)
     plane = math.prod(shape)
@@ -100,7 +100,9 @@ def get_maxpool_stage_op_count(stage, shape, channels, slots, level, alpha=7):
                 next_nodes.append((True, target))
             nodes = next_nodes
 
-    if stage == 'normalize_taps':
+    if stage == 'primitive_poly':
+        poly(level, channels, degrees[polynomial_index])
+    elif stage == 'normalize_taps':
         if level < 1:
             raise ValueError('Insufficient level for MaxPool normalization')
         branches, rotations, additions = _tap_counts(shape, slots)
@@ -149,3 +151,30 @@ def get_maxpool_stage_op_count(stage, shape, channels, slots, level, alpha=7):
     else:
         raise ValueError(f'Unknown MaxPool cost stage: {stage}')
     return costs
+
+
+def get_maxpool_primitive_op_count(primitive, shape, channels, slots, level, alpha=7):
+    op = primitive['op']
+    if op == 'poly':
+        return get_maxpool_stage_op_count('primitive_poly', shape, channels, slots, level,
+                                         alpha, primitive['polynomial'])
+    plane = math.prod(shape)
+    outputs = math.ceil(channels / (slots // plane))
+    counts = dict.fromkeys(('rotate', 'mult_plain', 'mult', 'add', 'rescale'), 0)
+    if op == 'rotate':
+        steps = primitive['steps']
+        counts['rotate'] = sum(bool(steps[i % len(steps)]) for i in range(channels))
+    elif op in ('add', 'sub', 'double'):
+        counts['add'] = channels
+    elif op == 'pack':
+        counts['add'] = channels - outputs
+    elif op == 'mult':
+        counts.update(mult=channels, rescale=channels)
+    elif op in ('mask', 'select', 'restore'):
+        count = outputs if op == 'restore' else channels
+        counts.update(mult_plain=count, rescale=count)
+    elif op == 'source':
+        counts['add'] = 6 * channels  # explicit zero dependencies for other blocks
+    else:
+        raise ValueError(f'Unknown MaxPool primitive cost: {op}')
+    return {level: counts}

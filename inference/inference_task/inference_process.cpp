@@ -82,7 +82,7 @@ FeatureNode::FeatureNode(const json& json_data)
         const auto& state = json_data.at("maxpool_state");
         const int groups = state.at("groups").get<int>();
         const int channels = state.at("channels").get<int>();
-        if (state.at("order") != "group_channel" || groups <= 0 || channels != channel) {
+        if (state.at("order") != "group_channel" || groups <= 0 || channels <= 0 || channels > channel) {
             throw runtime_error("Invalid MaxPool live-state layout");
         }
         maxpool_state_ciphertexts = groups * channels;
@@ -2064,7 +2064,7 @@ void InitInferenceProcess::load_model_prepare() {
         } else if (layer_type == "poly_relu2d" || layer_type == "polyact") {
             _init_poly_relu_layer(key, value, h5_file, is_absorb_polyrelu, block_shape);
         } else if (layer_type.rfind("maxpool2d_", 0) == 0) {
-            _init_fhe_maxpool_stage(key, value);
+            if (!value.contains("maxpool_primitive")) _init_fhe_maxpool_stage(key, value);
         } else if (layer_type == "maxpool2d") {
             _init_fhe_maxpool_layer(key, value);
         } else if (layer_type == "avgpool2d") {
@@ -3005,6 +3005,7 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             cxx_args.push_back(CxxVectorArgument{"densew_" + key, &(fp->get_layer<DensePackedLayer>(key).weight_pt)});
             cxx_args.push_back(CxxVectorArgument{"denseb_" + key, &(fp->get_layer<DensePackedLayer>(key).bias_pt)});
         } else if (layer_type.rfind("maxpool2d_", 0) == 0) {
+            if (layer.value().contains("maxpool_primitive")) continue;
             const auto manifest = read_json(fp->project_path / "maxpool_stage_parameters.json");
             for (const auto& entry : manifest.at(key).items()) {
                 if (entry.value().value("encoding", string("ringt")) == "full_rns") {
@@ -3899,6 +3900,7 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
 
 
         if (layer_type.rfind("maxpool2d_", 0) == 0) {
+            if (layer.value().contains("maxpool_primitive")) continue;
             const auto manifest = read_json(fp->project_path / "maxpool_stage_parameters.json");
             for (const auto& entry : manifest.at(key).items()) {
                 if (entry.value().value("encoding", string("ringt")) == "full_rns") {

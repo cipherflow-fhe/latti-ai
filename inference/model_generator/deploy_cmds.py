@@ -832,7 +832,7 @@ def gen_custom_task(
                 if 'maxpool_state' in feat:
                     state = feat['maxpool_state']
                     n_packed = int(state['groups']) * int(state['channels'])
-                elif consumer is not None and consumer['type'] == 'maxpool2d_normalize_taps':
+                elif consumer is not None and consumer['type'] in ('maxpool2d_normalize_taps', 'maxpool2d_source'):
                     n_packed = n_in_channel_fid * 4
                 # Mirror the big_size expansion logic from the per-layer loop below:
                 # big_size conv2d / avgpool / mult_scalar (2D only) consume inputs as
@@ -912,7 +912,7 @@ def gen_custom_task(
             if 'maxpool_state' in input_feat0:
                 state = input_feat0['maxpool_state']
                 n_packed_in_channel = int(state['groups']) * int(state['channels'])
-            elif layer_config['type'] == 'maxpool2d_normalize_taps':
+            elif layer_config['type'] in ('maxpool2d_normalize_taps', 'maxpool2d_source'):
                 n_packed_in_channel = n_in_channel * 4
 
             # For big_conv/big_avgpool/big_mult_scalar (2D only)
@@ -967,7 +967,7 @@ def gen_custom_task(
                     scale=descriptor.get('scale', float(fhe_param.q[descriptor.get('level', 0)])))
                     for i in range(count)]
                 declarations[name] = dict(descriptor, count=count, encoding='full_rns' if full_rns else 'ringt')
-                if lazy or parameter_mode == 'encrypted_offline':
+                if 'maxpool_primitive' in layer_config or lazy or parameter_mode == 'encrypted_offline':
                     for node in nodes:
                         custom_compute(inputs=[], output=node, type='encode_pt', attributes={
                             'op_class': 'PolyMaxPool', 'type': 'stage_plaintext',
@@ -977,24 +977,32 @@ def gen_custom_task(
                     input_args.append(Argument(name, nodes))
                 return nodes
 
-            pts = bind_maxpool_stage_plaintexts(stage, plan, n_in_channel, n, level,
-                float(layer_config['running_max']), make_stage_pt,
-                alpha=layer_config.get('alpha', 7),
-                comparison_B=layer_config.get('B', 1.0),
-                upper_bound=layer_config.get('upper_bound', 1.0))
-            from inference.model_generator.layers.poly2d import Poly2D
-            internal_debug = (Path(task_path) / 'diagnostic_poly_internal.json').exists()
             observed = {}
-            if internal_debug and layer_id == 'pool_reduce_round_1_poly_1':
-                def capture(name, node, metadata):
-                    observed.setdefault(name, (node, metadata))
-                Poly2D.diagnostic_observer = capture
-            try:
-                result = call_maxpool_stage(stage,
-                    feature_id_to_nodes_map[layer_input_feature_ids[0]], plan,
-                    n_in_channel, n, pts)
-            finally:
-                Poly2D.diagnostic_observer = None
+            if 'maxpool_primitive' in layer_config:
+                from inference.model_generator.layers.poly_maxpool_primitives import (
+                    bind_maxpool_primitive, call_maxpool_primitive)
+                pts = bind_maxpool_primitive(layer_config, plan, n_in_channel, n, level, make_stage_pt)
+                result = call_maxpool_primitive(layer_config['maxpool_primitive'],
+                    [feature_id_to_nodes_map[fid] for fid in layer_input_feature_ids],
+                    plan, n_in_channel, n, pts)
+            else:
+                pts = bind_maxpool_stage_plaintexts(stage, plan, n_in_channel, n, level,
+                    float(layer_config['running_max']), make_stage_pt,
+                    alpha=layer_config.get('alpha', 7),
+                    comparison_B=layer_config.get('B', 1.0),
+                    upper_bound=layer_config.get('upper_bound', 1.0))
+                from inference.model_generator.layers.poly2d import Poly2D
+                internal_debug = (Path(task_path) / 'diagnostic_poly_internal.json').exists()
+                if internal_debug and layer_id == 'pool_reduce_round_1_poly_1':
+                    def capture(name, node, metadata):
+                        observed.setdefault(name, (node, metadata))
+                    Poly2D.diagnostic_observer = capture
+                try:
+                    result = call_maxpool_stage(stage,
+                        feature_id_to_nodes_map[layer_input_feature_ids[0]], plan,
+                        n_in_channel, n, pts)
+                finally:
+                    Poly2D.diagnostic_observer = None
             if observed:
                 internal_metadata = {}
                 for name, (node, metadata) in observed.items():

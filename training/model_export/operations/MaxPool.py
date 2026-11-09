@@ -36,11 +36,13 @@ class MaxPoolComputeNode(ComputeNode):
         kernel_shape: list,
         stride: list,
         padding: list = None,
+        alpha: int = 7, upper_bound: float = 1.0, B: float = 1.0,
     ):
         super(MaxPoolComputeNode, self).__init__(layer_id, layer_type, feature_input, feature_output)
         self.stride = stride
         self.kernel_shape = kernel_shape
         self.padding = list(padding) if padding is not None else [0, 0]
+        self.alpha, self.upper_bound, self.B = alpha, upper_bound, B
         # feature_output[0].shape[0] = feature_input[0].shape[0] // stride[0]
         # feature_output[0].shape[1] = feature_input[0].shape[1] // stride[1]
         # feature_output[0].skip = [1, 1]
@@ -83,6 +85,9 @@ class MaxPoolComputeNode(ComputeNode):
         info['stride'] = self.stride
         info['kernel_shape'] = self.kernel_shape
         info['padding'] = self.padding
+        info['alpha'] = self.alpha
+        info['upper_bound'] = self.upper_bound
+        info['B'] = self.B
         info['feature_input'] = [i.node_id for i in self.feature_input]
         info['feature_output'] = [i.node_id for i in self.feature_output]
         return info
@@ -104,7 +109,11 @@ class MaxPoolComputeNode(ComputeNode):
                 f"Unsupported asymmetric MaxPool padding: {pads}"
             )
 
-        return MaxPoolComputeNode(layer_id, layer_type, feature_input, feature_output, kernel_shape, stride, padding=pads[:2],)
+        return MaxPoolComputeNode(layer_id, layer_type, feature_input, feature_output,
+                                  kernel_shape, stride, padding=pads[:2],
+                                  alpha=attrs.get('alpha', 7),
+                                  upper_bound=attrs.get('upper_bound', 1.0),
+                                  B=attrs.get('B', 1.0))
 
     @override
     def to_torch_code(self) -> dict[str, list[str]]:

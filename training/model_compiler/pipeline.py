@@ -884,7 +884,7 @@ def run_pipeline(
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
     if maxpool_config is not None:
-        from training.nn_tools.maxpool_config import configure_maxpool
+        from training.nn_tools import configure_maxpool
         configure_maxpool(raw_graph, maxpool_config)
 
     if not is_use_btp:

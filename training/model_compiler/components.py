@@ -41,6 +41,7 @@
 #   LayerAbstractGraph                – DAG of FeatureNode / ComputeNode; owns from_json
 #                                       and to_json for the task config format
 
+import copy
 import json
 import math
 import networkx as nx
@@ -955,6 +956,10 @@ class LayerAbstractGraph:
                     compute_node.maxpool_stage = layer_json.get(
                         'maxpool_stage', layer_type[len('maxpool2d_'):]
                     )
+                    if 'maxpool_state' in layer_json:
+                        compute_node.maxpool_state = copy.deepcopy(layer_json['maxpool_state'])
+                    if 'maxpool_primitive' in layer_json:
+                        compute_node.maxpool_primitive = copy.deepcopy(layer_json['maxpool_primitive'])
                     compute_node.level_cost = int(layer_json.get('level_cost', 0))
                     compute_node.maxpool_output_shape = list(layer_json.get(
                         'maxpool_output_shape', feature_output[0].shape
@@ -1217,7 +1222,8 @@ class LayerAbstractGraph:
                         layers[layer_id]['running_max'] = float(running_max)
                 elif layer_type.startswith('maxpool2d_'):
                     layers[layer_id]['maxpool_stage'] = getattr(layer, 'maxpool_stage', layer_type[len('maxpool2d_'):])
-                    layers[layer_id]['maxpool_operations'] = list(getattr(layer, 'maxpool_operations', []))
+                    if hasattr(layer, 'maxpool_primitive'):
+                        layers[layer_id]['maxpool_primitive'] = copy.deepcopy(layer.maxpool_primitive)
                     layers[layer_id]['level_cost'] = int(getattr(layer, 'level_cost', 0))
                     layers[layer_id]['maxpool_output_shape'] = list(layer.maxpool_output_shape)
                     running_max = getattr(layer, 'running_max', None)

@@ -1276,12 +1276,18 @@ class FheScoreParam:
         n_packed_in = self.n_packed_in  # ceil(n_in / pack)
         n_packed_out = self.n_packed_out  # ceil(n_out / pack_out)
 
+        if hasattr(node, 'maxpool_primitive'):
+            from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_primitive_op_count
+            return get_maxpool_primitive_op_count(
+                node.maxpool_primitive, node.maxpool_output_shape, n_in, n,
+                self.input_mult_level, alpha=getattr(node, 'alpha', 7))
+
         if layer_type.startswith('maxpool2d_'):
             from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_stage_op_count
             if style != 'multiplexed' or list(node.kernel_shape) != [3, 3]:
                 raise ValueError('Unsupported MaxPool cost layout')
             return get_maxpool_stage_op_count(
-                node.maxpool_stage, node.maxpool_output_shape, n_in, n // 2, self.input_mult_level,
+                node.maxpool_stage, node.maxpool_output_shape, n_in, n, self.input_mult_level,
                 alpha=getattr(node, 'alpha', 7))
 
         def pdm_upper_shape_and_head(feature: FeatureNode):
@@ -2163,7 +2169,7 @@ class BtpScoreParam:
             if (
                 state.get('order') != 'group_channel'
                 or not isinstance(groups, int) or groups <= 0
-                or not isinstance(channels, int) or channels != pred.channel
+                or not isinstance(channels, int) or not 0 < channels <= pred.channel
             ):
                 raise ValueError(f'Invalid MaxPool live state: {pred.node_id}')
             return groups * channels
