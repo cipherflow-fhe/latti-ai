@@ -351,6 +351,12 @@ def gen_custom_task(
 
     def _append_parameter_arg(arg_id, nodes):
         if parameter_mode == 'encrypted_offline':
+            for node in _flatten_nodes(nodes):
+                if not 0 <= node.metadata.level < len(fhe_param.q):
+                    raise ValueError(
+                        f'Encrypted parameter {arg_id} level {node.metadata.level} exceeds residual Q maximum '
+                        f'{len(fhe_param.q) - 1}'
+                    )
             effective_id = arg_id
             count = encrypted_parameter_arg_counts.get(arg_id, 0)
             encrypted_parameter_arg_counts[arg_id] = count + 1

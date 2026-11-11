@@ -53,6 +53,49 @@ def _data_with_missing_source(mega_ag):
 
 
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_encrypted_parameter_above_residual_chain_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features = {'input': _feature(6), 'output': _feature(5)}
+            graph = dict(
+                feature=features,
+                input_feature=['input'],
+                output_feature=['output'],
+                layer={
+                    'scalar': dict(
+                        type='mult_scalar',
+                        feature_input=['input'],
+                        feature_output=['output'],
+                        channel_input=1,
+                        channel_output=1,
+                        path='scalar.weight',
+                    )
+                },
+            )
+            config = dict(
+                task_type='fhe',
+                task_num=1,
+                pack_style='multiplexed',
+                block_shape=[1, 1],
+                task_input_id=['input'],
+                task_output_id=['output'],
+                task_input_param={'input': features['input']},
+                task_output_param={'output': features['output']},
+                use_btp=False,
+            )
+            (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+            (root / 'task_config.json').write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError, 'Encrypted parameter .* level 6 exceeds residual Q maximum 5'):
+                gen_custom_task(
+                    str(root),
+                    param_name='PN13Default',
+                    style='multiplexed',
+                    parameter_mode='encrypted_offline',
+                    input_mode='plaintext',
+                    deployment_mode='server_provisioned_runner',
+                    parameter_loading_mode='runtime_lazy',
+                )
+
     def test_adaptive_pool_normalization_is_public_and_preserves_scale(self):
         for dim in (1, 2):
             for parameter_mode in ('plaintext_lazy', 'encrypted_offline'):
@@ -64,35 +107,83 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                     stride = [4] if dim == 1 else [2, 4]
                     output_shape = [s // k for s, k in zip(shape, stride)]
                     features = {
-                        'input': dict(_feature(4), dim=dim, channel=2, shape=shape, skip=[1] * dim,
-                                      invalid_fill=[1] * dim, pack_num=512 if dim == 1 else 256),
-                        'output': dict(_feature(2), dim=dim, channel=2, shape=output_shape, skip=stride,
-                                       invalid_fill=stride, pack_num=512 if dim == 1 else 256),
+                        'input': dict(
+                            _feature(4),
+                            dim=dim,
+                            channel=2,
+                            shape=shape,
+                            skip=[1] * dim,
+                            invalid_fill=[1] * dim,
+                            pack_num=512 if dim == 1 else 256,
+                        ),
+                        'output': dict(
+                            _feature(2),
+                            dim=dim,
+                            channel=2,
+                            shape=output_shape,
+                            skip=stride,
+                            invalid_fill=stride,
+                            pack_num=512 if dim == 1 else 256,
+                        ),
                     }
                     features['hidden'] = dict(features['input'], level=3)
-                    layers = {'pool': dict(type=f'avgpool{dim}d', feature_input=['input'],
-                        feature_output=['output'], channel_input=2, channel_output=2,
-                        kernel_shape=stride, stride=stride, is_adaptive_avgpool=True, is_big_size=False)}
+                    layers = {
+                        'pool': dict(
+                            type=f'avgpool{dim}d',
+                            feature_input=['input'],
+                            feature_output=['output'],
+                            channel_input=2,
+                            channel_output=2,
+                            kernel_shape=stride,
+                            stride=stride,
+                            is_adaptive_avgpool=True,
+                            is_big_size=False,
+                        )
+                    }
                     layers['pool']['feature_input'] = ['hidden']
-                    layers = {'conv': dict(type=f'conv{dim}d', feature_input=['input'], feature_output=['hidden'],
-                        channel_input=2, channel_output=2, kernel_shape=[1] * dim, stride=[1] * dim,
-                        groups=1, is_big_size=False), **layers}
+                    layers = {
+                        'conv': dict(
+                            type=f'conv{dim}d',
+                            feature_input=['input'],
+                            feature_output=['hidden'],
+                            channel_input=2,
+                            channel_output=2,
+                            kernel_shape=[1] * dim,
+                            stride=[1] * dim,
+                            groups=1,
+                            is_big_size=False,
+                        ),
+                        **layers,
+                    }
                     graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
-                    config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[4, 8],
-                        task_input_id=['input'], task_output_id=['output'],
-                        task_input_param={'input': features['input']}, task_output_param={'output': features['output']},
-                        use_btp=False)
+                    config = dict(
+                        task_type='fhe',
+                        task_num=1,
+                        pack_style='multiplexed',
+                        block_shape=[4, 8],
+                        task_input_id=['input'],
+                        task_output_id=['output'],
+                        task_input_param={'input': features['input']},
+                        task_output_param={'output': features['output']},
+                        use_btp=False,
+                    )
                     (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
                     (root / 'task_config.json').write_text(json.dumps(config))
                     kwargs = dict(parameter_mode=parameter_mode)
                     if parameter_mode == 'encrypted_offline':
-                        kwargs.update(input_mode='plaintext', deployment_mode='server_provisioned_runner',
-                                      parameter_loading_mode='runtime_lazy')
+                        kwargs.update(
+                            input_mode='plaintext',
+                            deployment_mode='server_provisioned_runner',
+                            parameter_loading_mode='runtime_lazy',
+                        )
                     gen_custom_task(str(root), param_name='PN13Default', style='multiplexed', lazy=True, **kwargs)
                     mega = json.loads((root / 'mega_ag.json').read_text())
                     self.assertEqual(_data_with_missing_source(mega), [])
-                    means = [n for n in mega['compute'].values() if n['type'] == 'encode_pt' and
-                             n.get('attributes', {}).get('type') == 'normalization_pt']
+                    means = [
+                        n
+                        for n in mega['compute'].values()
+                        if n['type'] == 'encode_pt' and n.get('attributes', {}).get('type') == 'normalization_pt'
+                    ]
                     self.assertEqual(len(means), 1)
                     mean = means[0]
                     self.assertEqual(mean['inputs'], [])
@@ -100,7 +191,7 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                     self.assertEqual(mean['attributes']['level'], 3)
                     self.assertEqual(mega['data'][mean['outputs'][0]]['scale'], float(PN13Default.q[3]))
                     scales = [mega['data'][idx]['scale'] for idx in mega['outputs']]
-                    self.assertTrue(all(abs(s / (2 ** PN13Default.log_default_scale) - 1) < 1e-10 for s in scales))
+                    self.assertTrue(all(abs(s / (2**PN13Default.log_default_scale) - 1) < 1e-10 for s in scales))
                     self.assertTrue(all(mega['data'][idx]['level'] == 2 for idx in mega['outputs']))
 
     def test_gpu_bootstrap_restores_default_scale_after_natural_square(self):
@@ -108,16 +199,33 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             root = Path(tmp)
             features = {name: _feature(level) for name, level in [('input', 2), ('squared', 1), ('output', 12)]}
             layers = {
-                'square': dict(type='square2d', feature_input=['input'], feature_output=['squared'],
-                               channel_input=1, channel_output=1),
-                'refresh': dict(type='bootstrapping', feature_input=['squared'], feature_output=['output'],
-                                channel_input=1, channel_output=1),
+                'square': dict(
+                    type='square2d',
+                    feature_input=['input'],
+                    feature_output=['squared'],
+                    channel_input=1,
+                    channel_output=1,
+                ),
+                'refresh': dict(
+                    type='bootstrapping',
+                    feature_input=['squared'],
+                    feature_output=['output'],
+                    channel_input=1,
+                    channel_output=1,
+                ),
             }
             graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
-            config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[1, 1],
-                          task_input_id=['input'], task_output_id=['output'],
-                          task_input_param={'input': features['input']},
-                          task_output_param={'output': features['output']}, use_btp=True)
+            config = dict(
+                task_type='fhe',
+                task_num=1,
+                pack_style='multiplexed',
+                block_shape=[1, 1],
+                task_input_id=['input'],
+                task_output_id=['output'],
+                task_input_param={'input': features['input']},
+                task_output_param={'output': features['output']},
+                use_btp=True,
+            )
             (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
             (root / 'task_config.json').write_text(json.dumps(config))
             gen_custom_task(str(root), param_name='PN15Default', style='multiplexed', lazy=True)
@@ -125,8 +233,8 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
             bootstrap = next(op for op in mega['compute'].values() if op['type'] == 'bootstrap')
             source = mega['data'][bootstrap['inputs'][0]]
             output = mega['data'][bootstrap['outputs'][0]]
-            self.assertNotEqual(source['scale'], 2.0 ** 40)
-            self.assertEqual(output['scale'], 2.0 ** 40)
+            self.assertNotEqual(source['scale'], 2.0**40)
+            self.assertEqual(output['scale'], 2.0**40)
             self.assertEqual(output['level'], 12)
 
     def test_upsample_masks_are_runner_local_in_runtime_lazy(self):
@@ -140,32 +248,66 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                 'output': dict(_feature(1), dim=2, channel=4, shape=[8, 16], skip=[2, 2], pack_num=32),
             }
             layers = {
-                'conv': dict(type='conv2d', feature_input=['input'], feature_output=['hidden'],
-                             channel_input=4, channel_output=4, kernel_shape=[1, 1], stride=[1, 1], groups=1,
-                             is_big_size=False),
-                'resize': dict(type='upsample_nearest', feature_input=['hidden'], feature_output=['output'],
-                               channel_input=4, channel_output=4, upsample_factor=[2, 2]),
+                'conv': dict(
+                    type='conv2d',
+                    feature_input=['input'],
+                    feature_output=['hidden'],
+                    channel_input=4,
+                    channel_output=4,
+                    kernel_shape=[1, 1],
+                    stride=[1, 1],
+                    groups=1,
+                    is_big_size=False,
+                ),
+                'resize': dict(
+                    type='upsample_nearest',
+                    feature_input=['hidden'],
+                    feature_output=['output'],
+                    channel_input=4,
+                    channel_output=4,
+                    upsample_factor=[2, 2],
+                ),
             }
             graph = dict(feature=features, layer=layers, input_feature=['input'], output_feature=['output'])
-            config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[4, 8],
-                          task_input_id=['input'], task_output_id=['output'],
-                          task_input_param={'input': features['input']},
-                          task_output_param={'output': features['output']}, use_btp=False)
+            config = dict(
+                task_type='fhe',
+                task_num=1,
+                pack_style='multiplexed',
+                block_shape=[4, 8],
+                task_input_id=['input'],
+                task_output_id=['output'],
+                task_input_param={'input': features['input']},
+                task_output_param={'output': features['output']},
+                use_btp=False,
+            )
             (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
             (server / 'task_config.json').write_text(json.dumps(config))
-            gen_custom_task(str(server), param_name='PN13Default', style='multiplexed',
-                            parameter_mode='encrypted_offline', input_mode='plaintext',
-                            deployment_mode='server_provisioned_runner', parameter_loading_mode='runtime_lazy',
-                            output_dir=str(runner))
+            gen_custom_task(
+                str(server),
+                param_name='PN13Default',
+                style='multiplexed',
+                parameter_mode='encrypted_offline',
+                input_mode='plaintext',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+                output_dir=str(runner),
+            )
             signature = json.loads((runner / 'task_signature.json').read_text())
             mega = json.loads((runner / 'mega_ag.json').read_text())
             self.assertEqual([a['id'] for a in signature['online']], ['input', 'output'])
-            masks = [n for n in mega['compute'].values()
-                     if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'UpsampleNearestLayer']
+            masks = [
+                n
+                for n in mega['compute'].values()
+                if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'UpsampleNearestLayer'
+            ]
             self.assertEqual(len(masks), 4)
             self.assertEqual([m['attributes']['i'] for m in masks], list(range(4)))
-            self.assertTrue(all(m['attributes']['input_shape'] == [4, 8] and
-                                m['attributes']['level'] == 2 and m['inputs'] == [] for m in masks))
+            self.assertTrue(
+                all(
+                    m['attributes']['input_shape'] == [4, 8] and m['attributes']['level'] == 2 and m['inputs'] == []
+                    for m in masks
+                )
+            )
             self.assertEqual(_data_with_missing_source(mega), [])
 
     def test_concat_0d_masks_are_runner_local_in_runtime_lazy(self):
@@ -179,31 +321,59 @@ class TestServerProvisionedRunnerGenerator(unittest.TestCase):
                 for name, pack in [('a', 4), ('b', second_pack)]:
                     for fid, level in [(name, 3), (name + '_hidden', 2)]:
                         features[fid] = dict(_feature(level), channel=3, pack_num=pack, skip=8192 // pack)
-                    layers[name + '_fc'] = dict(type='fc0', feature_input=[name],
-                        feature_output=[name + '_hidden'], channel_input=3, channel_output=3)
+                    layers[name + '_fc'] = dict(
+                        type='fc0',
+                        feature_input=[name],
+                        feature_output=[name + '_hidden'],
+                        channel_input=3,
+                        channel_output=3,
+                    )
                 features['output'] = dict(_feature(1), channel=6, pack_num=4, skip=1024)
-                layers['concat'] = dict(type='concat2d', feature_input=['a_hidden', 'b_hidden'],
-                    feature_output=['output'], channel_input=3, channel_output=6)
+                layers['concat'] = dict(
+                    type='concat2d',
+                    feature_input=['a_hidden', 'b_hidden'],
+                    feature_output=['output'],
+                    channel_input=3,
+                    channel_output=6,
+                )
                 graph = dict(feature=features, layer=layers, input_feature=['a', 'b'], output_feature=['output'])
-                config = dict(task_type='fhe', task_num=1, pack_style='multiplexed', block_shape=[1, 1],
-                    task_input_id=['a', 'b'], task_output_id=['output'],
+                config = dict(
+                    task_type='fhe',
+                    task_num=1,
+                    pack_style='multiplexed',
+                    block_shape=[1, 1],
+                    task_input_id=['a', 'b'],
+                    task_output_id=['output'],
                     task_input_param={n: features[n] for n in ['a', 'b']},
-                    task_output_param={'output': features['output']}, use_btp=False)
+                    task_output_param={'output': features['output']},
+                    use_btp=False,
+                )
                 (server / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
                 (server / 'task_config.json').write_text(json.dumps(config))
-                gen_custom_task(str(server), param_name='PN13Default', style='multiplexed',
-                    parameter_mode='encrypted_offline', input_mode='plaintext',
+                gen_custom_task(
+                    str(server),
+                    param_name='PN13Default',
+                    style='multiplexed',
+                    parameter_mode='encrypted_offline',
+                    input_mode='plaintext',
                     deployment_mode='server_provisioned_runner',
-                    parameter_loading_mode='runtime_lazy', output_dir=str(runner))
+                    parameter_loading_mode='runtime_lazy',
+                    output_dir=str(runner),
+                )
                 signature = json.loads((runner / 'task_signature.json').read_text())
                 mega = json.loads((runner / 'mega_ag.json').read_text())
                 self.assertEqual([a['id'] for a in signature['online']], ['a', 'b', 'output'])
                 self.assertFalse(any('mask' in a['id'] for a in signature['encrypted_parameters']))
-                masks = [n for n in mega['compute'].values()
-                         if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'ConcatLayer']
+                masks = [
+                    n
+                    for n in mega['compute'].values()
+                    if n['type'] == 'encode_pt' and n.get('attributes', {}).get('op_class') == 'ConcatLayer'
+                ]
                 self.assertEqual(len(masks), 6)
-                self.assertEqual([m['attributes']['slot'] for m in masks],
-                                 [0, 2048, 4096, 0, 8192 // second_pack, 16384 // second_pack])
+                self.assertEqual(
+                    [m['attributes']['slot'] for m in masks],
+                    [0, 2048, 4096, 0, 8192 // second_pack, 16384 // second_pack],
+                )
                 self.assertTrue(all(m['attributes']['level'] == 2 for m in masks))
                 self.assertTrue(all(m['inputs'] == [] and m.get('wait_inputs', []) == [] for m in masks))
                 self.assertEqual(_data_with_missing_source(mega), [])

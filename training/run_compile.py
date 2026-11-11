@@ -279,7 +279,7 @@ Examples:
         '--deployment-mode',
         choices=sorted(DEPLOYMENT_MODES),
         default='client_encrypted_input',
-        help='Deployment mode for task metadata and optional runner/provisioner layout.',
+        help='Deployment mode; server_provisioned_runner reserves two residual levels for encrypted parameter packing.',
     )
 
     parser.add_argument(

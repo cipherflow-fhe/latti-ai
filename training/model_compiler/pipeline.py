@@ -40,7 +40,7 @@ import processor
 from processor import *
 from graph_partition_dp import *
 
-from score import encrypted_parameter_storage_enabled, get_encrypted_parameter_storage_report
+from score import FheScoreParam, encrypted_parameter_storage_enabled, get_encrypted_parameter_storage_report
 from inference.model_generator.parameter_sources import public_source
 
 MAT_PACK_STYLES = {'', 'par_block_col_major', 'par_diagonal_pack'}
@@ -116,10 +116,19 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     return pt_graph
 
 
+def get_compile_level_reserve() -> int:
+    return 2 * (config.deployment_mode == 'server_provisioned_runner') + int(config.set_btp_scale is not None)
+
+
 def set_fhe_param(params):
     config.fhe_param = copy.deepcopy(params)
-    if config.set_btp_scale is not None:
-        config.fhe_param.max_level -= 1
+    config.fhe_param.max_level -= get_compile_level_reserve()
+    if config.fhe_param.max_level < get_min_feature_level():
+        raise ValueError(f'Insufficient residual levels for {params.name} with the requested deployment/scaling')
+    print(
+        f'Level budget: min={get_min_feature_level()}, compile_max={config.fhe_param.max_level}, '
+        f'residual_max={config.fhe_param.residual_max_level}, reserved={get_compile_level_reserve()}'
+    )
 
 
 def set_block_shape(params, raw_graph: LayerAbstractGraph):
@@ -173,6 +182,8 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     no_btp_params = [FHE_PARAMS[selected]] if selected else [PN12Default, PN13Default, PN14Default, PN15Default]
 
     for params in no_btp_params:
+        if params.max_level - get_compile_level_reserve() < get_min_feature_level():
+            continue
         set_fhe_param(params)
         set_block_shape(config.fhe_param, raw_graph)
         print(f'Trying FheParam {config.fhe_param.name}')
@@ -677,13 +688,75 @@ def recompute_final_level(graph: LayerAbstractGraph):
         else:
             feature_levels[node] = downstream_req
 
-    max_allowed_level = config.fhe_param.max_level + 1
     for feature, level in feature_levels.items():
+        # Only a bootstrap output may temporarily carry the extra level
+        # consumed by its scale wrapper (or dropped after scale fusion).
+        is_bootstrap_output = any(
+            isinstance(pred, ComputeNode) and pred.layer_type == 'bootstrapping' for pred in dag.predecessors(feature)
+        )
+        max_allowed_level = config.fhe_param.max_level + int(config.set_btp_scale is not None and is_bootstrap_output)
         if level < 0 or level > max_allowed_level:
             raise ValueError(
                 f'Final level of feature {feature.node_id} is out of range: {level}, max allowed {max_allowed_level}'
             )
         dag.nodes[feature]['level'] = int(level)
+
+
+def restore_bootstrap_output_levels(graph: LayerAbstractGraph):
+    """Expose physical bootstrap outputs before inserting explicit level drops."""
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type != 'bootstrapping':
+            continue
+        pred = next(graph.dag.predecessors(node))
+        output = next(graph.dag.successors(node))
+        graph.dag.nodes[output]['level'] = config.fhe_param.residual_max_level
+        graph.dag.nodes[node]['level_cost'] = graph.dag.nodes[pred]['level'] - config.fhe_param.residual_max_level
+
+
+def validate_final_feature_levels(graph: LayerAbstractGraph):
+    for feature in graph.dag.nodes:
+        if not isinstance(feature, FeatureNode):
+            continue
+        level = graph.dag.nodes[feature]['level']
+        producers = list(graph.dag.predecessors(feature))
+        consumers = list(graph.dag.successors(feature))
+        is_bootstrap_output = any(node.layer_type == 'bootstrapping' for node in producers)
+        # A retained public post-bootstrap gamma consumes one reserved scale
+        # level. Its input is the only non-bootstrap feature allowed at C+1.
+        is_scale_input = (
+            config.set_btp_scale is not None
+            and producers
+            and all(node.layer_type == 'drop_level' for node in producers)
+            and consumers
+            and all(node.layer_type in PCMGAMMA_PASS_THROUGH_TYPES and hasattr(node, 'btp_scale') for node in consumers)
+        )
+        maximum = (
+            config.fhe_param.residual_max_level
+            if is_bootstrap_output
+            else (config.fhe_param.max_level + int(bool(is_scale_input)))
+        )
+        if not 0 <= level <= min(maximum, config.fhe_param.residual_max_level):
+            raise ValueError(f'Final feature {feature.node_id} level {level} exceeds allowed level {maximum}')
+        if is_bootstrap_output and level != config.fhe_param.residual_max_level:
+            raise ValueError(f'Bootstrap output {feature.node_id} does not match the residual Q chain')
+
+
+def validate_encrypted_parameter_levels(graph: LayerAbstractGraph):
+    """Check parameter packing levels without requiring a size calibration."""
+    if config.deployment_mode != 'server_provisioned_runner':
+        return
+    params = generate_param_dict_for_graph()
+    for node in graph.dag.nodes:
+        if not isinstance(node, ComputeNode) or node.layer_type in {'bootstrapping', 'mpc_refresh', 'drop_level'}:
+            continue
+        level = min(graph.dag.nodes[pred]['level'] for pred in graph.dag.predecessors(node))
+        counts = FheScoreParam(graph.dag, node, params, level).get_encrypted_param_count()
+        for parameter_level in counts or {}:
+            if not 0 <= int(parameter_level) <= config.fhe_param.residual_max_level:
+                raise ValueError(
+                    f'Encrypted parameter {node.layer_id} level {parameter_level} exceeds residual Q maximum '
+                    f'{config.fhe_param.residual_max_level}'
+                )
 
 
 def dump_graph(
@@ -704,6 +777,10 @@ def dump_graph(
     insert_btp_scale_gamma_layers(graph)
     absorb_pcmgamma_layers(graph)
     recompute_final_level(graph)
+    restore_bootstrap_output_levels(graph)
+    transforms.insert_drop_level_layers(graph)
+    validate_final_feature_levels(graph)
+    validate_encrypted_parameter_levels(graph)
     if encrypted_parameter_storage_enabled() or getattr(config, 'pcm_encrypted_parameters', False):
         report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
         previous = getattr(graph, 'encrypted_parameter_dp_report', report)
@@ -719,7 +796,6 @@ def dump_graph(
             f'runtime={report["runtime_score"]}, refresh={report["refresh_score"]}, '
             f'storage={report["storage_score"]}; unaccounted={report["unaccounted"]}'
         )
-    transforms.insert_drop_level_layers(graph)
     if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
         final_report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
         convolution_layouts = {
@@ -837,6 +913,7 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.mat_pack_style = mat_pack_style
+    config.deployment_mode = deployment_mode
     config.pcm_encrypted_parameters = (
         deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_block_col_major'
     )

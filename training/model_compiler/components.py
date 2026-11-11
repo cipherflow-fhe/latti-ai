@@ -72,10 +72,16 @@ class FheParameter:
         self.ring_type = ring_type
         self.secret_hamming_weight = secret_hamming_weight
 
+    @property
+    def residual_max_level(self) -> int:
+        return len(self.q) - 1
+
     def to_dict(self) -> dict:
         return {
             'poly_modulus_degree': self.poly_modulus_degree,
-            'n_mult_level': self.max_level,
+            # The serialized profile describes the physical Q chain, not the
+            # smaller search budget reserved for parameter packing/scaling.
+            'n_mult_level': self.residual_max_level,
             'log_default_scale': self.log_default_scale,
             'param_name': self.name,
             'q': self.q,
@@ -204,6 +210,7 @@ class GlobalConfig:
             cls._instance.approx_poly_type = config_dict.get('APPROX_POLY_TYPE', 'polyact')
             cls._instance.set_max_level = config_dict.get('SET_LEVEL_MAX', True)
             cls._instance.set_btp_scale = None
+            cls._instance.deployment_mode = 'client_encrypted_input'
             cls._instance.bert_softmax_values_btp_scale = 1.0
             cls._instance.bert_softmax_denominator_btp_scale = 1.0
             cls._instance.bert_softmax_scaled_denominator_btp_scale = 1.0
