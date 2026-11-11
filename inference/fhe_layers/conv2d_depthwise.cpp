@@ -204,7 +204,7 @@ void Conv2DPackedDepthwiseLayer::prepare_weight_lazy() {
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
 
     // Cache values for on-demand generation
-    n_real_num_slot = param_.n();
+    n_real_num_slot = param_.max_slots();
     cached_input_block_size = input_shape_ct[0] * input_shape_ct[1];
 
     // Generate kernel masks
@@ -240,8 +240,7 @@ void Conv2DPackedDepthwiseLayer::prepare_weight_lazy() {
     input_rotate_units_.push_back(skip_[0] * 1);
 }
 
-CkksPlaintext
-Conv2DPackedDepthwiseLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j) const {
+CkksPlaintext Conv2DPackedDepthwiseLayer::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int j) const {
     const uint32_t packed_out_ct_idx = ct_idx;
     const uint32_t ki = j / kernel_shape_[1];
     const uint32_t kj = j % kernel_shape_[1];

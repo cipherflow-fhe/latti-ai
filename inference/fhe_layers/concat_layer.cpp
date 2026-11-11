@@ -235,7 +235,7 @@ void ConcatLayer::prepare_mask_data(const CkksParameter& param,
     CkksContext ctx = CkksContext::create_empty_context(param);
     uint32_t n_channel_per_block = prod(skip);
     uint32_t block_size = prod(shape * skip);
-    uint32_t n_real_num_slot = param.n();
+    uint32_t n_real_num_slot = param.max_slots();
 
     uint64_t total_channels = 0;
     for (auto n_ch : input_n_channels)
@@ -279,7 +279,7 @@ void ConcatLayer::prepare_mask_data_1d(const CkksParameter& param,
                                        const std::vector<uint32_t>& input_invalid_fills,
                                        int level) {
     CkksContext ctx = CkksContext::create_empty_context(param);
-    uint32_t n_real_num_slot = param.n();
+    uint32_t n_real_num_slot = param.max_slots();
 
     uint64_t total_channels = 0;
     for (auto n_ch : input_n_channels)
@@ -329,7 +329,7 @@ void ConcatLayer::prepare_mask_data_0d(const CkksParameter& param,
                                        const std::vector<uint32_t>& input_skip_scalars,
                                        int level) {
     CkksContext ctx = CkksContext::create_empty_context(param);
-    uint32_t n_real_num_slot = param.n();
+    uint32_t n_real_num_slot = param.max_slots();
 
     uint64_t total_channels = 0;
     for (auto n_ch : input_n_channels)

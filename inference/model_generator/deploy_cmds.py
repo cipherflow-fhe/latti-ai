@@ -29,8 +29,11 @@ from frontend.custom_task import *
 from inference.model_generator.layers.par_block_col_major_poly import ParBlockColMajorPoly
 from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
 from inference.model_generator.layers.par_block_col_major_softmax import (
-    ParBlockColMajorMultipleSquare, ParBlockColMajorHeadColSum, ParBlockColMajorInverseInit,
-    ParBlockColMajorInverseIter, ParBlockColMajorCtMul,
+    ParBlockColMajorMultipleSquare,
+    ParBlockColMajorHeadColSum,
+    ParBlockColMajorInverseInit,
+    ParBlockColMajorInverseIter,
+    ParBlockColMajorCtMul,
 )
 from inference.model_generator.layers.activation_layer import *
 from inference.model_generator.layers.add_pack import *
@@ -92,12 +95,7 @@ from inference.model_generator.layers.par_upper_diagonal_softmax import (
     ParUpperDiagonalInverseIter,
     ParUpperDiagonalMultipleSquare,
 )
-from training.model_compiler.components import (
-    PN12Default,
-    PN13Default,
-    PN14Default,
-    PN15Default,
-)
+from training.model_compiler.components import FHE_PARAMS
 from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
 
@@ -107,12 +105,7 @@ def read_config(config_path):
     return config_ctx
 
 
-_FHE_PARAMS = {
-    'PN12Default': PN12Default,
-    'PN13Default': PN13Default,
-    'PN14Default': PN14Default,
-    'PN15Default': PN15Default,
-}
+_FHE_PARAMS = FHE_PARAMS
 
 INPUT_MODES = {'ciphertext', 'plaintext'}
 PARAMETER_MODES = {'plaintext_lazy', 'plaintext_eager', 'encrypted_offline'}
@@ -124,7 +117,15 @@ def set_param(param_name):
         raise ValueError(f'Unsupported FHE parameter name: {param_name!r}')
     fhe = _FHE_PARAMS[param_name]
     log_n = fhe.poly_modulus_degree.bit_length() - 1
-    param = CkksParam.create_default_param(log_n, RingType.ConjugateInvariant)
+    param = CkksParam.create_custom_param(
+        log_n,
+        fhe.q,
+        fhe.p,
+        fhe.log_default_scale,
+        RingType(fhe.ring_type),
+        secret_hamming_weight=fhe.secret_hamming_weight,
+    )
+    param.max_level = fhe.max_level
     set_fhe_param(param)
     return param
 
@@ -274,7 +275,10 @@ def gen_custom_task(
 
     def _make_feature_nodes(feature_id, count, level):
         if _feature_input_is_plaintext(feature_id):
-            return [CkksPlaintextNode(feature_id + f'input{k}', is_ringt=True, scale=fhe_param.default_scale, level=0) for k in range(count)]
+            return [
+                CkksPlaintextNode(feature_id + f'input{k}', is_ringt=True, scale=fhe_param.default_scale, level=0)
+                for k in range(count)
+            ]
         return [CkksCiphertextNode(id=feature_id + f'input{k}', level=level) for k in range(count)]
 
     encrypted_parameter_arg_counts = {}
@@ -335,8 +339,10 @@ def gen_custom_task(
         elif source_id.startswith('convw_') and 'seed_weight_subgrid_stride' in layer_config:
             stride = layer_config['seed_weight_subgrid_stride']
             signature['layout'] = {
-                'kind': layer_config.get('seed_weight_layout', 'kernel'), 'stride': stride,
-                'group_size': math.prod(stride), 'storage_shape': signature['size'],
+                'kind': layer_config.get('seed_weight_layout', 'kernel'),
+                'stride': stride,
+                'group_size': math.prod(stride),
+                'storage_shape': signature['size'],
                 'kernel_shape': layer_config['kernel_shape'],
                 'input_geometry': config_info['feature'][layer_input_feature_ids[0]],
                 'output_geometry': config_info['feature'][layer_output_feature_ids[0]],
@@ -360,9 +366,9 @@ def gen_custom_task(
             arg = Argument(effective_id, nodes)
             signature = _parameter_signature(effective_id, arg_id, nodes)
             encrypted_parameter_signature.append(signature)
-            if "scale" in signature:
+            if 'scale' in signature:
                 for node in _flatten_nodes(nodes):
-                    node.metadata.scale = signature["scale"]
+                    node.metadata.scale = signature['scale']
             if runtime_lazy_parameters:
                 if encrypted_parameter_store_node is None:
                     raise ValueError('runtime_lazy parameter store node was not initialized')
@@ -392,26 +398,42 @@ def gen_custom_task(
                 _append_parameter_arg(f'matrix_{matrix_layer_id}_{counter}', [node])
                 encrypted_parameter_signature[-1].update(layer_id=matrix_layer_id, generator=attributes)
                 if source is not None:
-                    input_levels = [config_info['feature'][fid]['level']
-                                    for fid in config_info['layer'][matrix_layer_id]['feature_input']]
+                    input_levels = [
+                        config_info['feature'][fid]['level']
+                        for fid in config_info['layer'][matrix_layer_id]['feature_input']
+                    ]
                     encrypted_parameter_signature[-1].update(
                         scale=float(pcm_parameter_scale(attributes, input_levels, fhe_param)),
-                        use_site_level=int(use_level))
+                        use_site_level=int(use_level),
+                    )
                     node.metadata.scale = encrypted_parameter_signature[-1]['scale']
                     encrypted_parameter_signature[-1]['parameter_source'] = {
-                        key: value for key, value in source.items() if key != 'source_refs'}
+                        key: value for key, value in source.items() if key != 'source_refs'
+                    }
                 if op_class == 'ParBlockColMajorCPMM' and kind == 'row_chunk_seed':
                     layout = attributes['pcm_seed_layout']
                     encrypted_parameter_signature[-1].update(
-                        scale=layout['scale'], layout=layout,
-                        use_site_level=layout['use_site_level'])
+                        scale=layout['scale'], layout=layout, use_site_level=layout['use_site_level']
+                    )
                 node.metadata.scale = encrypted_parameter_signature[-1]['scale']
                 counter += 1
             else:
-                node = CkksPlaintextNode(f'{matrix_layer_id}_{node_id}_L{use_level}', scale=attributes['parameter_scale'], level=0, is_ringt=True)
-                custom_compute(inputs=[] if source is None or trigger is None else [trigger], output=node, type='encode_pt',
-                               attributes={**attributes, 'layer_id': matrix_layer_id,
-                                           **({'public_recipe': source['public_recipe']} if source else {})})
+                node = CkksPlaintextNode(
+                    f'{matrix_layer_id}_{node_id}_L{use_level}',
+                    scale=attributes['parameter_scale'],
+                    level=0,
+                    is_ringt=True,
+                )
+                custom_compute(
+                    inputs=[] if source is None or trigger is None else [trigger],
+                    output=node,
+                    type='encode_pt',
+                    attributes={
+                        **attributes,
+                        'layer_id': matrix_layer_id,
+                        **({'public_recipe': source['public_recipe']} if source else {}),
+                    },
+                )
             return node
 
         data_source.matrix_parameter_builder = build
@@ -437,16 +459,22 @@ def gen_custom_task(
             return nodes
         nodes = _make_feature_nodes(feature_id, count, level)
         input_args.append(Argument(feature_id, nodes))
-        if (parameter_mode == 'encrypted_offline' and _feature_input_is_plaintext(feature_id)
-                and config_info['feature'][feature_id].get('data_type') == 'feature_mat'):
+        if (
+            parameter_mode == 'encrypted_offline'
+            and _feature_input_is_plaintext(feature_id)
+            and config_info['feature'][feature_id].get('data_type') == 'feature_mat'
+        ):
             # A public plaintext input plus an offline encryption of zero enters
             # the existing rotation-based matrix algorithms without a level cost.
             consumer_id = feature_consumers[feature_id][0][0]
             zero = CkksCiphertextNode(id=f'{feature_id}_encrypted_zero', level=level)
             _append_parameter_arg(f'matrix_{consumer_id}_input_zero', [zero])
             encrypted_parameter_signature[-1].update(
-                layer_id=consumer_id, generator={'op_class': 'InputZero', 'type': 'zero'},
-                use_site_level=int(level), scale=float(fhe_param.default_scale))
+                layer_id=consumer_id,
+                generator={'op_class': 'InputZero', 'type': 'zero'},
+                use_site_level=int(level),
+                scale=float(fhe_param.default_scale),
+            )
             nodes = [add(materialize_encrypted_param(zero, pt), pt) for pt in nodes]
         feature_id_to_nodes_map[feature_id] = nodes
         return nodes
@@ -730,9 +758,20 @@ def gen_custom_task(
                     )
                     n_packed = layer.total_cts
                 elif consumer_type in {
-                    'pcmstats', 'pcmcenter', 'pcmgamma', 'pcmpoly', 'add', 'add2d', 'pcm_add_pt',
-                    'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit', 'pcminviter',
-                    'pcmctmul', 'pcmpolymultct',
+                    'pcmstats',
+                    'pcmcenter',
+                    'pcmgamma',
+                    'pcmpoly',
+                    'add',
+                    'add2d',
+                    'pcm_add_pt',
+                    'pcmgeneralpoly',
+                    'pcmmulsquare',
+                    'pcmheadcolsum',
+                    'pcminvinit',
+                    'pcminviter',
+                    'pcmctmul',
+                    'pcmpolymultct',
                 }:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
@@ -768,8 +807,20 @@ def gen_custom_task(
 
     _PAR_MATRIX_LAYER_TYPES = {'parcpmm', 'parccmm', 'partranspose', 'pcm_add_pt'}
     _PCM_LAYER_TYPES = {
-        'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit', 'pcminviter', 'pcmctmul',
-        'pcmpolymultct', 'pcmstats', 'pcmcenter', 'pcminit', 'pcmgs', 'pcmaffine', 'pcmgamma', 'pcmpoly',
+        'pcmgeneralpoly',
+        'pcmmulsquare',
+        'pcmheadcolsum',
+        'pcminvinit',
+        'pcminviter',
+        'pcmctmul',
+        'pcmpolymultct',
+        'pcmstats',
+        'pcmcenter',
+        'pcminit',
+        'pcmgs',
+        'pcmaffine',
+        'pcmgamma',
+        'pcmpoly',
     }
     _PDM_MATRIX_LAYER_TYPES = {'pdmpcmm', 'pdmccmm', 'pdmtranspose', 'pdm_add_pt'}
     _PDM_LAYER_TYPES = {
@@ -987,8 +1038,11 @@ def gen_custom_task(
                         if seed_mask_pt:
                             input_args.append(Argument(f'convseedm_{layer_id}', seed_mask_pt))
                         layer_output_nodes = conv0_layer.call(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt,
-                            [], seed_mask_pt=seed_mask_pt
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_pt,
+                            bias_pt,
+                            [],
+                            seed_mask_pt=seed_mask_pt,
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
                 if style == 'multiplexed':
@@ -1060,8 +1114,11 @@ def gen_custom_task(
                         input_args.append(Argument(f'convw_{layer_id}', weight_pt))
                         input_args.append(Argument(f'convb_{layer_id}', bias_pt))
                         layer_output_nodes = conv0_layer.call(
-                            feature_id_to_nodes_map[layer_input_feature_ids[0]], weight_pt, bias_pt, mask_pt,
-                            seed_mask_pt=seed_mask_pt
+                            feature_id_to_nodes_map[layer_input_feature_ids[0]],
+                            weight_pt,
+                            bias_pt,
+                            mask_pt,
+                            seed_mask_pt=seed_mask_pt,
                         )
                         feature_id_to_nodes_map.update({layer_output_feature_ids[0]: layer_output_nodes})
 
@@ -1150,10 +1207,14 @@ def gen_custom_task(
 
             else:  # dim == 2
                 input_shape = feat['shape']
-                polyrelu = PolyRelu2D(input_shape, order, skip, pack,
-                                     block_expansion=[math.ceil(input_shape[i] / block_shape[i]) for i in range(2)],
-                                     seed_layout=layer_config.get('poly_seed_layout')
-                                     if parameter_mode == 'encrypted_offline' else None)
+                polyrelu = PolyRelu2D(
+                    input_shape,
+                    order,
+                    skip,
+                    pack,
+                    block_expansion=[math.ceil(input_shape[i] / block_shape[i]) for i in range(2)],
+                    seed_layout=layer_config.get('poly_seed_layout') if parameter_mode == 'encrypted_offline' else None,
+                )
                 if lazy:
                     poly_data_source = CustomDataNode(type='poly_data_source', id=f'{layer_id}')
                     layer_output_nodes = polyrelu.call_bsgs_lazy(feature_id_in_nodes, poly_data_source, layer_id)
@@ -1421,16 +1482,29 @@ def gen_custom_task(
                 for fid, channels, input_pack in zip(layer_input_feature_ids, input_n_channels, input_packs):
                     feat = config_info['feature'][fid]
                     for local_ch in range(channels):
-                        mask = CkksPlaintextNode(f'concat_mask_{layer_id}_{len(masks)}', is_ringt=True, scale=float(fhe_param.q[feat['level']]), level=0)
+                        mask = CkksPlaintextNode(
+                            f'concat_mask_{layer_id}_{len(masks)}',
+                            is_ringt=True,
+                            scale=float(fhe_param.q[feat['level']]),
+                            level=0,
+                        )
                         if parameter_mode == 'encrypted_offline':
                             if feat['dim'] != 0:
                                 _unsupported_encrypted_parameter_layer(layer_id, layer_config['type'])
                             sk = feat.get('skip', 1)
                             slot = (local_ch % input_pack) * int(sk[0] if isinstance(sk, list) else sk)
                             source = feature_id_to_nodes_map[fid][local_ch // input_pack]
-                            custom_compute(inputs=[], output=mask, type='encode_pt',
-                                           attributes={'op_class': 'ConcatLayer', 'type': 'mask_0d_pt',
-                                                       'slot': slot, 'level': source.metadata.level})
+                            custom_compute(
+                                inputs=[],
+                                output=mask,
+                                type='encode_pt',
+                                attributes={
+                                    'op_class': 'ConcatLayer',
+                                    'type': 'mask_0d_pt',
+                                    'slot': slot,
+                                    'level': source.metadata.level,
+                                },
+                            )
                         masks.append(mask)
                 if parameter_mode != 'encrypted_offline':
                     input_args.append(Argument(f'concat_mask_{layer_id}', masks))
@@ -1518,11 +1592,21 @@ def gen_custom_task(
                 select_tensor_pt = upsample_layer.make_pt_nodes(layer_id, n_in_channel)
                 if parameter_mode == 'encrypted_offline':
                     for i, mask in enumerate(select_tensor_pt):
-                        custom_compute(inputs=[], output=mask, type='encode_pt',
-                                       attributes={'op_class': 'UpsampleNearestLayer', 'type': 'mask_pt',
-                                                   'input_shape': input_shape, 'skip': skip,
-                                                   'upsample_factor': upsample_factor,
-                                                   'n_channel_per_ct': pack, 'level': level, 'i': i})
+                        custom_compute(
+                            inputs=[],
+                            output=mask,
+                            type='encode_pt',
+                            attributes={
+                                'op_class': 'UpsampleNearestLayer',
+                                'type': 'mask_pt',
+                                'input_shape': input_shape,
+                                'skip': skip,
+                                'upsample_factor': upsample_factor,
+                                'n_channel_per_ct': pack,
+                                'level': level,
+                                'i': i,
+                            },
+                        )
                 layer_output_nodes = upsample_layer.call(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     select_tensor_pt,
@@ -1559,7 +1643,9 @@ def gen_custom_task(
                 need_repack = any(output_shape[i] < block_shape[i] for i in range(len(stride)))
                 repack_mask_pt = None
                 if need_repack:
-                    repack_mask_pt = CkksPlaintextNode(f'repack_mask_{layer_id}', is_ringt=True, scale=float(fhe_param.q[level]), level=0)
+                    repack_mask_pt = CkksPlaintextNode(
+                        f'repack_mask_{layer_id}', is_ringt=True, scale=float(fhe_param.q[level]), level=0
+                    )
                 layer_output_nodes = avgpool.call_interleaved_avgpool(
                     feature_id_to_nodes_map[layer_input_feature_ids[0]],
                     block_expansion,
@@ -1594,7 +1680,10 @@ def gen_custom_task(
                         out_channels_per_ct = n_channel_per_ct * stride[0]
                         n_select_pt = min(n_in_channel, out_channels_per_ct)
                         select_tensor_pt = [
-                            CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True, scale=float(fhe_param.q[level]), level=0) for i in range(n_select_pt)
+                            CkksPlaintextNode(
+                                f'select_pt_{layer_id}_{i}', is_ringt=True, scale=float(fhe_param.q[level]), level=0
+                            )
+                            for i in range(n_select_pt)
                         ]
                         layer_output_nodes = avgpool.call_multiplexed_avgpool(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]],
@@ -1617,7 +1706,10 @@ def gen_custom_task(
                         out_channels_per_ct = n_channel_per_ct * stride[0] * stride[1]
                         n_select_pt = min(n_in_channel, out_channels_per_ct)
                         select_tensor_pt = [
-                            CkksPlaintextNode(f'select_pt_{layer_id}_{i}', is_ringt=True, scale=float(fhe_param.q[level]), level=0) for i in range(n_select_pt)
+                            CkksPlaintextNode(
+                                f'select_pt_{layer_id}_{i}', is_ringt=True, scale=float(fhe_param.q[level]), level=0
+                            )
+                            for i in range(n_select_pt)
                         ]
                         layer_output_nodes = avgpool.call_multiplexed_avgpool(
                             feature_id_to_nodes_map[layer_input_feature_ids[0]],
@@ -1646,7 +1738,9 @@ def gen_custom_task(
                     n_packed_in_feature,
                     n_packed_out_feature,
                     invalid_fill=[1, skip_0d],
-                    seed_tile_layout=layer_config.get('dense_seed_tiles') if parameter_mode == 'encrypted_offline' else None,
+                    seed_tile_layout=layer_config.get('dense_seed_tiles')
+                    if parameter_mode == 'encrypted_offline'
+                    else None,
                 )
                 if lazy:
                     dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
@@ -1732,7 +1826,9 @@ def gen_custom_task(
                         n_in_channel,
                         n_out_channel,
                         invalid_fill=invalid_fill,
-                        seed_tile_layout=layer_config.get('dense_seed_tiles') if parameter_mode == 'encrypted_offline' else None,
+                        seed_tile_layout=layer_config.get('dense_seed_tiles')
+                        if parameter_mode == 'encrypted_offline'
+                        else None,
                     )
                     if lazy:
                         dense_data_source = CustomDataNode(type='fc_data_source', id=f'{layer_id}')
@@ -2112,16 +2208,22 @@ def gen_custom_task(
             )
 
         elif layer_config['type'] in {
-            'pcmpolymultct', 'pcmheadcolsum', 'pcmctmul', 'pcminvinit', 'pcmgeneralpoly', 'pcminviter', 'pcmmulsquare',
+            'pcmpolymultct',
+            'pcmheadcolsum',
+            'pcmctmul',
+            'pcminvinit',
+            'pcmgeneralpoly',
+            'pcminviter',
+            'pcmmulsquare',
         }:
             layer_type = layer_config['type']
             n_heads = _require_positive_task_config_int('n_heads', layer_id, layer_type)
             input_fid = layer_input_feature_ids[0]
             feat_in = config_info['feature'][input_fid]
             shape = tuple(feat_in['shape'])
-            head_shape = tuple(feat_in.get(
-                'head_shape', par_feature_shapes.get(input_fid, (shape[0], _matmul_block_size()))
-            ))
+            head_shape = tuple(
+                feat_in.get('head_shape', par_feature_shapes.get(input_fid, (shape[0], _matmul_block_size())))
+            )
             args = (shape, head_shape, n_heads, n)
             if layer_type == 'pcmgeneralpoly':
                 layer = ParBlockColMajorPoly(*args, int(layer_config.get('order', 15)), _matmul_block_size())

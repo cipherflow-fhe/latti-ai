@@ -34,8 +34,11 @@ from inference.model_generator.layers.par_block_col_major_poly import ParBlockCo
 from inference.model_generator.parameter_sources import resolve_pcm_parameter_source
 from inference.model_generator.layers.par_block_col_major_poly_mult_ct import ParBlockColMajorPolyMultCt
 from inference.model_generator.layers.par_block_col_major_softmax import (
-    ParBlockColMajorMultipleSquare, ParBlockColMajorHeadColSum, ParBlockColMajorInverseInit,
-    ParBlockColMajorInverseIter, ParBlockColMajorCtMul,
+    ParBlockColMajorMultipleSquare,
+    ParBlockColMajorHeadColSum,
+    ParBlockColMajorInverseInit,
+    ParBlockColMajorInverseIter,
+    ParBlockColMajorCtMul,
 )
 from inference.model_generator.layers.activation_layer import SquareLayer
 from inference.model_generator.layers.add_pack import AddLayer
@@ -932,16 +935,26 @@ with open(Path(__file__).with_name('encrypted_parameter_size.json'), encoding='u
 def encrypted_parameter_storage_enabled():
     return getattr(config, 'encrypted_parameter_storage_weight', 0.0) > 0
 
+
 def encrypted_parameter_storage_normalization_bytes():
     return getattr(config, 'encrypted_parameter_storage_normalization_bytes', 1 << 30)
 
 
-def encrypted_parameter_bytes(param, level):
+def _encrypted_parameter_calibration(param):
     calibration = ENCRYPTED_PARAMETER_SIZE
+    if param.name != calibration['parameter']['param_name']:
+        calibration = calibration.get('additional_profiles', {}).get(param.name)
+    if calibration is None:
+        raise ValueError(f'No encrypted parameter size calibration for {param.name}')
     actual = param.to_dict()
     expected = calibration['parameter']
     if any(actual.get(key) != value for key, value in expected.items() if key != 'n_mult_level'):
         raise ValueError(f'No encrypted parameter size calibration for {param.name}')
+    return calibration
+
+
+def encrypted_parameter_bytes(param, level):
+    calibration = _encrypted_parameter_calibration(param)
     if str(level) not in calibration['bytes_per_element']:
         raise ValueError(f'Uncalibrated encrypted parameter level: {level}')
     return calibration['bytes_per_element'][str(level)]
@@ -952,15 +965,25 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
     report = {
         'weight': config.encrypted_parameter_storage_weight,
         'normalization_bytes': encrypted_parameter_storage_normalization_bytes(),
-        'calibration': ENCRYPTED_PARAMETER_SIZE,
+        'calibration': _encrypted_parameter_calibration(next(iter(param_dict.values()))),
         'runtime_score': 0.0,
         'refresh_score': 0.0,
         'storage_bytes': 0,
         'layers': [],
         'unaccounted': [],
     }
-    public_layers = {'add', 'add2d', 'reshape', 'drop_level', 'avgpool1d', 'avgpool2d',
-                     'concat', 'concat2d', 'upsample_nearest', 'resize'}
+    public_layers = {
+        'add',
+        'add2d',
+        'reshape',
+        'drop_level',
+        'avgpool1d',
+        'avgpool2d',
+        'concat',
+        'concat2d',
+        'upsample_nearest',
+        'resize',
+    }
     if getattr(config, 'pcm_encrypted_parameters', False):
         zeros = set()
         for feature in dag.nodes:
@@ -970,8 +993,9 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
                 if key not in zeros:
                     zeros.add(key)
                     size = encrypted_parameter_bytes(param_dict[key[0]], level)
-                    report['layers'].append(dict(layer_id=feature.node_id, type='InputZero',
-                                                 counts={level: {'zero': 1}}, bytes=size))
+                    report['layers'].append(
+                        dict(layer_id=feature.node_id, type='InputZero', counts={level: {'zero': 1}}, bytes=size)
+                    )
                     report['storage_bytes'] += size
     for node in nx.topological_sort(dag):
         if not isinstance(node, ComputeNode):
@@ -999,8 +1023,15 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
         if storage is None:
             report['unaccounted'].append({'layer_id': node.layer_id, 'type': node.layer_type})
             continue
-        report['layers'].append({'layer_id': node.layer_id, 'type': node.layer_type,
-                                'input_level': level, 'parameter_use_site_level': score_param.get_parameter_use_site_level(), **storage})
+        report['layers'].append(
+            {
+                'layer_id': node.layer_id,
+                'type': node.layer_type,
+                'input_level': level,
+                'parameter_use_site_level': score_param.get_parameter_use_site_level(),
+                **storage,
+            }
+        )
         report['storage_bytes'] += storage['bytes']
     report['storage_score'] = report['weight'] * report['storage_bytes'] / report['normalization_bytes']
     report['total_score'] = report['runtime_score'] + report['refresh_score'] + report['storage_score']
@@ -1090,8 +1121,7 @@ class FheScoreParam:
         style = config.style
 
         op_counts = self._build_layer_and_get_op_count(preds, n, layer_type, style)
-        if (op_counts and getattr(config, 'pcm_encrypted_parameters', False)
-                and layer_type.startswith('pcm')):
+        if op_counts and getattr(config, 'pcm_encrypted_parameters', False) and layer_type.startswith('pcm'):
             if isinstance(next(iter(op_counts)), str):
                 op_counts = {self.input_mult_level: op_counts}
             for lv, kinds in self._pcm_parameter_counts(preds, self.input_mult_level).items():
@@ -1107,15 +1137,19 @@ class FheScoreParam:
                             continue
                     if parameter == 'pt':
                         idx = int(kind.rsplit('=', 1)[1])
-                        if ((layer_type == 'pcmstats' and idx == 3) or
-                                (layer_type == 'pcminit' and idx == 0) or
-                                (layer_type == 'pcmaffine' and idx == 1)):
+                        if (
+                            (layer_type == 'pcmstats' and idx == 3)
+                            or (layer_type == 'pcminit' and idx == 0)
+                            or (layer_type == 'pcmaffine' and idx == 1)
+                        ):
                             continue
                         if layer_type in {'pcmstats', 'pcminit'}:
-                            count *= math.ceil(preds[0].shape[0]/config.matmul_block_size)
+                            count *= math.ceil(preds[0].shape[0] / config.matmul_block_size)
                     if lv not in op_counts or op_counts[lv]['mult_plain'] < count:
-                        raise ValueError(f'PCM parameter operation count mismatch: {self.compute_node.layer_id} '
-                                         f'{layer_type} {kind} L{lv} count={count} ops={op_counts}')
+                        raise ValueError(
+                            f'PCM parameter operation count mismatch: {self.compute_node.layer_id} '
+                            f'{layer_type} {kind} L{lv} count={count} ops={op_counts}'
+                        )
                     op_counts[lv]['mult_plain'] -= count
                     op_counts[lv]['mult'] += count
         if op_counts is None:
@@ -1153,8 +1187,11 @@ class FheScoreParam:
             return None
         result = {
             'counts': counts,
-            'bytes': sum(count * encrypted_parameter_bytes(self.parameter, level)
-                         for level, kinds in counts.items() for count in kinds.values()),
+            'bytes': sum(
+                count * encrypted_parameter_bytes(self.parameter, level)
+                for level, kinds in counts.items()
+                for count in kinds.values()
+            ),
         }
         if getattr(self, 'dense_seed_tiles', None):
             result['dense_seed_tiles'] = self.dense_seed_tiles
@@ -1170,8 +1207,9 @@ class FheScoreParam:
         # Match transforms.insert_drop_level_layers(): excess input levels are
         # dropped before the operator, including at a bootstrapping output.
         output = next(self.dag.successors(self.compute_node))
-        return min(self.input_mult_level,
-                   self.dag.nodes[output]['level'] + self.dag.nodes[self.compute_node]['level_cost'])
+        return min(
+            self.input_mult_level, self.dag.nodes[output]['level'] + self.dag.nodes[self.compute_node]['level_cost']
+        )
 
     def get_encrypted_param_count(self):
         preds = list(self.dag.predecessors(self.compute_node))
@@ -1190,11 +1228,12 @@ class FheScoreParam:
         level = self.get_parameter_use_site_level() if level is None else level
         d, heads, slots = config.matmul_block_size, config.n_heads, self.parameter.n_slots
         rows, cols = preds[0].shape
-        hp = 1 << (heads-1).bit_length()
-        lanes = min(hp, slots//(d*d))
-        if lanes == 1: hp = heads
-        groups = hp//lanes
-        row_cts = math.ceil(rows/d)
+        hp = 1 << (heads - 1).bit_length()
+        lanes = min(hp, slots // (d * d))
+        if lanes == 1:
+            hp = heads
+        groups = hp // lanes
+        row_cts = math.ceil(rows / d)
         counts = {}
         sources = dict(parameter_sources=getattr(node, 'parameter_sources', {}))
 
@@ -1209,20 +1248,26 @@ class FheScoreParam:
                 by_kind[key] = by_kind.get(key, 0) + count
 
         if kind == 'parcpmm':
-            layer = ParBlockColMajorCPMM(tuple(preds[0].head_shape), tuple(node.weight_shape),
-                                         d, heads, slots, bool(getattr(node, 'bias_path', '')))
+            layer = ParBlockColMajorCPMM(
+                tuple(preds[0].head_shape),
+                tuple(node.weight_shape),
+                d,
+                heads,
+                slots,
+                bool(getattr(node, 'bias_path', '')),
+            )
             layout = layer.seed_layout(level, float(self.parameter.q[level]))
             self.pcm_seed_layout = layout
-            item('ParBlockColMajorCPMM', 'row_chunk_seed', level+1, layout['seed_count'])
+            item('ParBlockColMajorCPMM', 'row_chunk_seed', level + 1, layout['seed_count'])
             if layer.has_bias:
-                item('ParBlockColMajorCPMM', 'bias_pt', level-2, layer.n_out_mbs*row_cts*groups)
+                item('ParBlockColMajorCPMM', 'bias_pt', level - 2, layer.n_out_mbs * row_cts * groups)
         elif kind in {'pcm_add_pt', 'pcmgamma', 'pcmpoly', 'pcmaffine', 'pcmgeneralpoly'}:
             k = getattr(node, 'K', 1)
-            head_cols = cols//(heads*k)
+            head_cols = cols // (heads * k)
             if kind in {'pcmgamma', 'pcmgeneralpoly'}:
                 head_cols = preds[0].head_shape[1]
-                k = math.ceil(cols/(heads*head_cols))
-            total = k*row_cts*math.ceil(head_cols/d)*groups
+                k = math.ceil(cols / (heads * head_cols))
+            total = k * row_cts * math.ceil(head_cols / d) * groups
             if kind == 'pcmgamma' and cols == 1:
                 total = row_cts
             if kind == 'pcm_add_pt':
@@ -1233,34 +1278,37 @@ class FheScoreParam:
                 ordered = sorted(preds, key=lambda p: self.dag.edges[p, node].get('input_index', 0))
                 ylevel = self.dag.nodes[ordered[1]]['level']
                 if not runtime_levels:
-                    ylevel = min(ylevel, self.output_mult_level+2)
+                    ylevel = min(ylevel, self.output_mult_level + 2)
                 item('ParBlockColMajorLNAffine', 'pt', ylevel, total, pt_idx=0)
-                item('ParBlockColMajorLNAffine', 'pt', ylevel-2, total, pt_idx=1)
+                item('ParBlockColMajorLNAffine', 'pt', ylevel - 2, total, pt_idx=1)
             elif kind == 'pcmpoly':
                 order = getattr(node, 'order', 4)
-                levels = [level-2, level, level-1, level, level-1]
-                for degree in range(order+1):
+                levels = [level - 2, level, level - 1, level, level - 1]
+                for degree in range(order + 1):
                     item('ParBlockColMajorPolyActRNPoly', 'coeff_pt', levels[degree], total, coeff_idx=degree)
             else:
                 order = node.order
                 cost = ParBlockColMajorPoly.compute_stockmeyer_level_cost(order)
-                babies = (order+4)//4
+                babies = (order + 4) // 4
+
                 def visit(start, span, actual, target):
                     if span == 1:
-                        for degree in range(start*4, min(order+1, start*4+4)):
+                        for degree in range(start * 4, min(order + 1, start * 4 + 4)):
                             off = degree % 4
                             lv = target + (0 if off == 0 else 2 if off == 3 else 1)
                             item('ParBlockColMajorPoly', 'stockmeyer_coeff_pt', lv, total, coeff_idx=degree)
                         return
-                    half = span//2
+                    half = span // 2
                     visit(start, half, min(actual, half), target)
-                    if actual > half: visit(start+half, half, actual-half, target+1)
-                visit(0, 1 << (babies-1).bit_length(), babies, level-cost)
+                    if actual > half:
+                        visit(start + half, half, actual - half, target + 1)
+
+                visit(0, 1 << (babies - 1).bit_length(), babies, level - cost)
         elif kind == 'pcmstats':
-            item('ParBlockColMajorLNStats', 'pt', level-3, pt_idx=2)
-            item('ParBlockColMajorLNStats', 'pt', level-4, pt_idx=3)
+            item('ParBlockColMajorLNStats', 'pt', level - 3, pt_idx=2)
+            item('ParBlockColMajorLNStats', 'pt', level - 4, pt_idx=3)
         elif kind == 'pcminit':
-            for idx, lv in enumerate([level-2, level, level-1]):
+            for idx, lv in enumerate([level - 2, level, level - 1]):
                 item('ParBlockColMajorLNMinimaxInit', 'pt', lv, pt_idx=idx)
         return counts
 
@@ -1329,11 +1377,15 @@ class FheScoreParam:
                     )
                 if getattr(node, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
                     self.convolution_seed_layout = choose_convolution_seed_layout(
-                        layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+                        layer,
+                        self.get_parameter_use_site_level(),
+                        lambda lv: encrypted_parameter_bytes(self.parameter, lv),
+                    )
                 if encrypted_param_count:
                     return layer.get_encrypted_param_count(parameter_level)
                 return layer.get_fhe_op_count(
-                    self.get_parameter_use_site_level() if layer.use_seed_weight_pack else self.input_mult_level, n)
+                    self.get_parameter_use_site_level() if layer.use_seed_weight_pack else self.input_mult_level, n
+                )
 
             if style == 'ordinary':
                 if is_depthwise:
@@ -1396,7 +1448,8 @@ class FheScoreParam:
                 )
             if getattr(node, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
                 self.convolution_seed_layout = choose_convolution_seed_layout(
-                    layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+                    layer, self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv)
+                )
             if encrypted_param_count:
                 return layer.get_encrypted_param_count(parameter_level)
             if layer.use_seed_weight_pack:
@@ -1488,10 +1541,15 @@ class FheScoreParam:
                     )
                     if pack_0d == 1 and getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
                         self.dense_seed_tiles = layer.choose_seed_tile_layout(
-                            n, self.get_parameter_use_site_level(),
-                            lambda lv: encrypted_parameter_bytes(self.parameter, lv))
-                    return (layer.get_encrypted_param_count_skip_0d(parameter_level) if encrypted_param_count
-                            else layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level))
+                            n,
+                            self.get_parameter_use_site_level(),
+                            lambda lv: encrypted_parameter_bytes(self.parameter, lv),
+                        )
+                    return (
+                        layer.get_encrypted_param_count_skip_0d(parameter_level)
+                        if encrypted_param_count
+                        else layer.get_fhe_op_count_skip_0d(n_packed_in_feat, skip_0d, self.input_mult_level)
+                    )
 
                 elif len(special_shape) == 1:
                     # 1D multiplexed
@@ -1515,16 +1573,17 @@ class FheScoreParam:
                         invalid_fill=[invalid_fill_1d, 1],
                     )
                     n_input_ct = math.ceil(n_in / n_channel_per_ct_1d)
-                    return (layer.get_encrypted_param_count_1d_multiplexed(n, parameter_level) if encrypted_param_count
-                            else layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level))
+                    return (
+                        layer.get_encrypted_param_count_1d_multiplexed(n, parameter_level)
+                        if encrypted_param_count
+                        else layer.get_fhe_op_count_1d_multiplexed(n_input_ct, n, self.input_mult_level)
+                    )
 
                 else:
                     # 2D multiplexed
                     special_skip = sp_info.get('skip', [1, 1])
                     invalid_fill = sp_info.get('invalid_fill', [1, 1])
-                    n_ct_mult = math.ceil(
-                        n / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1])
-                    )
+                    n_ct_mult = math.ceil(n / (special_shape[0] * special_skip[0] * special_shape[1] * special_skip[1]))
                     layer = DensePackedLayer(
                         n_out,
                         n_in,
@@ -1537,11 +1596,16 @@ class FheScoreParam:
                     )
                     if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
                         self.dense_seed_tiles = layer.choose_seed_tile_layout(
-                            n, self.get_parameter_use_site_level(),
-                            lambda lv: encrypted_parameter_bytes(self.parameter, lv))
+                            n,
+                            self.get_parameter_use_site_level(),
+                            lambda lv: encrypted_parameter_bytes(self.parameter, lv),
+                        )
                     n_input_ct = math.ceil(n_in / pack)
-                    return (layer.get_encrypted_param_count_multiplexed(n, parameter_level) if encrypted_param_count
-                            else layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level))
+                    return (
+                        layer.get_encrypted_param_count_multiplexed(n, parameter_level)
+                        if encrypted_param_count
+                        else layer.get_fhe_op_count_multiplexed(n_input_ct, n, self.input_mult_level)
+                    )
             return None
 
         # ── avgpool ──────────────────────────────────────────────────────────
@@ -1596,39 +1660,60 @@ class FheScoreParam:
                 n_channel_per_ct_0d = int(n // skip_0d)
                 layer = PolyRelu0D(order, skip_0d, n_channel_per_ct_0d)
                 n_input_ct = n_packed_in
-                return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
-                    else layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level))
+                return (
+                    layer.get_encrypted_param_count(n_packed_in, parameter_level)
+                    if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_feature0d(n_input_ct, self.input_mult_level)
+                )
             if pred.dim == 1:
                 shape_1d = pred.shape[0]
                 skip_1d = pred.sp_info['skip'][0] if isinstance(pred.sp_info.get('skip'), list) else 1
                 if style == 'multiplexed':
                     n_channel_per_ct_1d = int(n // shape_1d)
                     layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                    return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
-                    else layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level))
+                    return (
+                        layer.get_encrypted_param_count(n_packed_in, parameter_level)
+                        if encrypted_param_count
+                        else layer.get_fhe_op_count_bsgs_mux(n_packed_in, self.input_mult_level)
+                    )
                 n_channel_per_ct_1d = int(n // shape_1d // skip_1d)
                 layer = PolyRelu1D(shape_1d, order, skip_1d, n_channel_per_ct_1d)
-                return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
-                    else layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level))
+                return (
+                    layer.get_encrypted_param_count(n_packed_in, parameter_level)
+                    if encrypted_param_count
+                    else layer.get_fhe_op_count_bsgs_skip(n_packed_in, self.input_mult_level)
+                )
             # dim == 2
             input_shape = self.input_shape
             skip = self.input_skip
             block_expansion = [math.ceil(input_shape[i] / config.block_shape[i]) for i in range(2)]
             n_packed_in = math.ceil(n_in / pack) * math.prod(block_expansion)
             layer = PolyRelu2D(input_shape, order, skip, pack, block_expansion=block_expansion)
-            if (style == 'multiplexed' and getattr(node, 'zero_skip', [1, 1]) == [1, 1]):
+            if style == 'multiplexed' and getattr(node, 'zero_skip', [1, 1]) == [1, 1]:
                 self.poly_seed_layout = layer.choose_seed_layout(
-                    getattr(config, 'seed_weight_subgrid_stride', [1, 1]), n, n_packed_in,
-                    self.get_parameter_use_site_level(), lambda lv: encrypted_parameter_bytes(self.parameter, lv))
-            return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
-                    else layer.get_fhe_op_count_bsgs_feature2d(n_packed_in, self.get_parameter_use_site_level()
-                                                              if layer.poly_seed_layout else self.input_mult_level))
+                    getattr(config, 'seed_weight_subgrid_stride', [1, 1]),
+                    n,
+                    n_packed_in,
+                    self.get_parameter_use_site_level(),
+                    lambda lv: encrypted_parameter_bytes(self.parameter, lv),
+                )
+            return (
+                layer.get_encrypted_param_count(n_packed_in, parameter_level)
+                if encrypted_param_count
+                else layer.get_fhe_op_count_bsgs_feature2d(
+                    n_packed_in,
+                    self.get_parameter_use_site_level() if layer.poly_seed_layout else self.input_mult_level,
+                )
+            )
 
         # ── mult_scalar ──────────────────────────────────────────────────────
         elif layer_type == 'mult_scalar':
             layer = MultScalarLayer()
-            return (layer.get_encrypted_param_count(n_packed_in, parameter_level) if encrypted_param_count
-                    else layer.get_fhe_op_count(n_packed_in, self.input_mult_level))
+            return (
+                layer.get_encrypted_param_count(n_packed_in, parameter_level)
+                if encrypted_param_count
+                else layer.get_fhe_op_count(n_packed_in, self.input_mult_level)
+            )
 
         # ── add / add2d ──────────────────────────────────────────────────────
         elif layer_type in ('add', 'add2d'):
@@ -1688,8 +1773,13 @@ class FheScoreParam:
             except (AssertionError, ValueError, TypeError):
                 return None
         elif layer_type in (
-            'pcmgeneralpoly', 'pcmmulsquare', 'pcmheadcolsum', 'pcminvinit',
-            'pcminviter', 'pcmctmul', 'pcmpolymultct',
+            'pcmgeneralpoly',
+            'pcmmulsquare',
+            'pcmheadcolsum',
+            'pcminvinit',
+            'pcminviter',
+            'pcmctmul',
+            'pcmpolymultct',
         ):
             feat = preds[0]
             shape = tuple(feat.shape)
@@ -1968,9 +2058,11 @@ class FheScoreParam:
                     n_heads=config.n_heads,
                     n_slot=n_slot,
                 )
-                return (layer.get_compact_fhe_op_count(self.input_mult_level)
-                        if getattr(config, 'pcm_encrypted_parameters', False)
-                        else layer.get_fhe_op_count(self.input_mult_level))
+                return (
+                    layer.get_compact_fhe_op_count(self.input_mult_level)
+                    if getattr(config, 'pcm_encrypted_parameters', False)
+                    else layer.get_fhe_op_count(self.input_mult_level)
+                )
             except (AssertionError, ValueError):
                 return None
         elif layer_type == 'pdmpcmm':

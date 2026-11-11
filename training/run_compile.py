@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from model_compiler.pipeline import run_pipeline
+from model_compiler.components import FHE_PARAMS
 from model_export.onnx_to_json import onnx_to_json
 from nn_tools import export_h5_from_onnx
 
@@ -153,9 +154,11 @@ def infer_model_type(input_path: Path) -> str:
 
         model = onnx.load(str(input_path), load_external_data=False)
         is_bert = any(
-            node.op_type in ('CustomGELU', 'CustomTanh') or
-            (node.op_type == 'CustomMultiHeadAttention' and
-             any(attr.name == 'exp_coefficients' for attr in node.attribute))
+            node.op_type in ('CustomGELU', 'CustomTanh')
+            or (
+                node.op_type == 'CustomMultiHeadAttention'
+                and any(attr.name == 'exp_coefficients' for attr in node.attribute)
+            )
             for node in model.graph.node
         )
     else:
@@ -235,6 +238,13 @@ Examples:
         choices=['ordinary', 'multiplexed'],
         default='multiplexed',
         help='Computation style: ordinary or multiplexed (default: multiplexed)',
+    )
+
+    parser.add_argument(
+        '--fhe-param',
+        choices=sorted(FHE_PARAMS),
+        default=None,
+        help='Use a specific CKKS profile; default: automatic CI selection',
     )
 
     parser.add_argument('--graph_type', type=str, choices=['btp'], default='btp', help='Graph type: btp (default: btp)')
@@ -354,6 +364,7 @@ Examples:
 
     try:
         run_pipeline(
+            fhe_param_name=args.fhe_param,
             num_experiments=args.num_experiments,
             input_file_path=pt_json_path,
             output_dir=output_dir,
@@ -383,7 +394,9 @@ Examples:
                 'bert_softmax_later_refinement_denominator_scale'
             ),
             encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
-            encrypted_parameter_storage_normalization_bytes=compile_config.get('encrypted_parameter_storage_normalization_bytes', 1 << 30),
+            encrypted_parameter_storage_normalization_bytes=compile_config.get(
+                'encrypted_parameter_storage_normalization_bytes', 1 << 30
+            ),
             deployment_mode=args.deployment_mode,
             seed_weight_subgrid_stride=compile_config.get('seed_weight_subgrid_stride', [1, 1]),
             # enable_score_cache=False

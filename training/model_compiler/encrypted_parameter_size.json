@@ -43,5 +43,51 @@
     "10": 5767663,
     "11": 6291967,
     "12": 6816271
+  },
+  "additional_profiles": {
+    "N16QP1546H192H32": {
+      "version": "latti-ai.encrypted-parameter-size.v2",
+      "source": "v6 rlwe.Encryptor.EncryptNew + Ciphertext.MarshalBinary (same native SerializeCiphertext path); standard N16/H192, degree 1, residual levels 0..9 measured 2026-11-10",
+      "parameter": {
+        "poly_modulus_degree": 65536,
+        "n_mult_level": 9,
+        "log_default_scale": 40,
+        "param_name": "N16QP1546H192H32",
+        "q": [
+          1152921504614055937,
+          1099512938497,
+          1099510054913,
+          1099507695617,
+          1099515691009,
+          1099506515969,
+          1099516870657,
+          1099504549889,
+          1099503894529,
+          1099503370241
+        ],
+        "p": [
+          2305843009211596801,
+          2305843009210023937,
+          2305843009208713217,
+          2305843009202159617,
+          2305843009201242113
+        ],
+        "ring_type": 0,
+        "secret_hamming_weight": 192,
+        "n_slots": 32768
+      },
+      "bytes_per_element": {
+        "0": 1048911,
+        "1": 2097503,
+        "2": 3146095,
+        "3": 4194687,
+        "4": 5243279,
+        "5": 6291871,
+        "6": 7340463,
+        "7": 8389055,
+        "8": 9437647,
+        "9": 10486239
+      }
+    }
   }
 }

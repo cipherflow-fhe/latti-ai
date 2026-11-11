@@ -154,9 +154,8 @@ void Feature2DEncrypted::pack_multiple_channel(const Array<double, 3>& feature_m
 
     data.clear();
     data.resize(n_ct);
-    parallel_for(n_ct, N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
-    });
+    parallel_for(n_ct, N_THREAD, *context,
+                 [&](CkksContext& ctx_copy, int ct_idx) { data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]); });
 }
 
 void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
@@ -169,9 +168,8 @@ void Feature2DEncrypted::pack_interleaved(const Array<double, 3>& feature_mg,
     const int N_THREAD = 4;
     data.clear();
     data.resize(pt_vec.size());
-    parallel_for(pt_vec.size(), N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
-    });
+    parallel_for(pt_vec.size(), N_THREAD, *context,
+                 [&](CkksContext& ctx_copy, int ct_idx) { data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]); });
 }
 
 void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, double scale_in) {
@@ -181,9 +179,8 @@ void Feature2DEncrypted::pack_multiplexed(const Array<double, 3>& feature_mg, do
     const int N_THREAD = 4;
     data.clear();
     data.resize(pt_vec.size());
-    parallel_for(pt_vec.size(), N_THREAD, *context, [&](CkksContext& ctx_copy, int ct_idx) {
-        data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]);
-    });
+    parallel_for(pt_vec.size(), N_THREAD, *context,
+                 [&](CkksContext& ctx_copy, int ct_idx) { data[ct_idx] = ctx_copy.encrypt(pt_vec[ct_idx]); });
 }
 
 void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, double scale_in) {
@@ -211,7 +208,7 @@ void Feature2DEncrypted::column_pack(const Array<double, 2>& feature_mg, double 
 }
 
 void Feature2DEncrypted::row_pack(const Array<double, 2>& feature_mg, double scale_in) {
-    int N = context->parameter().n();
+    int N = context->parameter().max_slots();
     uint64_t tol_size = feature_mg.get_shape()[0] * feature_mg.get_shape()[1];
     int pack_num = div_ceil(tol_size, (N));
     vector<vector<double>> feature_mg_pack(pack_num);
@@ -589,8 +586,8 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol(const Fea
             CkksPlaintext mask_pt = fhe_api::encode(ctx_copy, mask_d, level, encode_scale);
             result.data[i] = ctx_copy.add(data[i], mask_pt);
 
-            CkksPlaintext b1_pt =
-                fhe_api::encode(extra_level_ctx_copy, b1_value, level + 1, extra_level_ctx_copy.parameter().q()[level + 1]);
+            CkksPlaintext b1_pt = fhe_api::encode(extra_level_ctx_copy, b1_value, level + 1,
+                                                  extra_level_ctx_copy.parameter().q()[level + 1]);
 
             auto f2d_mult = extra_level_ctx_copy.mult(f2d.data[i], b1_pt);
             f2d_mult = extra_level_ctx_copy.rescale(f2d_mult);
@@ -633,9 +630,9 @@ Feature2DEncrypted Feature2DEncrypted::combine_with_share_new_protocol_for_multi
     }
     Array<double, 3> b1_value_3d = b1_value.reshape<3>({this->n_channel, this->shape[0], this->shape[1]});
     CkksContext& extra_level_context = *context;
-    auto mask_b1 = multi_pack_to_pt(
-        b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context, level + 1,
-        extra_level_context.parameter().q()[level + 1], PackType::MultipleChannelPacking);
+    auto mask_b1 =
+        multi_pack_to_pt(b1_value_3d, f2d_copy, this->n_channel, this->shape, this->skip, extra_level_context,
+                         level + 1, extra_level_context.parameter().q()[level + 1], PackType::MultipleChannelPacking);
     for (int i = 0; i < data.size(); i++) {
         auto f2d_mult = extra_level_context.mult(f2d.data[i], mask_b1[i]);
         f2d_mult = extra_level_context.rescale(f2d_mult);

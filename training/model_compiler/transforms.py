@@ -40,7 +40,6 @@ PCM_TO_PDM_TYPES = {
     'pcminviter': 'pdminviter',
     'pcmctmul': 'pdmctmul',
     'pcmpolymultct': 'pdmupperpolymultct',
-
     'pcm_add_pt': 'pdm_add_pt',
     'pcmgamma': 'pdmgamma',
     'pcmpoly': 'pdmpoly',
@@ -656,7 +655,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
     sorted_compute_nodes = [node for node in sorted_nodes if isinstance(node, ComputeNode)]
     c_node_num = len(sorted_compute_nodes)
 
-    N = config.fhe_param.poly_modulus_degree
+    N = config.fhe_param.n_slots
     leading_skip = 2 ** math.floor(math.log2(N) / 2)
     for node in sorted_nodes:
         if isinstance(node, FeatureNode) and graph.dag.in_degree(node) == 0 and node.dim == 0:
@@ -690,7 +689,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
         if process_special_info(graph, compute_node, preds, succ):
-            populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree)
+            populate_pack_num(graph.dag, compute_node, config.fhe_param.n_slots)
             continue
         if succ.dim > 0:
             if isinstance(compute_node, SpatialComputeNode):
@@ -767,9 +766,11 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     for i in range(preds[0].dim):
                         succ.shape[i] = preds[0].shape[i]
                         graph.dag.nodes[succ]['skip'][i] = graph.dag.nodes[preds[0]]['skip'][i]
-                if not _is_diagonal_mat_pack() and compute_node.layer_type not in (
-                    'pcmstats', 'parcpmm', 'parccmm', 'partranspose'
-                ) and preds[0].head_shape is not None:
+                if (
+                    not _is_diagonal_mat_pack()
+                    and compute_node.layer_type not in ('pcmstats', 'parcpmm', 'parccmm', 'partranspose')
+                    and preds[0].head_shape is not None
+                ):
                     succ.head_shape = list(preds[0].head_shape)
                 # Propagate head_shape for feature_mat pass-through layers
                 if succ.head_shape is None and preds[0].head_shape is not None:
@@ -781,7 +782,7 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
                     graph.dag.nodes[succ]['skip'][i] = max(1, config.block_shape[i] // succ.shape[i])
 
         process_special_info(graph, compute_node, preds, succ)
-        populate_pack_num(graph.dag, compute_node, config.fhe_param.poly_modulus_degree)
+        populate_pack_num(graph.dag, compute_node, config.fhe_param.n_slots)
 
 
 def combine_convs_with_upsamples(graph: LayerAbstractGraph):
@@ -1407,8 +1408,9 @@ def _make_scalar_gamma(layer_id: str, scalar: float, source=None) -> ComputeNode
     node = ComputeNode(layer_id, _pack_pcm_type('pcmgamma'), 1, 1)
     node.path = f'{layer_id}.weight'
     node.scalar_value = float(scalar)
-    node.parameter_sources = {'gamma_pt': source or public_source(
-        'approximation_config', {'scalar_value': float(scalar)})}
+    node.parameter_sources = {
+        'gamma_pt': source or public_source('approximation_config', {'scalar_value': float(scalar)})
+    }
     return node
 
 
@@ -1418,8 +1420,9 @@ def _make_upper_poly(layer_id: str, coefficients: list[float]) -> ComputeNode:
     node.coeffs_path = node.path
     node.coefficients = list(coefficients)
     node.order = len(coefficients) - 1
-    node.parameter_sources = {'stockmeyer_coeff_pt': public_source(
-        'approximation_config', {'coefficients': list(coefficients)})}
+    node.parameter_sources = {
+        'stockmeyer_coeff_pt': public_source('approximation_config', {'coefficients': list(coefficients)})
+    }
     return node
 
 
@@ -1452,8 +1455,8 @@ def _append_softmax_normalize(
     # b alone changes the result of the exporter's fixed iteration count.
     inverse_init = (
         ComputeNode(f'{base_id}_inverse_init', _pack_pcm_type('pcminvinit'), 1, 1)
-        if denominator_scale == 1.0 else
-        _make_upper_poly(f'{base_id}_inverse_init', [2.0 / denominator_scale, -1.0 / denominator_scale**2])
+        if denominator_scale == 1.0
+        else _make_upper_poly(f'{base_id}_inverse_init', [2.0 / denominator_scale, -1.0 / denominator_scale**2])
     )
     inv = _append_unary_compute(
         graph,
@@ -1472,9 +1475,7 @@ def _append_softmax_normalize(
             2,
         )
 
-    probabilities_output_id = (
-        f'{base_id}_probabilities_unscaled' if scale_ratio != 1.0 else f'{base_id}_probabilities'
-    )
+    probabilities_output_id = f'{base_id}_probabilities_unscaled' if scale_ratio != 1.0 else f'{base_id}_probabilities'
     probabilities = _append_binary_compute(
         graph,
         values,
@@ -1528,11 +1529,14 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         1.0,
     )
 
-    add_mid_node = ComputeNode(f'{base_id}_softmax_add_mid', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1)
+    add_mid_node = ComputeNode(
+        f'{base_id}_softmax_add_mid', ('pdmupperaddpt' if _is_diagonal_mat_pack() else 'pcm_add_pt'), 1, 1
+    )
     add_mid_node.value = -mid
     add_mid_node.path = f'{add_mid_node.layer_id}.weight'
-    add_mid_node.parameter_sources = {'add_pt': secret_source(
-        'calibration', f'{attn_node.layer_id}.range_min', f'{attn_node.layer_id}.range_max')}
+    add_mid_node.parameter_sources = {
+        'add_pt': secret_source('calibration', f'{attn_node.layer_id}.range_min', f'{attn_node.layer_id}.range_max')
+    }
     centered = _append_unary_compute(
         graph,
         scores,
@@ -1553,9 +1557,10 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
         exp_arg,
         # Fold the signal scale into the polynomial before squaring. A large
         # scalar plaintext (65536 for thor-wide) overflows native ring-T encoding.
-        _make_upper_poly(f'{base_id}_softmax_exp_poly', [
-            c * initial_denominator_scale ** (1.0 / max(1, delta_1)) for c in coefficients
-        ]),
+        _make_upper_poly(
+            f'{base_id}_softmax_exp_poly',
+            [c * initial_denominator_scale ** (1.0 / max(1, delta_1)) for c in coefficients],
+        ),
         f'{base_id}_softmax_exp_poly_out',
         MatPolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
     )
@@ -1885,8 +1890,9 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
     x_scaled = _append_unary_compute(
         graph,
         x_in,
-        _make_scalar_gamma(f'{base_id}_gelu_input_scale', 1.0 / scale,
-                           secret_source('calibration', f'{base_id}.scale')),
+        _make_scalar_gamma(
+            f'{base_id}_gelu_input_scale', 1.0 / scale, secret_source('calibration', f'{base_id}.scale')
+        ),
         f'{base_id}_gelu_x_scaled',
         1,
     )
@@ -1959,8 +1965,11 @@ def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
     x_scaled = _append_unary_compute(
         graph,
         x_in,
-        _make_scalar_gamma(f'{base_id}_tanh_input_scale', 1.0 / (scale * f1_input_scale),
-                           secret_source('calibration', f'{base_id}.scale')),
+        _make_scalar_gamma(
+            f'{base_id}_tanh_input_scale',
+            1.0 / (scale * f1_input_scale),
+            secret_source('calibration', f'{base_id}.scale'),
+        ),
         f'{base_id}_tanh_x_scaled',
         1,
     )
@@ -2035,8 +2044,7 @@ def expand_poly_act_rn(graph: LayerAbstractGraph):
         poly_node.gamma_path = gamma_path
         poly_node.coeffs_path = coeffs_path
         poly_node.order = order
-        poly_node.parameter_sources = {'coeff_pt': secret_source(
-            'derived', running_max_path, gamma_path, coeffs_path)}
+        poly_node.parameter_sources = {'coeff_pt': secret_source('derived', running_max_path, gamma_path, coeffs_path)}
 
         graph.dag.remove_node(node)
 
@@ -2130,14 +2138,18 @@ def expand_layer_norm(graph: LayerAbstractGraph, n_iter: int = 2):
                 setattr(stage_node, attr_key, attr_value)
 
         pcmstats.parameter_sources = {
-            f'pt:pt_idx={idx}': secret_source('calibration', f'{base_id}.variance_range')
-            for idx in (2, 3)}
+            f'pt:pt_idx={idx}': secret_source('calibration', f'{base_id}.variance_range') for idx in (2, 3)
+        }
         pcminit.parameter_sources = {
-            f'pt:pt_idx={idx}': public_source('approximation_config',
-                {f'c{idx}': float(layernorm_param_attrs[f'c{idx}'])}) for idx in range(3)}
+            f'pt:pt_idx={idx}': public_source(
+                'approximation_config', {f'c{idx}': float(layernorm_param_attrs[f'c{idx}'])}
+            )
+            for idx in range(3)
+        }
         pcmaffine.parameter_sources = {
             'pt:pt_idx=0': secret_source('derived', weight_path, f'{base_id}.variance_range'),
-            'pt:pt_idx=1': secret_source('onnx_initializer', bias_path)}
+            'pt:pt_idx=1': secret_source('onnx_initializer', bias_path),
+        }
 
         # Remove the original layernorm node (keeps x_in and out in the graph)
         graph.dag.remove_node(ln_node)

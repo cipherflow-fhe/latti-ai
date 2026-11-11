@@ -89,6 +89,8 @@ def generate_param_dict_for_graph():
         n_slots=config.fhe_param.n_slots,
         max_level=config.fhe_param.max_level,
         log_default_scale=config.fhe_param.log_default_scale,
+        ring_type=config.fhe_param.ring_type,
+        secret_hamming_weight=config.fhe_param.secret_hamming_weight,
     )
     return param_dict
 
@@ -174,7 +176,11 @@ def get_compute_score(
         if encrypted_parameter_storage_enabled():
             storage = s_param.get_encrypted_parameter_storage()
             if storage is not None:
-                score += config.encrypted_parameter_storage_weight * storage['bytes'] / encrypted_parameter_storage_normalization_bytes()
+                score += (
+                    config.encrypted_parameter_storage_weight
+                    * storage['bytes']
+                    / encrypted_parameter_storage_normalization_bytes()
+                )
         return score
     return 0.0
 

@@ -34,6 +34,7 @@ from components import (
     PN13Default,
     PN14Default,
     PN15Default,
+    FHE_PARAMS,
 )
 import processor
 from processor import *
@@ -61,7 +62,8 @@ def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
     for node in graph.dag.nodes:
         if (
             isinstance(node, components.ConvComputeNode)
-            and node.layer_type == 'conv2d' and node.dim == 2
+            and node.layer_type == 'conv2d'
+            and node.dim == 2
             and (node.groups == 1 or node.groups == node.channel_input == node.channel_output)
             and not node.is_conv_transpose
         ):
@@ -71,8 +73,9 @@ def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
                 node.seed_weight_subgrid_stride = list(stride)
                 node.seed_weight_layout = 'canonical' if node.is_big_size else 'joint'
             else:
-                logging.debug('Seed weights disabled for %s: stride %s does not divide %s',
-                              node.layer_id, stride, seed_shape)
+                logging.debug(
+                    'Seed weights disabled for %s: stride %s does not divide %s', node.layer_id, stride, seed_shape
+                )
 
 
 def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
@@ -166,7 +169,8 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    no_btp_params = [PN12Default, PN13Default, PN14Default, PN15Default]
+    selected = getattr(config, 'fhe_param_name', None)
+    no_btp_params = [FHE_PARAMS[selected]] if selected else [PN12Default, PN13Default, PN14Default, PN15Default]
 
     for params in no_btp_params:
         set_fhe_param(params)
@@ -205,7 +209,10 @@ def try_btp(
     num_workers: int,
     enable_score_cache: bool = True,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
-    btp_param_list = [PN15Default]
+    selected = getattr(config, 'fhe_param_name', None)
+    btp_param_list = [FHE_PARAMS[selected]] if selected else [PN15Default]
+    if any(p.name not in ('PN15Default', 'N16QP1546H192H32') for p in btp_param_list):
+        raise ValueError('Bootstrapping requires PN15Default or N16QP1546H192H32')
     valid_results = []
     for params in btp_param_list:
         set_fhe_param(params)
@@ -269,7 +276,7 @@ def run_btp_compilation(
 
 
 def post_process(graph: LayerAbstractGraph):
-    slot_num = config.fhe_param.poly_modulus_degree
+    slot_num = config.fhe_param.n_slots
     for node in list(graph.dag.nodes):
         if isinstance(node, ComputeNode):
             node.up_scale_str = list()
@@ -413,15 +420,17 @@ def insert_btp_scale_gamma_layers(graph: LayerAbstractGraph):
         pre_gamma.depth = btp_node.depth
         pre_gamma.path = f'{pre_gamma_id}.weight'
         pre_gamma.btp_scale = pre_btp_scale
-        pre_gamma.parameter_sources = {'gamma_pt': public_source(
-            'math_constant', dict(formula='bootstrap_scale', scalar_value=pre_btp_scale))}
+        pre_gamma.parameter_sources = {
+            'gamma_pt': public_source('math_constant', dict(formula='bootstrap_scale', scalar_value=pre_btp_scale))
+        }
 
         post_gamma = ComputeNode(post_gamma_id, gamma_type, btp_node.channel_output, btp_node.channel_output)
         post_gamma.depth = btp_node.depth
         post_gamma.path = f'{post_gamma_id}.weight'
         post_gamma.btp_scale = 1 / pre_btp_scale
-        post_gamma.parameter_sources = {'gamma_pt': public_source(
-            'math_constant', dict(formula='bootstrap_scale', scalar_value=1 / pre_btp_scale))}
+        post_gamma.parameter_sources = {
+            'gamma_pt': public_source('math_constant', dict(formula='bootstrap_scale', scalar_value=1 / pre_btp_scale))
+        }
 
         pre_feature = _clone_feature_node(pred_feature, pre_feature_id)
         post_gamma_input_feature = _clone_feature_node(succ_feature, post_gamma_input_feature_id)
@@ -479,8 +488,9 @@ def _append_fuse_gama_info(node: ComputeNode, fuse_gama_info: dict):
         previous = sources.get(key, {})
         refs = list(previous.get('source_refs', []))
         refs.extend(getattr(node, name, '') for name in ('weight_path', 'coeffs_path'))
-        sources[key] = dict(visibility='secret', source_kind='derived',
-                            source_refs=[ref for ref in refs if ref] + [fuse_gama_info])
+        sources[key] = dict(
+            visibility='secret', source_kind='derived', source_refs=[ref for ref in refs if ref] + [fuse_gama_info]
+        )
     node.parameter_sources = sources
     existing_fuse_gama_info = getattr(node, 'fuse_gama_info', None)
     if existing_fuse_gama_info is None:
@@ -704,25 +714,32 @@ def dump_graph(
         (output_dir / 'encrypted_parameter_storage_report.json').write_text(
             json.dumps(report, indent=2) + '\n', encoding='utf-8'
         )
-        print(f"Encrypted parameter storage: {report['storage_bytes']} bytes; "
-              f"runtime={report['runtime_score']}, refresh={report['refresh_score']}, "
-              f"storage={report['storage_score']}; unaccounted={report['unaccounted']}")
+        print(
+            f'Encrypted parameter storage: {report["storage_bytes"]} bytes; '
+            f'runtime={report["runtime_score"]}, refresh={report["refresh_score"]}, '
+            f'storage={report["storage_score"]}; unaccounted={report["unaccounted"]}'
+        )
     transforms.insert_drop_level_layers(graph)
     if getattr(config, 'seed_weight_subgrid_stride', [1, 1]) != [1, 1]:
         final_report = get_encrypted_parameter_storage_report(graph.dag, generate_param_dict_for_graph())
-        convolution_layouts = {item['layer_id']: item['convolution_seed_layout'] for item in final_report['layers']
-                               if 'convolution_seed_layout' in item}
+        convolution_layouts = {
+            item['layer_id']: item['convolution_seed_layout']
+            for item in final_report['layers']
+            if 'convolution_seed_layout' in item
+        }
         for node in graph.dag.nodes:
             if isinstance(node, components.ConvComputeNode) and node.layer_id in convolution_layouts:
                 layout = convolution_layouts[node.layer_id]
                 node.seed_weight_subgrid_stride = layout['stride']
-        layouts = {item['layer_id']: item['dense_seed_tiles'] for item in final_report['layers']
-                   if 'dense_seed_tiles' in item}
+        layouts = {
+            item['layer_id']: item['dense_seed_tiles'] for item in final_report['layers'] if 'dense_seed_tiles' in item
+        }
         for node in graph.dag.nodes:
             if isinstance(node, components.DenseComputeNode) and node.layer_id in layouts:
                 node.dense_seed_tiles = layouts[node.layer_id]
-        poly_layouts = {item['layer_id']: item['poly_seed_layout'] for item in final_report['layers']
-                        if 'poly_seed_layout' in item}
+        poly_layouts = {
+            item['layer_id']: item['poly_seed_layout'] for item in final_report['layers'] if 'poly_seed_layout' in item
+        }
         for node in graph.dag.nodes:
             if isinstance(node, components.ActivationComputeNode) and node.layer_id in poly_layouts:
                 node.poly_seed_layout = poly_layouts[node.layer_id]
@@ -780,6 +797,7 @@ def run_pipeline(
     encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
     deployment_mode: str = 'client_encrypted_input',
     seed_weight_subgrid_stride: list[int] | tuple[int, int] = (1, 1),
+    fhe_param_name: str | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -803,6 +821,9 @@ def run_pipeline(
     if deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
         raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
 
+    if fhe_param_name is not None and fhe_param_name not in FHE_PARAMS:
+        raise ValueError(f'Unsupported FHE parameter name: {fhe_param_name!r}')
+    config.fhe_param_name = fhe_param_name
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     if style is not None:
@@ -816,12 +837,14 @@ def run_pipeline(
     if matmul_block_size is not None:
         config.matmul_block_size = matmul_block_size
     config.mat_pack_style = mat_pack_style
-    config.pcm_encrypted_parameters = (deployment_mode == 'server_provisioned_runner' and
-                                       mat_pack_style == 'par_block_col_major')
+    config.pcm_encrypted_parameters = (
+        deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_block_col_major'
+    )
     config.model_type = model_type
     seed_stride = seed_weight_subgrid_stride
     if not (
-        isinstance(seed_stride, (list, tuple)) and len(seed_stride) == 2
+        isinstance(seed_stride, (list, tuple))
+        and len(seed_stride) == 2
         and all(type(step) is int and step > 0 and (step & (step - 1)) == 0 for step in seed_stride)
     ):
         logging.debug('Invalid seed_weight_subgrid_stride %r; using [1, 1]', seed_stride)

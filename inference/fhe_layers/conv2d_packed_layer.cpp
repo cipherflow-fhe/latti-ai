@@ -45,8 +45,7 @@ Conv2DPackedLayer::Conv2DPackedLayer(const CkksParameter& param,
                                      double residual_scale)
     : Conv2DLayer(param, input_shape, move(weight), move(bias), stride), skip_(skip),
       n_channel_per_ct_(n_channel_per_ct), n_packed_ct_in_(div_ceil(n_in_channel_, n_channel_per_ct)),
-      n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)),
-      weight_scale_(param_.q()[level] * residual_scale) {
+      n_packed_ct_out_(div_ceil(n_out_channel_, n_channel_per_ct)), weight_scale_(param_.q()[level] * residual_scale) {
     if ((skip_[0] & (skip_[0] - 1)) != 0 || (skip_[1] & (skip_[1] - 1)) != 0) {
         throw std::invalid_argument("skip must be powers of 2, got: " + str(skip_));
     }
@@ -211,7 +210,7 @@ void Conv2DPackedLayer::prepare_weight_lazy() {
     const std::array<uint32_t, 2> input_shape_ct{input_shape_[0] * skip_[0], input_shape_[1] * skip_[1]};
 
     // Cache values for on-demand generation
-    n_real_num_slot = param_.n();
+    n_real_num_slot = param_.max_slots();
     cached_n_packed_in_ct = n_packed_ct_in_;
     cached_n_packed_out_ct = n_packed_ct_out_;
     cached_input_block_size = input_shape_ct[0] * input_shape_ct[1];
