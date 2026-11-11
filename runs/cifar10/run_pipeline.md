@@ -6,8 +6,8 @@
 
 ```bash
 REPO="$(git rev-parse --show-toplevel)"
-PY=/home/linghm/pytorch_venv/bin/python3
-CMAKE=/home/linghm/pytorch_venv/bin/cmake
+PY=/home/linghm/latti_venv/bin/python3
+CMAKE="${CMAKE:-$(command -v cmake)}"
 DATA="$REPO/runs/cifar10"
 ROOT="/tmp/v6_six_task_validation/cifar10"
 MODEL="$DATA/model/trained_poly.onnx"
