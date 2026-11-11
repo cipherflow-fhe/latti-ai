@@ -58,6 +58,8 @@ TEST_CASE("streamed contexts use v6 files and preserve client keys", "[streaming
         std::ifstream eval_file(eval_path, std::ios::binary);
         Bytes eval_bytes((std::istreambuf_iterator<char>(eval_file)), {});
         auto server = CkksContext::deserialize(eval_bytes);
+        // Expanded packed keys still round-trip through the legacy v6 blobs.
+        REQUIRE_NOTHROW(CkksContext::deserialize(server.serialize()));
         std::ifstream full_file(full_path, std::ios::binary);
         Bytes full_bytes((std::istreambuf_iterator<char>(full_file)), {});
         const json task = {{"pack_style", "ordinary"}, {"use_btp", false},

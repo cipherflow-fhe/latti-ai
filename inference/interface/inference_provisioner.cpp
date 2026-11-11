@@ -117,7 +117,8 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
     const auto p = entry.at("p").get<std::vector<uint64_t>>();
     return fhe::CkksParameter::create_custom_parameter(
         log_n, entry.at("log_default_scale").get<int>(), q, p,
-        static_cast<fhe::RingType>(entry.value("ring_type", 1)));
+        static_cast<fhe::RingType>(entry.value("ring_type", 1)),
+        entry.value("secret_hamming_weight", 0));
 }
 
 void InferenceProvisioner::setup_or_load_keys() {
@@ -130,6 +131,13 @@ void InferenceProvisioner::setup_or_load_keys() {
 
     const auto eval_context_path = provisioner_dir_ / "eval_context.bin";
     const auto secret_key_path = provisioner_dir_ / "secret_key.bin";
+    const auto full_context_path = provisioner_dir_ / "full_context.bin";
+    if (std::filesystem::exists(full_context_path) && std::filesystem::exists(eval_context_path)) {
+        std::cout << "[Provisioner] Restoring streaming client keys..." << std::endl;
+        context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::restore_client_context(
+            make_parameter(), read_binary_file(full_context_path), use_btp));
+        return;
+    }
     if (std::filesystem::exists(eval_context_path) && std::filesystem::exists(secret_key_path)) {
         std::cout << "[Provisioner] Loading existing server-owned CKKS keys..." << std::endl;
         context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(read_binary_file(eval_context_path)));
@@ -139,10 +147,9 @@ void InferenceProvisioner::setup_or_load_keys() {
 
     std::cout << "[Provisioner] Generating server-owned CKKS keys..." << std::endl;
     auto param = make_parameter();
-    context_ = std::make_unique<fhe::CkksContext>(
-        fhe::CkksContext::create_random_context(param, fhe::EncryptorType::PUBLIC_KEY, use_btp));
-    context_->gen_rotation_keys();
-    write_binary_file(eval_context_path, context_->serialize());
+    context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::create_client_context(param, use_btp));
+    context_->export_eval_context_to_file(eval_context_path.string());
+    context_->export_full_context_to_file(full_context_path.string());
     write_binary_file(secret_key_path, context_->secret_key().serialize());
 }
 
@@ -645,9 +652,15 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
     }
     const json runner_task_config = read_json((runner_dir / "task_config.json").string());
 
-    const Bytes eval_bytes = context_->serialize();
-    write_binary_file(provisioner_dir_ / "eval_context.bin", eval_bytes);
-    write_binary_file(runner_dir / "eval_context.bin", eval_bytes);
+    // The public evaluation file is immutable after generation; share it locally
+    // and copy when the runner is on a different filesystem.
+    const auto source_eval = provisioner_dir_ / "eval_context.bin";
+    const auto runner_eval = runner_dir / "eval_context.bin";
+    std::error_code link_error;
+    if (!std::filesystem::exists(runner_eval))
+        std::filesystem::create_hard_link(source_eval, runner_eval, link_error);
+    if (link_error || !std::filesystem::equivalent(source_eval, runner_eval))
+        std::filesystem::copy_file(source_eval, runner_eval, std::filesystem::copy_options::overwrite_existing);
 
     const auto parameter_root = runner_dir / "encrypted_model_parameters";
     std::filesystem::create_directories(parameter_root);

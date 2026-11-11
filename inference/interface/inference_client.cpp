@@ -160,6 +160,7 @@ void InferenceClient::read_configuration() {
         return json{{"poly_modulus_degree", entry.at("poly_modulus_degree")},
                     {"log_default_scale", entry.at("log_default_scale")},
                     {"ring_type", entry.value("ring_type", 1)},
+                    {"secret_hamming_weight", entry.value("secret_hamming_weight", 0)},
                     {"q", entry.at("q")}, {"p", entry.at("p")}};
     };
     const auto expected_parameters = key_parameters(ckks_entry);
@@ -198,7 +199,8 @@ void InferenceClient::create_crypto_context() {
         throw std::runtime_error("ckks_parameter.json[" + ckks_param_id + "] must define non-empty q and p");
     }
     ckks_param_ = std::make_unique<CkksParameter>(
-        CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_, ring_type));
+        CkksParameter::create_custom_parameter(log_n, log_default_scale, q_, p_, ring_type,
+            ckks_entry.value("secret_hamming_weight", 0)));
     ckks_context_ = std::make_unique<CkksContext>(
         CkksContext::create_client_context(*ckks_param_, needs_btp_));
     context_ptr_ = ckks_context_.get();
@@ -335,7 +337,8 @@ void InferenceClient::load_full_context(const Bytes& full_bytes) {
     const auto& first = task_config_.at("task_input_param").begin().value();
     const auto& entry = config.at(first.at("ckks_parameter_id").get<std::string>());
     auto param = CkksParameter::create_custom_parameter(static_cast<int>(std::log2(poly_modulus_degree_)),
-        entry.at("log_default_scale").get<int>(), q_, p_, static_cast<RingType>(entry.value("ring_type", 1)));
+        entry.at("log_default_scale").get<int>(), q_, p_, static_cast<RingType>(entry.value("ring_type", 1)),
+        entry.value("secret_hamming_weight", 0));
     auto restored = CkksContext::restore_client_context(param, full_bytes, needs_btp_);
     ckks_param_ = std::make_unique<CkksParameter>(std::move(param));
     ckks_context_ = std::make_unique<CkksContext>(std::move(restored));
