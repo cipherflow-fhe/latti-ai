@@ -24,7 +24,7 @@
 
 profile JSON 中 uint64 素数和 GaloisElement 等用十进制字符串。现有任务 `ckks_parameter.json` 的 uint64 数值不能先经普通 JS `JSON.parse` 再 stringify，否则可能丢精度：将原始 UTF-8 JSON 交给 Go 的强类型 uint64 parser，或在构建时由 Go 输出精确的 profile。JS 仅解析已转换为字符串的 profile 元数据。
 
-profile ID 由规范化实际参数及键计划派生，用于定位和快速检查；最终绑定仍比较实际值，不只比较 hash/名字。manifest 保存生成时的具体参数/能力，不以未来可变默认表替代。包内默认 PN15Default CI profile 必须由 `feat/taa-adapt` 分支的真实任务配置生成、带来源 SHA 并经过 native 验证；不手填旧 `N16QP1546H192H32` 常量，不宣称一个默认 profile 适用所有任务。同一 SK 与完整 profile 可以重新生成可用 PK/评估键，但随机化输出不保证字节相同；full 仍保存原 PK，restore 保持原公钥身份，详见[密钥生成关系](taa_v6_streaming_context_design.md#22-skprofile-与其余密钥的生成关系)。
+profile ID 由规范化实际参数及键计划派生，用于定位和快速检查；最终绑定仍比较实际值，不只比较 hash/名字。manifest 保存生成时的具体参数/能力，不以未来可变默认表替代。包内默认 PN15Default CI profile 必须由 `feat/taa-adapt` 分支的真实任务配置生成、带来源 SHA 并经过 native 验证；不得手填未注册的旧 profile 常量，也不宣称一个默认 profile 适用于所有任务。同一 SK 与完整 profile 可以重新生成可用 PK/评估键，但随机化输出不保证字节相同；full 仍保存原 PK，restore 保持原公钥身份，详见[密钥生成关系](taa_v6_streaming_context_design.md#22-skprofile-与其余密钥的生成关系)。
 
 任务前预生成允许只选择密钥目录和已发布 profile，无需 task_config。之后绑定 task 时执行：
 

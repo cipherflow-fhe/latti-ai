@@ -40,8 +40,7 @@ UPtr<CkksParameter> make_ckks_parameter_from_json(const json& param_json) {
     const auto ring_type = static_cast<RingType>(param_json.value("ring_type", 1));
 
     return MakeU<CkksParameter>(
-        CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p, ring_type,
-            param_json.value("secret_hamming_weight", 0)));
+        CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p, ring_type));
 }
 
 }  // namespace

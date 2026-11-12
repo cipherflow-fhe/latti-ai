@@ -61,25 +61,3 @@ func TestTaskParametersRejectInvalidInput(t *testing.T) {
 		})
 	}
 }
-
-func TestTaskParametersSecretWeight(t *testing.T) {
-	const entry = `{"poly_modulus_degree":4096,"q":[274876334081,4293918721],"p":[549754109953],"log_default_scale":32,"ring_type":0,"secret_hamming_weight":192}`
-	data := []byte(`{"param0":` + entry + `}`)
-	params, err := parseTaskParameters(data, "param0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if params.Xs().(ring.Ternary).H != 192 {
-		t.Fatal("H192 not applied")
-	}
-	defaultData := []byte(strings.Replace(string(data), `"secret_hamming_weight":192`, `"secret_hamming_weight":0`, 1))
-	if err := requireMatchingTaskParameters(defaultData, []string{"param0"}, params); err == nil {
-		t.Fatal("different secret distribution accepted")
-	}
-	for _, h := range []string{"-1", "4097"} {
-		invalid := strings.Replace(string(data), `"secret_hamming_weight":192`, `"secret_hamming_weight":`+h, 1)
-		if _, err := parseTaskParameters([]byte(invalid), "param0"); err == nil {
-			t.Fatal("invalid weight accepted")
-		}
-	}
-}

@@ -34,7 +34,6 @@ from components import (
     PN13Default,
     PN14Default,
     PN15Default,
-    FHE_PARAMS,
 )
 import processor
 from processor import *
@@ -178,8 +177,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    selected = getattr(config, 'fhe_param_name', None)
-    no_btp_params = [FHE_PARAMS[selected]] if selected else [PN12Default, PN13Default, PN14Default, PN15Default]
+    no_btp_params = [PN12Default, PN13Default, PN14Default, PN15Default]
 
     for params in no_btp_params:
         if params.max_level - get_compile_level_reserve() < get_min_feature_level():
@@ -220,10 +218,7 @@ def try_btp(
     num_workers: int,
     enable_score_cache: bool = True,
 ) -> tuple[bool, LayerAbstractGraph | None, float]:
-    selected = getattr(config, 'fhe_param_name', None)
-    btp_param_list = [FHE_PARAMS[selected]] if selected else [PN15Default]
-    if any(p.name not in ('PN15Default', 'N16QP1546H192H32') for p in btp_param_list):
-        raise ValueError('Bootstrapping requires PN15Default or N16QP1546H192H32')
+    btp_param_list = [PN15Default]
     valid_results = []
     for params in btp_param_list:
         set_fhe_param(params)
@@ -873,7 +868,6 @@ def run_pipeline(
     encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
     deployment_mode: str = 'client_encrypted_input',
     seed_weight_subgrid_stride: list[int] | tuple[int, int] = (1, 1),
-    fhe_param_name: str | None = None,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -897,9 +891,6 @@ def run_pipeline(
     if deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
         raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
 
-    if fhe_param_name is not None and fhe_param_name not in FHE_PARAMS:
-        raise ValueError(f'Unsupported FHE parameter name: {fhe_param_name!r}')
-    config.fhe_param_name = fhe_param_name
     if mat_pack_style not in MAT_PACK_STYLES:
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     if style is not None:

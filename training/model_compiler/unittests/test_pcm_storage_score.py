@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from components import ComputeNode, FeatureNode, LayerAbstractGraph, N16QP1546H192H32, config
+from components import ComputeNode, FeatureNode, LayerAbstractGraph, PN15Default, config
 from graph_partition_dp import generate_param_dict_for_graph
 from score import FheScoreParam
 from inference.model_generator.parameter_sources import pcm_parameter_sources
@@ -16,7 +16,7 @@ class PCMStorageScoreTest(unittest.TestCase):
     def test_affine_counts_follow_input_index_with_reversed_predecessors(self):
         previous = config.__dict__.copy()
         self.addCleanup(lambda: (config.__dict__.clear(), config.__dict__.update(previous)))
-        config.fhe_param = N16QP1546H192H32
+        config.fhe_param = PN15Default
         config.style = 'multiplexed'
         config.matmul_block_size = 64
         config.n_heads = 3

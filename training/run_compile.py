@@ -36,7 +36,6 @@ sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from model_compiler.pipeline import run_pipeline
-from model_compiler.components import FHE_PARAMS
 from model_export.onnx_to_json import onnx_to_json
 from nn_tools import export_h5_from_onnx
 
@@ -240,13 +239,6 @@ Examples:
         help='Computation style: ordinary or multiplexed (default: multiplexed)',
     )
 
-    parser.add_argument(
-        '--fhe-param',
-        choices=sorted(FHE_PARAMS),
-        default=None,
-        help='Use a specific CKKS profile; default: automatic CI selection',
-    )
-
     parser.add_argument('--graph_type', type=str, choices=['btp'], default='btp', help='Graph type: btp (default: btp)')
 
     parser.add_argument(
@@ -364,7 +356,6 @@ Examples:
 
     try:
         run_pipeline(
-            fhe_param_name=args.fhe_param,
             num_experiments=args.num_experiments,
             input_file_path=pt_json_path,
             output_dir=output_dir,

@@ -95,7 +95,12 @@ from inference.model_generator.layers.par_upper_diagonal_softmax import (
     ParUpperDiagonalInverseIter,
     ParUpperDiagonalMultipleSquare,
 )
-from training.model_compiler.components import FHE_PARAMS
+from training.model_compiler.components import (
+    PN12Default,
+    PN13Default,
+    PN14Default,
+    PN15Default,
+)
 from inference.model_generator.layers.encrypted_param_ops import materialize_encrypted_param
 
 
@@ -105,7 +110,12 @@ def read_config(config_path):
     return config_ctx
 
 
-_FHE_PARAMS = FHE_PARAMS
+_FHE_PARAMS = {
+    'PN12Default': PN12Default,
+    'PN13Default': PN13Default,
+    'PN14Default': PN14Default,
+    'PN15Default': PN15Default,
+}
 
 INPUT_MODES = {'ciphertext', 'plaintext'}
 PARAMETER_MODES = {'plaintext_lazy', 'plaintext_eager', 'encrypted_offline'}
@@ -117,15 +127,7 @@ def set_param(param_name):
         raise ValueError(f'Unsupported FHE parameter name: {param_name!r}')
     fhe = _FHE_PARAMS[param_name]
     log_n = fhe.poly_modulus_degree.bit_length() - 1
-    param = CkksParam.create_custom_param(
-        log_n,
-        fhe.q,
-        fhe.p,
-        fhe.log_default_scale,
-        RingType(fhe.ring_type),
-        secret_hamming_weight=fhe.secret_hamming_weight,
-    )
-    param.max_level = fhe.max_level
+    param = CkksParam.create_default_param(log_n, RingType.ConjugateInvariant)
     set_fhe_param(param)
     return param
 

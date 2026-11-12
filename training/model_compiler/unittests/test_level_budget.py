@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from components import ComputeNode, FeatureNode, LayerAbstractGraph, N16QP1546H192H32, PN15Default, config
+from components import ComputeNode, FeatureNode, LayerAbstractGraph, PN14Default, PN15Default, config
 from graph_partition_dp import get_min_feature_level
 import pipeline
 import transforms
@@ -33,7 +33,7 @@ class LevelBudgetTest(unittest.TestCase):
         pipeline.set_fhe_param(profile)
 
     def test_profile_bounds_and_serialized_physical_chain(self):
-        for profile in (N16QP1546H192H32, PN15Default):
+        for profile in (PN14Default, PN15Default):
             for encrypted in (False, True):
                 for scale in (None, 1.0):
                     with self.subTest(profile=profile.name, encrypted=encrypted, scale=scale):
@@ -69,7 +69,7 @@ class LevelBudgetTest(unittest.TestCase):
         return graph, boot
 
     def test_bootstrap_outputs_and_explicit_drops_for_all_modes(self):
-        for profile in (N16QP1546H192H32, PN15Default):
+        for profile in (PN14Default, PN15Default):
             for encrypted in (False, True):
                 for scale in (None, 1.0):
                     with self.subTest(profile=profile.name, encrypted=encrypted, scale=scale):
@@ -105,7 +105,7 @@ class LevelBudgetTest(unittest.TestCase):
                 pipeline.recompute_final_level(graph)
 
     def test_final_export_rejects_an_ordinary_feature_above_budget(self):
-        self.configure(N16QP1546H192H32, True, None)
+        self.configure(PN15Default, True, None)
         graph, _ = self.make_graph()
         root = next(node for node in graph.dag if isinstance(node, FeatureNode) and node.node_id == 'input')
         graph.dag.nodes[root]['level'] = config.fhe_param.max_level + 1
@@ -113,21 +113,23 @@ class LevelBudgetTest(unittest.TestCase):
             pipeline.validate_final_feature_levels(graph)
 
     def test_parameter_validation_runs_with_zero_storage_weight_for_cnn(self):
-        self.configure(N16QP1546H192H32, True, None)
+        self.configure(PN15Default, True, None)
         config.pcm_encrypted_parameters = False
         graph, _ = self.make_graph()
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.object(
-                pipeline.FheScoreParam, 'get_encrypted_param_count', return_value={10: {'weight': 1}}
+                pipeline.FheScoreParam, 'get_encrypted_param_count', return_value={len(PN15Default.q): {'weight': 1}}
             ) as get_count,
         ):
-            with self.assertRaisesRegex(ValueError, 'level 10 exceeds residual Q maximum 9'):
+            with self.assertRaisesRegex(
+                ValueError, f'level {len(PN15Default.q)} exceeds residual Q maximum {PN15Default.max_level}'
+            ):
                 pipeline.dump_graph(graph, Path(directory), 0.0, True)
             get_count.assert_called_once()
 
     def test_fused_post_bootstrap_gamma_does_not_raise_parameter_use_site(self):
-        self.configure(N16QP1546H192H32, True, 1.0)
+        self.configure(PN15Default, True, 1.0)
         graph, boot = self.make_graph()
         refreshed = next(graph.dag.successors(boot))
         target = next(graph.dag.successors(refreshed))

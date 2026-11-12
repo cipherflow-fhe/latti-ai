@@ -23,28 +23,6 @@ python inference/interface/gen_mega_ag.py --task-dir ./runs/retina/task
   --gpu
 ```
 
-## N16 参数：输入加密 GPU lazy
-
-当前代码库正式支持 `--fhe-param N16QP1546H192H32`，不需要修改源码或应用临时补丁。不传该选项时继续自动选择 CI 参数。N16 使用标准环 N=65536、32768 slots、残余 Q/P=10/5、logScale=40、秘密汉明重量 H192；bootstrap 使用当前 v6 派生电路和默认临时秘密 H32，与 dev 历史完整模数链并非逐项相同。block_shape 由 slots 自动计算。
-
-完成上面的环境激活和构建后，在同一个 shell 执行；task、密钥、采样和输出写入 `/tmp/retina-n16-gpu-lazy`。
-
-```bash
-REPO="$(git rev-parse --show-toplevel)"
-ROOT=/tmp/retina-n16-gpu-lazy
-mkdir -p "$ROOT"
-python "$REPO/training/run_compile.py" --input "$REPO/runs/retina/model/epoch041.onnx" \
-  --output "$ROOT" --style multiplexed --fhe-param N16QP1546H192H32
-python "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$ROOT/task"
-cd "$ROOT"
-"$REPO/build/examples/inference" --task-dir "$ROOT/task" \
-  --input "input_0=$REPO/runs/retina/img.csv" \
-  --input "input_1=$REPO/runs/retina/non_inv.csv" \
-  --input "input_2=$REPO/runs/retina/inv.csv" \
-  --output-csv "$ROOT/decrypted.csv" --verify --gpu
-cd "$REPO"
-```
-
 下面为完整验收流程：命令从仓库任意目录启动，在同一个 shell 中依次执行。模型与输入保留在 `runs/retina/`；所有生成的 task、密钥、日志和性能采样位于 `/tmp/v6_six_task_validation/retina/`；各模式顺序运行。验收比较原始 ONNX 与 CSV 的全部输出，最大绝对误差必须小于 0.2。
 
 ## 环境与构建

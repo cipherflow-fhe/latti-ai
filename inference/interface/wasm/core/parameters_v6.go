@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/bits"
 
-	"github.com/cipherflow-fhe/lattigo/core/rlwe"
 	"github.com/cipherflow-fhe/lattigo/ring"
 	"github.com/cipherflow-fhe/lattigo/schemes/ckks"
 )
@@ -13,14 +12,13 @@ import (
 // taskParameters matches the CKKS entries emitted by the model compiler.
 // In particular, Q and P are decoded directly as uint64, never via float64.
 type taskParameters struct {
-	SecretHammingWeight int      `json:"secret_hamming_weight"`
-	Degree              int      `json:"poly_modulus_degree"`
-	Q                   []uint64 `json:"q"`
-	P                   []uint64 `json:"p"`
-	LogScale            *int     `json:"log_default_scale"`
-	RingType            *int     `json:"ring_type"`
-	Slots               *int     `json:"n_slots"`
-	LogSlots            *int     `json:"log_slots"`
+	Degree   int      `json:"poly_modulus_degree"`
+	Q        []uint64 `json:"q"`
+	P        []uint64 `json:"p"`
+	LogScale *int     `json:"log_default_scale"`
+	RingType *int     `json:"ring_type"`
+	Slots    *int     `json:"n_slots"`
+	LogSlots *int     `json:"log_slots"`
 }
 
 func parseTaskParameters(data []byte, id string) (ckks.Parameters, error) {
@@ -46,18 +44,10 @@ func parseTaskParameters(data []byte, id string) (ckks.Parameters, error) {
 			return ckks.Parameters{}, fmt.Errorf("invalid ring type for %q", id)
 		}
 	}
-	logN := bits.Len(uint(entry.Degree)) - 1
-	if logN > rlwe.MaxLogN || entry.SecretHammingWeight < 0 || entry.SecretHammingWeight > entry.Degree {
-		return ckks.Parameters{}, fmt.Errorf("invalid CKKS degree or secret Hamming weight for %q", id)
-	}
-	literal := ckks.ParametersLiteral{
-		LogN: logN, Q: entry.Q, P: entry.P,
+	params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+		LogN: bits.Len(uint(entry.Degree)) - 1, Q: entry.Q, P: entry.P,
 		RingType: ringType, LogDefaultScale: *entry.LogScale,
-	}
-	if entry.SecretHammingWeight != 0 {
-		literal.Xs = ring.Ternary{H: entry.SecretHammingWeight}
-	}
-	params, err := ckks.NewParametersFromLiteral(literal)
+	})
 	if err != nil {
 		return ckks.Parameters{}, fmt.Errorf("invalid CKKS parameters for %q: %w", id, err)
 	}

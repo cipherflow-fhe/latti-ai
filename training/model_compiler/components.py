@@ -59,8 +59,6 @@ class FheParameter:
         n_slots: int,
         max_level: int,
         log_default_scale: int,
-        ring_type: int = 1,
-        secret_hamming_weight: int = 0,
     ):
         self.name = name
         self.poly_modulus_degree = poly_modulus_degree
@@ -69,8 +67,6 @@ class FheParameter:
         self.n_slots = n_slots
         self.max_level = max_level
         self.log_default_scale = log_default_scale
-        self.ring_type = ring_type
-        self.secret_hamming_weight = secret_hamming_weight
 
     @property
     def residual_max_level(self) -> int:
@@ -86,8 +82,7 @@ class FheParameter:
             'param_name': self.name,
             'q': self.q,
             'p': self.p,
-            'ring_type': self.ring_type,
-            'secret_hamming_weight': self.secret_hamming_weight,
+            'ring_type': 1,
             'n_slots': self.n_slots,
         }
 
@@ -107,8 +102,9 @@ class FheParameter:
 # only provides N/2 slots), so n_slots = 2^log_n.
 #
 # The bootstrap circuit is derived internally by the frontend (degree 16), which
-# supports CI residual log_n=15 and standard residual log_n=16.
-# PN15Default remains the automatic BTP choice; N16 is selected explicitly.
+# requires a residual log_n of 15. Consequently PN15Default is the only residual
+# parameter set usable in BTP mode, and log_n=16 is reserved for the bootstrap
+# circuit itself.
 _PARAMETER_JSON_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     '..',
@@ -145,42 +141,6 @@ PN14Default = _create_default_ckks_param('PN14Default', 14)
 
 # PN15Default: LogN=15, 32768 slots, the only CI residual set usable with bootstrap
 PN15Default = _create_default_ckks_param('PN15Default', 15)
-
-# Historical standard-ring residual profile. Bootstrap parameters are derived
-# by the current v6 circuit (including its default ephemeral secret weight 32).
-N16QP1546H192H32 = FheParameter(
-    name='N16QP1546H192H32',
-    poly_modulus_degree=65536,
-    q=[
-        0x10000000006E0001,
-        0x10000140001,
-        0xFFFFE80001,
-        0xFFFFC40001,
-        0x100003E0001,
-        0xFFFFB20001,
-        0x10000500001,
-        0xFFFF940001,
-        0xFFFF8A0001,
-        0xFFFF820001,
-    ],
-    p=[0x1FFFFFFFFFE00001, 0x1FFFFFFFFFC80001, 0x1FFFFFFFFFB40001, 0x1FFFFFFFFF500001, 0x1FFFFFFFFF420001],
-    n_slots=32768,
-    max_level=9,
-    log_default_scale=40,
-    ring_type=0,
-    secret_hamming_weight=192,
-)
-
-FHE_PARAMS = {
-    param.name: param
-    for param in (
-        PN12Default,
-        PN13Default,
-        PN14Default,
-        PN15Default,
-        N16QP1546H192H32,
-    )
-}
 
 
 class GlobalConfig:

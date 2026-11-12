@@ -316,8 +316,8 @@ bias、poly、dense、scalar 和未启用 seed 的卷积保持原计数。存储
 计在 seed 初始 level，复制旋转与加法计在第一次 rescale 后的 level；一般 kernel
 的第二次 mask 乘法和 rescale 也计在该 level。参数及 seed 恢复的计费 level 必须
 与插入 drop-level 后的实际 use-site 一致。存储校准覆盖所需的 seed 初始 level；
-例如 N16QP1546H192H32 的 feature 最高 level 为 9，一般 kernel 的 seed 可以在
-现有 modulus chain 上使用 level 10、11，对应密文序列化大小必须单独实测记录。
+seed 的实际 level 必须由当前任务的 residual Q 链和编译预算确定，不能从已撤销的
+N16QP1546H192H32 示例推导，也不能超出当前参数表的物理 level 上限。
 
 本规范不要求把 `(a,b)` 加入 DP 搜索。第一版由第 2.1 节的全局编译配置显式传递，
 未指定时使用 `[1,1]`；如果后续增加候选，只能复用同一个算子接口和 op count，

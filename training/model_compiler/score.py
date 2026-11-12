@@ -940,21 +940,12 @@ def encrypted_parameter_storage_normalization_bytes():
     return getattr(config, 'encrypted_parameter_storage_normalization_bytes', 1 << 30)
 
 
-def _encrypted_parameter_calibration(param):
+def encrypted_parameter_bytes(param, level):
     calibration = ENCRYPTED_PARAMETER_SIZE
-    if param.name != calibration['parameter']['param_name']:
-        calibration = calibration.get('additional_profiles', {}).get(param.name)
-    if calibration is None:
-        raise ValueError(f'No encrypted parameter size calibration for {param.name}')
     actual = param.to_dict()
     expected = calibration['parameter']
     if any(actual.get(key) != value for key, value in expected.items() if key != 'n_mult_level'):
         raise ValueError(f'No encrypted parameter size calibration for {param.name}')
-    return calibration
-
-
-def encrypted_parameter_bytes(param, level):
-    calibration = _encrypted_parameter_calibration(param)
     if str(level) not in calibration['bytes_per_element']:
         raise ValueError(f'Uncalibrated encrypted parameter level: {level}')
     return calibration['bytes_per_element'][str(level)]
@@ -965,7 +956,7 @@ def get_encrypted_parameter_storage_report(dag, param_dict):
     report = {
         'weight': config.encrypted_parameter_storage_weight,
         'normalization_bytes': encrypted_parameter_storage_normalization_bytes(),
-        'calibration': _encrypted_parameter_calibration(next(iter(param_dict.values()))),
+        'calibration': ENCRYPTED_PARAMETER_SIZE,
         'runtime_score': 0.0,
         'refresh_score': 0.0,
         'storage_bytes': 0,

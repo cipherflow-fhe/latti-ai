@@ -117,8 +117,7 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
     const auto p = entry.at("p").get<std::vector<uint64_t>>();
     return fhe::CkksParameter::create_custom_parameter(
         log_n, entry.at("log_default_scale").get<int>(), q, p,
-        static_cast<fhe::RingType>(entry.value("ring_type", 1)),
-        entry.value("secret_hamming_weight", 0));
+        static_cast<fhe::RingType>(entry.value("ring_type", 1)));
 }
 
 void InferenceProvisioner::setup_or_load_keys() {

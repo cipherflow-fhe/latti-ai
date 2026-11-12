@@ -250,8 +250,7 @@ PYTHONPATH=inference/lattisense python training/run_compile.py \
 
 参数加密模式始终为参数打包预留两层，与存储评分权重无关。设 residual Q
 链物理上限为 `M=len(Q)-1`，普通计算的编译范围为 `[0,M-2]`；若设置
-`btp_scale`/`set_btp_scale`，范围为 `[1,M-3]`。因此 N16 的范围分别为
-`[0,7]` / `[1,6]`，PN15Default CI 为 `[0,10]` / `[1,9]`。
+`btp_scale`/`set_btp_scale`，范围为 `[1,M-3]`。PN15Default CI 的范围分别为 `[0,10]` / `[1,9]`。
 Q/P 不变，bootstrap 仍输出物理 level `M`，导出图通过显式 `drop_level`
 节点降至后续算子需要的 level；scale 包装与融合后同样遵守该预算。
 编译导出及图生成都会检查加密参数的实际 level 不超过 residual Q 链上限。
@@ -266,8 +265,7 @@ Q/P 不变，bootstrap 仍输出物理 level `M`，导出图通过显式 `drop_l
 `storage_bytes` 按实际参数 use-site level 查固定 CKKS 序列化校准表计算，
 `encrypted_parameter_storage_normalization_bytes`（默认 `2**30`，即 1073741824）
 是归一化单位；DP 内不执行加密。该字段与 weight 一样由上述 JSON 读取并实际参与 DP
-和最终 report 计算。当前校准表覆盖 `PN15Default` 的 residual level 0..12
-及 `N16QP1546H192H32` 的 residual level 0..9，按真实密文序列化尺寸标定；
+和最终 report 计算。当前校准表覆盖 `PN15Default` 的 residual level 0..12，按真实密文序列化尺寸标定；
 seed 恢复前的参数密文也必须位于相应 residual Q 链内。
 因此 weight=1 的含义是每增加 1 GiB 参数存储，在目标中增加 1 个 score 单位，不能
 解释成 1 秒。
