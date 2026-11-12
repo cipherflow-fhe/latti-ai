@@ -77,18 +77,20 @@ def replace_maxpool_with_poly(model: nn.Module, *, alpha: int = 7,
     """Replace supported ``nn.MaxPool2d`` modules with exportable PolyMaxPool2d.
 
     Like :func:`replace_activation_with_poly`, this changes the model in place
-    while retaining exact plaintext MaxPool behavior. The approximation is
-    selected later by the compiler from the exported node attributes.
+    using differentiable plaintext polynomial pooling. Export preserves the
+    same approximation and input bound for compiler lowering.
     """
     get_maxpool_profile(alpha)
     for name, child in list(model.named_children()):
         replace_maxpool_with_poly(child, alpha=alpha, upper_bound=upper_bound, B=B)
         if isinstance(child, nn.MaxPool2d) and not isinstance(child, PolyMaxPool2d):
+            if child.ceil_mode or child.return_indices or _pair(child.dilation) != (1, 1):
+                raise ValueError(f"{name}: ceil_mode, return_indices and dilation are unsupported")
             if (_pair(child.kernel_size), _pair(child.stride), _pair(child.padding)) != ((3, 3), (2, 2), (1, 1)):
                 raise ValueError(f'{name}: PolyMaxPool2d requires kernel=3, stride=2, padding=1')
             setattr(model, name, PolyMaxPool2d(
                 child.kernel_size, child.stride, child.padding,
-                alpha=alpha, upper_bound=upper_bound, B=B))
+                alpha=alpha, upper_bound=upper_bound, B=B).train(child.training))
     return model
 
 
@@ -376,10 +378,14 @@ def prepare_for_fhe(
     upper_bound: float = 3.0,
     degree: int = 4,
     input_size: tuple = None,
+    *,
+    maxpool_alpha: int = 7,
+    maxpool_upper_bound: float = 1.0,
+    maxpool_B: float = 1.0,
 ) -> nn.Module:
     """Convert a standard PyTorch model to be FHE-compatible.
 
-    Preserves standard MaxPool2d for compiler PolyMaxPool lowering and performs:
+    Replaces supported MaxPool2d with differentiable PolyMaxPool2d and performs:
 
     2. General ``nn.AvgPool2d`` → ``DepthwiseAvgPool2d`` (depthwise conv)
     3. ``nn.ReLU`` → *poly_module* (default ``RangeNormPoly2d``)
@@ -389,6 +395,9 @@ def prepare_for_fhe(
     buffers (required before ONNX export).
 
     Args:
+        maxpool_alpha: Fixed MaxPool sign approximation profile (7..14).
+        maxpool_upper_bound: MaxPool normalized input bound.
+        maxpool_B: MaxPool comparison scale.
         model:       PyTorch model (modified in-place).
         poly_module: Polynomial activation constructor (default ``RangeNormPoly2d``).
         upper_bound: Normalization upper bound for the polynomial activation.
@@ -406,8 +415,8 @@ def prepare_for_fhe(
     """
     import torch
 
-    # Keep original MaxPool2d for PolyMaxPool2D conversion.
-    # replace_maxpool_with_avgpool(model)
+    replace_maxpool_with_poly(
+        model, alpha=maxpool_alpha, upper_bound=maxpool_upper_bound, B=maxpool_B)
 
 
 

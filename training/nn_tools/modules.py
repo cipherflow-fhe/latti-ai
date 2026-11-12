@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Custom modules for FHE-compatible model conversion."""
 
+import math
 from typing import Union
 
 import torch
@@ -27,15 +28,71 @@ def _pair(x):
     return (x, x)
 
 
+def _poly_maxpool_plaintext(x, kernel, stride, padding, alpha, upper_bound, B, running_max):
+    """Differentiable deferred-half reduction matching the compiled MaxPool DAG."""
+    from .fixed_maxpool_profiles import get_maxpool_profile
+
+    if x.ndim not in (3, 4):
+        raise ValueError('PolyMaxPool2d expects CHW or NCHW input')
+    unbatched = x.ndim == 3
+    if unbatched:
+        x = x.unsqueeze(0)
+    h, w = x.shape[-2:]
+    oh = (h + 2 * padding[0] - kernel[0]) // stride[0] + 1
+    ow = (w + 2 * padding[1] - kernel[1]) // stride[1] + 1
+    normalized = x * (upper_bound / running_max)
+    anchor = normalized[..., ::stride[0], ::stride[1]][..., :oh, :ow]
+    padded = torch.nn.functional.pad(normalized, (padding[1], padding[1], padding[0], padding[0]))
+    valid = torch.nn.functional.pad(torch.ones_like(normalized),
+                                    (padding[1], padding[1], padding[0], padding[0]))
+    taps = []
+    for row in range(kernel[0]):
+        for col in range(kernel[1]):
+            part = padded[..., row:row + oh * stride[0]:stride[0], col:col + ow * stride[1]:stride[1]]
+            mask = valid[..., row:row + oh * stride[0]:stride[0], col:col + ow * stride[1]:stride[1]]
+            # Runtime masks duplicate the window anchor outside the image.
+            taps.append(torch.where(mask.bool(), part, anchor))
+    coefficients = get_maxpool_profile(alpha)['odd_coefficients']
+    depth = 0
+    while len(taps) > 1:
+        bound = B * (1 if depth == 0 else 1.05) * 2 ** depth
+        reduced = []
+        for i in range(0, len(taps) - 1, 2):
+            a, b = taps[i:i + 2]
+            difference = a - b
+            sign = difference / (2 * bound)
+            for stage in coefficients:
+                squared = sign * sign
+                value = torch.zeros_like(sign) + float(stage[-1])
+                for coefficient in reversed(stage[:-1]):
+                    value = value * squared + float(coefficient)
+                sign = sign * value
+            reduced.append(a + b + difference * sign)
+        if len(taps) % 2:
+            reduced.append(2 * taps[-1])
+        taps = reduced
+        depth += 1
+    result = taps[0] * (running_max / upper_bound / 2 ** depth)
+    return result.squeeze(0) if unbatched else result
+
+
 class _PolyMaxPool2dExport(torch.autograd.Function):
     """Export a MaxPool node while preserving the FHE approximation settings."""
 
     @staticmethod
-    def forward(ctx, x, kernel, stride, padding, alpha, upper_bound, B):
+    def forward(ctx, x, kernel, stride, padding, alpha, upper_bound, B, running_max):
+        # Shape-only tracing placeholder; symbolic emits the polynomial operator.
+        # Normal model execution always uses _poly_maxpool_plaintext.
         return torch.nn.functional.max_pool2d(x, kernel, stride, padding)
 
     @staticmethod
-    def symbolic(g, x, kernel, stride, padding, alpha, upper_bound, B):
+    def symbolic(g, x, kernel, stride, padding, alpha, upper_bound, B, running_max):
+        sizes = x.type().varyingSizes()
+        output_sizes = None if sizes is None else [
+            *sizes[:-2],
+            None if sizes[-2] is None else (sizes[-2] + 2 * padding[0] - kernel[0]) // stride[0] + 1,
+            None if sizes[-1] is None else (sizes[-1] + 2 * padding[1] - kernel[1]) // stride[1] + 1,
+        ]
         return g.op(
             'nn_tools::PolyMaxPool2d', x,
             kernel_shape_i=kernel,
@@ -44,19 +101,30 @@ class _PolyMaxPool2dExport(torch.autograd.Function):
             alpha_i=alpha,
             upper_bound_f=upper_bound,
             B_f=B,
-        ).setType(x.type())
+            running_max_f=running_max,
+        ).setType(x.type().with_sizes(output_sizes))
 
 
 class PolyMaxPool2d(nn.Module):
     """Drop-in MaxPool2d whose FHE settings survive ONNX export.
 
-    Plain PyTorch execution remains exact max pooling. During compilation the
-    exported node is lowered to the explicit polynomial MaxPool stages.
+    PyTorch evaluates the same polynomial reduction as the compiler. Training
+    updates a scalar input bound; evaluation/export freezes it. Fine tuning
+    remains optional. The compiler expands the custom node before global DP.
     """
 
     def __init__(self, kernel_size=3, stride=2, padding=1, *, alpha=7,
                  upper_bound=1.0, B=1.0):
         super().__init__()
+        from .fixed_maxpool_profiles import get_maxpool_profile
+        get_maxpool_profile(alpha)
+        for name, value in (("upper_bound", upper_bound), ("B", B)):
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive and finite")
+        if (_pair(kernel_size), _pair(stride), _pair(padding)) != ((3, 3), (2, 2), (1, 1)):
+            raise ValueError("PolyMaxPool2d requires kernel=3, stride=2, padding=1")
+        self.register_buffer("running_max", torch.tensor(1.0))
+        self.register_buffer("num_batches_tracked", torch.tensor(0, dtype=torch.long))
         self.kernel_size = _pair(kernel_size)
         self.stride = _pair(stride)
         self.padding = _pair(padding)
@@ -65,12 +133,21 @@ class PolyMaxPool2d(nn.Module):
         self.B = float(B)
 
     def forward(self, x):
+        if self.training and not torch.onnx.is_in_onnx_export():
+            with torch.no_grad():
+                observed = x.detach().abs().amax().clamp_min(torch.finfo(x.dtype).eps)
+                if self.num_batches_tracked == 0:
+                    self.running_max.copy_(observed)
+                else:
+                    self.running_max.copy_(torch.maximum(self.running_max, observed))
+                self.num_batches_tracked.add_(1)
         if torch.onnx.is_in_onnx_export():
             return _PolyMaxPool2dExport.apply(
                 x, list(self.kernel_size), list(self.stride), list(self.padding),
-                self.alpha, self.upper_bound, self.B)
-        return torch.nn.functional.max_pool2d(
-            x, self.kernel_size, self.stride, self.padding)
+                self.alpha, self.upper_bound, self.B, float(self.running_max))
+        return _poly_maxpool_plaintext(
+            x, self.kernel_size, self.stride, self.padding,
+            self.alpha, self.upper_bound, self.B, self.running_max.clone())
 
 
 class DepthwiseAvgPool2d(nn.Module):
