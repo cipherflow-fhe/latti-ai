@@ -1400,7 +1400,8 @@ def gen_custom_task(
                         f'but input has only {len(input_nodes)}'
                     )
                 input_nodes = input_nodes[:consumed_count]
-            # Public RingT plaintexts are independent of residual levels.
+            # RingT inputs are materialized at the consuming ciphertext's level;
+            # bypass ciphertext-only drop_level for these inputs.
             layer_output_nodes = (
                 input_nodes
                 if _feature_input_is_plaintext(input_fid)
