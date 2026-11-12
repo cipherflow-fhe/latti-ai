@@ -1,89 +1,86 @@
-# Retina GPU Pipeline
+# retina ONNX prefix/suffix GPU 全流程
 
-## GPU Pipeline（简易版：输入加密 GPU lazy）
-
-从仓库内任意目录启动，在同一个 shell 中依次执行。生成的 task 位于 `runs/retina/task/`，解密结果保存为 `runs/retina/decrypted.csv`。`gen_mega_ag.py` 默认生成输入加密的 GPU lazy 指令；`--verify` 将解密结果与 task 的明文计算结果比较。
-
-```bash
-cd "$(git rev-parse --show-toplevel)"
-source /home/linghm/latti_venv/bin/activate
-export PYTHONPATH="$PWD:$PWD/inference/lattisense:${PYTHONPATH:-}"
-export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8
-
-cmake -S . -B build -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_DEV=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j8
-python training/run_compile.py --input=./runs/retina/model/epoch041.onnx --output=./runs/retina --style=multiplexed
-python inference/interface/gen_mega_ag.py --task-dir ./runs/retina/task
-./build/examples/inference --task-dir "$PWD/runs/retina/task" \
-  --input "input_0=$PWD/runs/retina/img.csv" \
-  --input "input_1=$PWD/runs/retina/non_inv.csv" \
-  --input "input_2=$PWD/runs/retina/inv.csv" \
-  --output-csv "$PWD/runs/retina/decrypted.csv" \
-  --verify \
-  --gpu
-```
-
-下面为完整验收流程：命令从仓库任意目录启动，在同一个 shell 中依次执行。模型与输入保留在 `runs/retina/`；所有生成的 task、密钥、日志和性能采样位于 `/tmp/v6_six_task_validation/retina/`；各模式顺序运行。验收比较原始 ONNX 与 CSV 的全部输出，最大绝对误差必须小于 0.2。
+默认比例为 `0.9`：prefix 明文执行，suffix 分别执行输入加密 GPU lazy 和参数加密 GPU `runtime_lazy`。从仓库任意目录启动，在同一个 Bash shell 中依次执行；生成物位于 `/tmp/onnx_split_validation/retina/`。两种模式均比较原始完整 ONNX 接收原始 CSV 的全部输出，要求 **最大绝对误差严格小于 0.1**。
 
 ## 环境与构建
 
 ```bash
+set -euo pipefail
 REPO="$(git rev-parse --show-toplevel)"
 PY=/home/linghm/latti_venv/bin/python3
-CMAKE="${CMAKE:-$(command -v cmake)}"
 DATA="$REPO/runs/retina"
-ROOT="/tmp/v6_six_task_validation/retina"
+ROOT="/tmp/onnx_split_validation/retina"
 MODEL="$DATA/model/epoch041.onnx"
 export PYTHONPATH="$REPO/inference/lattisense:$REPO"
 export CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8
-"$CMAKE" -S "$REPO" -B "$REPO/build" -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_DEV=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_BUILD_TYPE=Release
-"$CMAKE" --build "$REPO/build" -j8
-mkdir -p "$ROOT/reference"
+cmake -S "$REPO" -B "$REPO/build" -DINFERENCE_SDK_ENABLE_GPU=ON -DLATTISENSE_DEV=ON -DLATTISENSE_CUDA_ARCH=89 -DCMAKE_BUILD_TYPE=Release
+cmake --build "$REPO/build" -j8
+mkdir -p "$ROOT"
 cd "$ROOT"
 ```
 
-CPU 数据为推理进程生命周期的最大 RSS（GNU time）；GPU 数据包括每 0.5 秒采样的进程显存峰值和 SDK 每 0.1 秒采样的池内使用峰值。GPU 进程显存含内存池预留。FHE 时间取 SDK 的 `Run GPU time`，不含编译、参数加密、密钥准备和结果解密。GiB = 2³⁰ bytes。
+## ONNX 切分与前缀明文执行
 
-输入加密使用默认编译配置，不传 `--config`。参数加密共用 `training/config/storage_aware_config.json`，其中 seed stride `[16,16]` 和存储评分权重为非默认设置。
-
-## 原始 ONNX 明文参考
+输入 manifest 显式绑定名称、完整逻辑 shape 和轴语义；边界 CSV 的 Feature 类型由原图语义传播和后缀编译契约确定，无需人工为每个 CSV 选择打包。重复准备时使用新的输出目录，脚本拒绝覆盖已发布的 split manifest。
 
 ```bash
-"$PY" "$REPO/tools/evaluate_onnx_csv.py" --onnx "$MODEL" --input "input_0=$DATA/img.csv" --input "input_1=$DATA/non_inv.csv" --input "input_2=$DATA/inv.csv" --output-csv "$ROOT/reference/onnx.csv" --report "$ROOT/reference/onnx.json"
+"$PY" - "$DATA" "$ROOT/inputs.json" <<'PYINPUT'
+import json
+from pathlib import Path
+import sys
+base = Path(sys.argv[1])
+inputs = [{'name': 'input_0', 'csv': 'img.csv', 'shape': [1, 5, 512, 512], 'axes': ['N', 'C', 'H', 'W']}, {'name': 'input_1', 'csv': 'non_inv.csv', 'shape': [1, 2], 'axes': ['N', 'F']}, {'name': 'input_2', 'csv': 'inv.csv', 'shape': [1, 3], 'axes': ['N', 'F']}]
+for entry in inputs:
+    entry['csv'] = str(base / entry['csv'])
+Path(sys.argv[2]).write_text(json.dumps({'inputs': inputs, 'model_kind': 'standard'}, indent=2))
+PYINPUT
+"$PY" "$REPO/tools/prepare_split_onnx.py" --onnx "$MODEL" \
+  --inputs-manifest "$ROOT/inputs.json" --output-dir "$ROOT/split" > "$ROOT/prepare.log" 2>&1
+SPLIT="$ROOT/split"
 ```
 
-## 输入加密
+准备阶段保存原始完整模型全部明文输出、prefix/suffix ONNX、全部边界逻辑 CSV 和 hash，并验证 CSV 往返及切分明文等价。BERT/ViT 使用项目既有 NumPy float64 明文参考实现；其他任务使用 ONNX Runtime 与既有多项式适配。
+
+## 输入加密 GPU lazy
 
 ```bash
-OUT="$ROOT/task_input_encrypted"
+OUT="$ROOT/input"
 mkdir -p "$OUT"
 cd "$OUT"
-"$PY" "$REPO/training/run_compile.py" --input "$MODEL" --output "$OUT" --style multiplexed
-"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task"
-"$PY" "$REPO/tools/measure_gpu_command.py" --output-dir "$OUT/run" -- "$REPO/build/examples/inference" --task-dir "$OUT/task" --input "input_0=$DATA/img.csv" --input "input_1=$DATA/non_inv.csv" --input "input_2=$DATA/inv.csv" --output-csv "$OUT/decrypted.csv" --gpu
-"$PY" "$REPO/tools/compare_inference_csv.py" --reference "$ROOT/reference/onnx.csv" --actual "$OUT/decrypted.csv" --report "$OUT/comparison.json"
+"$PY" "$REPO/training/run_compile.py" --input "$SPLIT/suffix.onnx" \
+  --split-manifest "$SPLIT/split_manifest.json" --output "$OUT" --style multiplexed \
+  > "$ROOT/compile_input.log" 2>&1
+"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task" > "$ROOT/graph_input.log" 2>&1
+"$PY" "$REPO/tools/run_split_inference.py" --task-dir "$OUT/task" --output-dir "$OUT/run" \
+  > "$ROOT/infer_input.log" 2>&1
 ```
 
-证据：`task_input_encrypted/run/inference.metrics.json`、`task_input_encrypted/comparison.json`。
-
-## 参数加密
+## 参数加密 GPU runtime_lazy
 
 ```bash
-OUT="$ROOT/task_parameter_encrypted"
+OUT="$ROOT/parameter"
 mkdir -p "$OUT"
 cd "$OUT"
-"$PY" "$REPO/training/run_compile.py" --input "$MODEL" --output "$OUT" --style multiplexed --config "$REPO/training/config/storage_aware_config.json" --deployment-mode server_provisioned_runner
-"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task" --deployment-mode server_provisioned_runner --parameter-loading-mode runtime_lazy
-/usr/bin/time -v -o "$OUT/provision.time" "$REPO/build/tools/provision_encrypted_runner_bundle" --task-dir "$OUT/task" --out "$OUT/task/runner"
-"$PY" "$REPO/tools/measure_gpu_command.py" --output-dir "$OUT/run" -- "$REPO/build/examples/inference" --task-dir "$OUT/task/runner" --deployment-mode server_provisioned_runner --input "input_0=$DATA/img.csv" --input "input_1=$DATA/non_inv.csv" --input "input_2=$DATA/inv.csv" --output-cipher "$OUT/output.ct" --gpu
-"$REPO/build/tools/decrypt_runner_output" --task-dir "$OUT/task/provisioner" --cipher "$OUT/output.ct" --output-csv "$OUT/decrypted.csv"
+"$PY" "$REPO/training/run_compile.py" --input "$SPLIT/suffix.onnx" \
+  --split-manifest "$SPLIT/split_manifest.json" --output "$OUT" --style multiplexed --config "$REPO/training/config/storage_aware_config.json" \
+  --deployment-mode server_provisioned_runner > "$ROOT/compile_parameter.log" 2>&1
+"$PY" "$REPO/inference/interface/gen_mega_ag.py" --task-dir "$OUT/task" \
+  --deployment-mode server_provisioned_runner --parameter-loading-mode runtime_lazy \
+  > "$ROOT/graph_parameter.log" 2>&1
+/usr/bin/time -v -o "$OUT/provision.time" "$REPO/build/tools/provision_encrypted_runner_bundle" \
+  --task-dir "$OUT/task" --out "$OUT/task/runner" > "$ROOT/provision.log" 2>&1
+"$PY" "$REPO/tools/run_split_inference.py" --task-dir "$OUT/task" --output-dir "$OUT/run" \
+  > "$ROOT/infer_parameter.log" 2>&1
 "$PY" "$REPO/tools/summarize_parameter_bundle.py" --task-dir "$OUT/task" --output "$OUT/bundle.json"
-"$PY" "$REPO/tools/compare_inference_csv.py" --reference "$ROOT/reference/onnx.csv" --actual "$OUT/decrypted.csv" --report "$OUT/comparison.json"
 ```
 
-证据：`task_parameter_encrypted/run/inference.metrics.json`、`task_parameter_encrypted/comparison.json`、`task_parameter_encrypted/bundle.json`、`task_parameter_encrypted/provision.time`。
+两种模式共用同一 split manifest、suffix 和逻辑 CSV，并分别核对实际编译契约与 Client/Runner、图签名及 CKKS 上下文。切分后缀保持 PN15Default，命令无需额外指定参数配置。
 
-## 本轮 v6 实测记录
+`run_split_inference.py` 按契约传入全部命名 CSV，调用现有 Client/Runner，完成解密和输出汇合，并比较原始完整模型全部输出。证据为 `split/split_manifest.json`、各模式的 `task/input_contract.json`、`run/inference.log`、`run/inference.metrics.json`、`run/decrypted.csv`、`run/merged_outputs.npz` 和 `run/comparison.json`。比较失败返回非零状态；不使用 task 内部明文输出替代原始 ONNX 基准。
+
+CPU 峰值取 GNU time RSS，GPU 进程显存每 0.5 秒采样，GPU 池内峰值每 0.1 秒采样；FHE 时间取 `Run GPU time`，不含编译、密钥准备、provision 和解密。GiB = 2³⁰ bytes。GPU lazy 验收结果见 [切分验收报告](../../docs/report/onnx_split_gpu_lazy_acceptance.md)。
+
+## 历史完整模型 v6 实测记录
 
 证据根目录：`/tmp/v6_six_task_validation/retina/`。比较全部输出，阈值 `max_abs < 0.2`。GPU 为 RTX 5880 Ada（48 GiB），每个 GPU 同时只执行一个推理任务；图生成、密钥准备和 provision 可能与另一张卡的推理重叠，wall 受主机 I/O 竞争影响。
 

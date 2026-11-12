@@ -273,7 +273,11 @@ def gen_custom_task(
         return head_shape
 
     def _feature_input_is_plaintext(feature_id):
-        return input_mode == 'plaintext' and feature_id in graph_input_feature_ids
+        if input_mode != 'plaintext':
+            return False
+        if feature_id in feature_id_to_nodes_map:
+            return feature_id_to_nodes_map[feature_id][0].type == DataType.Plaintext
+        return feature_id in graph_input_feature_ids
 
     def _make_feature_nodes(feature_id, count, level):
         if _feature_input_is_plaintext(feature_id):
@@ -661,10 +665,12 @@ def gen_custom_task(
 
     # Pre-add all graph-level input ciphertexts first so they precede weights in input_args.
     # This ensures the C++ signature position-matching works correctly for multi-input models.
-    # Only needed when there are multiple graph-level inputs; single-input models are handled
-    # correctly by the lazy-loading in the main loop (which also computes the right CT count
-    # for big_size layers).
-    if len(config_info['input_feature']) > 1:
+    # Multiple inputs and matrix inputs can begin with structural layers that
+    # require registration before the main loop. Other single inputs are lazy-loaded.
+    if len(config_info['input_feature']) > 1 or (
+        config_info['input_feature']
+        and config_info['feature'][config_info['input_feature'][0]].get('data_type') == 'feature_mat'
+    ):
         # First-use lookup: {input_fid: (first consumer layer id, first consumer layer config)}
         first_use = {}
         for consumer_layer_id, lyr in config_info['layer'].items():
@@ -780,6 +786,8 @@ def gen_custom_task(
                     'pcminviter',
                     'pcmctmul',
                     'pcmpolymultct',
+                    'drop_level',
+                    'bootstrapping',
                 }:
                     shape_per_head, _, _, n_packed = _feature_mat_ct_info(feat, n_heads, n, feature_id=input_fid)
                     par_feature_shapes[input_fid] = shape_per_head
@@ -1392,7 +1400,12 @@ def gen_custom_task(
                         f'but input has only {len(input_nodes)}'
                     )
                 input_nodes = input_nodes[:consumed_count]
-            layer_output_nodes = [drop_level(node, drop_level_n) for node in input_nodes]
+            # Public RingT plaintexts are independent of residual levels.
+            layer_output_nodes = (
+                input_nodes
+                if _feature_input_is_plaintext(input_fid)
+                else [drop_level(node, drop_level_n) for node in input_nodes]
+            )
             feature_id_to_nodes_map.update({output_fid: layer_output_nodes})
 
         elif layer_config['type'] == 'bootstrapping':

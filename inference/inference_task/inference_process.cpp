@@ -39,8 +39,7 @@ UPtr<CkksParameter> make_ckks_parameter_from_json(const json& param_json) {
     const int log_default_scale = param_json.at("log_default_scale").get<int>();
     const auto ring_type = static_cast<RingType>(param_json.value("ring_type", 1));
 
-    return MakeU<CkksParameter>(
-        CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p, ring_type));
+    return MakeU<CkksParameter>(CkksParameter::create_custom_parameter(log_n, log_default_scale, q, p, ring_type));
 }
 
 }  // namespace
@@ -250,8 +249,9 @@ static uint32_t par_diagonal_ct_count(const CkksParameter& param,
 static bool is_pcm_layer_type(const string& layer_type) {
     return layer_type == "pcmgeneralpoly" || layer_type == "pcmmulsquare" || layer_type == "pcmheadcolsum" ||
            layer_type == "pcminvinit" || layer_type == "pcminviter" || layer_type == "pcmctmul" ||
-           layer_type == "pcmpolymultct" || layer_type == "pcmgamma" || layer_type == "pcmpoly" || layer_type == "pcmstats" ||
-           layer_type == "pcmcenter" || layer_type == "pcminit" || layer_type == "pcmgs" || layer_type == "pcmaffine";
+           layer_type == "pcmpolymultct" || layer_type == "pcmgamma" || layer_type == "pcmpoly" ||
+           layer_type == "pcmstats" || layer_type == "pcmcenter" || layer_type == "pcminit" || layer_type == "pcmgs" ||
+           layer_type == "pcmaffine";
 }
 
 static bool is_pdm_layer_type(const string& layer_type) {
@@ -417,7 +417,8 @@ void InitInferenceProcess::_init_pcmgamma_layer(const string& key, const json& l
     auto gamma = load_h5_tensor_any<1>(layer, h5_file, {"gamma", "weight"}, {feat_in.shape[1]});
 
     auto pcmgamma = MakeU<ParBlockColMajorPolyActRNGamma>(param, feat_in.shape, block_size, get_config_n_heads(n_heads),
-                                                          K, feat_in.level, move(gamma), get_feature_mat_head_shape(feat_in, feat_in_id));
+                                                          K, feat_in.level, move(gamma),
+                                                          get_feature_mat_head_shape(feat_in, feat_in_id));
     _prepare_layer(
         key, move(pcmgamma), [](ParBlockColMajorPolyActRNGamma&) {},
         [](ParBlockColMajorPolyActRNGamma& l) { l.prepare_weight(); });
@@ -711,7 +712,7 @@ void InitInferenceProcess::_init_pcmmulsquare_layer(const string& key, const jso
 
     auto layer_impl =
         MakeU<ParBlockColMajorMultipleSquare>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
-                                        get_config_matmul_block_size(matmul_block_size));
+                                              get_config_matmul_block_size(matmul_block_size));
     _prepare_layer(
         key, move(layer_impl), [](ParBlockColMajorMultipleSquare&) {},
         [](ParBlockColMajorMultipleSquare& l) { l.prepare_weight(); });
@@ -738,9 +739,8 @@ void InitInferenceProcess::_init_pcmheadcolsum_layer(const string& key, const js
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     const Duo shape = feat_in.shape;
 
-    auto layer_impl =
-        MakeU<ParBlockColMajorHeadColSum>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
-                                        get_config_matmul_block_size(matmul_block_size));
+    auto layer_impl = MakeU<ParBlockColMajorHeadColSum>(param, shape, head_shape, get_config_n_heads(n_heads),
+                                                        feat_in.level, get_config_matmul_block_size(matmul_block_size));
     _prepare_layer(
         key, move(layer_impl), [](ParBlockColMajorHeadColSum&) {},
         [](ParBlockColMajorHeadColSum& l) { l.prepare_weight(); });
@@ -769,7 +769,7 @@ void InitInferenceProcess::_init_pcminvinit_layer(const string& key, const json&
 
     auto layer_impl =
         MakeU<ParBlockColMajorInverseInit>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
-                                        get_config_matmul_block_size(matmul_block_size));
+                                           get_config_matmul_block_size(matmul_block_size));
     _prepare_layer(
         key, move(layer_impl), [](ParBlockColMajorInverseInit&) {},
         [](ParBlockColMajorInverseInit& l) { l.prepare_weight(); });
@@ -798,7 +798,7 @@ void InitInferenceProcess::_init_pcminviter_layer(const string& key, const json&
 
     auto layer_impl =
         MakeU<ParBlockColMajorInverseIter>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
-                                        get_config_matmul_block_size(matmul_block_size));
+                                           get_config_matmul_block_size(matmul_block_size));
     _prepare_layer(
         key, move(layer_impl), [](ParBlockColMajorInverseIter&) {},
         [](ParBlockColMajorInverseIter& l) { l.prepare_weight(); });
@@ -826,7 +826,7 @@ void InitInferenceProcess::_init_pcmctmul_layer(const string& key, const json& l
     const Duo shape = feat_in.shape;
 
     auto layer_impl = MakeU<ParBlockColMajorCtMul>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
-                                        get_config_matmul_block_size(matmul_block_size));
+                                                   get_config_matmul_block_size(matmul_block_size));
     _prepare_layer(
         key, move(layer_impl), [](ParBlockColMajorCtMul&) {}, [](ParBlockColMajorCtMul& l) { l.prepare_weight(); });
 }
@@ -850,9 +850,8 @@ void InitInferenceProcess::_init_pcmpolymultct_layer(const string& key, const js
     Duo head_shape = get_feature_mat_head_shape(feat_in, feat_in_id);
     const Duo shape = feat_in.shape;
 
-    auto layer_impl =
-        MakeU<ParBlockColMajorPolyMultCt>(param, shape, head_shape, get_config_n_heads(n_heads), feat_in.level,
-                                        get_config_matmul_block_size(matmul_block_size));
+    auto layer_impl = MakeU<ParBlockColMajorPolyMultCt>(param, shape, head_shape, get_config_n_heads(n_heads),
+                                                        feat_in.level, get_config_matmul_block_size(matmul_block_size));
     _prepare_layer(
         key, move(layer_impl), [](ParBlockColMajorPolyMultCt&) {},
         [](ParBlockColMajorPolyMultCt& l) { l.prepare_weight(); });
@@ -1102,13 +1101,18 @@ void InitInferenceProcess::_init_mult_scalar_layer(const string& key,
 
     Duo mult_input_shape = feature_input0.shape;
     Duo mult_skip = feature_input0.skip;
-    if (feature_input0.dim == 1) {
+    if (feature_input0.dim == 0) {
+        // A sparse vector stores channel c at c * skip[0], with no spatial axes.
+        // Reuse the spatial encoder with one virtual block per channel.
+        mult_input_shape = {1, feature_input0.skip[0]};
+        mult_skip = {1, 1};
+    } else if (feature_input0.dim == 1) {
         mult_input_shape[1] = 1;
         mult_skip[1] = 1;
     }
 
     Duo block_expansion;
-    if (mult_input_shape[0] > block_shape[0] || mult_input_shape[1] > block_shape[1]) {
+    if (feature_input0.dim != 0 && (mult_input_shape[0] > block_shape[0] || mult_input_shape[1] > block_shape[1])) {
         block_expansion = {mult_input_shape[0] / block_shape[0], mult_input_shape[1] / block_shape[1]};
     } else {
         block_expansion = {1, 1};
@@ -1268,10 +1272,10 @@ void InitInferenceProcess::_init_multiplexed_conv_layer(const string& key,
                 padding.set(0, -1);
                 padding.set(1, -1);
             }
-            auto inv_conv_layer =
-                MakeU<InverseMultiplexedConv2DLayer>(param, feature_input.shape, move(weight), move(bias), padding,
-                                                     stride, block_shape_in, feature_input.level, residual_scale, seed_stride,
-                    layer.value("seed_weight_layout", std::string("kernel")) == "canonical");
+            auto inv_conv_layer = MakeU<InverseMultiplexedConv2DLayer>(
+                param, feature_input.shape, move(weight), move(bias), padding, stride, block_shape_in,
+                feature_input.level, residual_scale, seed_stride,
+                layer.value("seed_weight_layout", std::string("kernel")) == "canonical");
             _prepare_layer(key, move(inv_conv_layer));
         } else {
             auto mux_conv_layer = MakeU<MultiplexedConv2DPackedLayer>(
@@ -1450,16 +1454,26 @@ void InitInferenceProcess::load_public_matrix_layers() {
         const auto& key = item.key();
         const auto& layer = item.value();
         const auto type = layer.at("type").get<string>();
-        if (type == "parccmm") _init_parccmm_layer(key, layer);
-        if (type == "partranspose") _init_partranspose_layer(key, layer);
-        if (type == "pcmmulsquare") _init_pcmmulsquare_layer(key, layer);
-        if (type == "pcmheadcolsum") _init_pcmheadcolsum_layer(key, layer);
-        if (type == "pcminvinit") _init_pcminvinit_layer(key, layer);
-        if (type == "pcminviter") _init_pcminviter_layer(key, layer);
-        if (type == "pcmctmul") _init_pcmctmul_layer(key, layer);
-        if (type == "pcmpolymultct") _init_pcmpolymultct_layer(key, layer);
-        if (type == "pcmcenter") _init_pcmcenter_layer(key, layer);
-        if (type == "pcmgs") _init_pcmgs_layer(key, layer);
+        if (type == "parccmm")
+            _init_parccmm_layer(key, layer);
+        if (type == "partranspose")
+            _init_partranspose_layer(key, layer);
+        if (type == "pcmmulsquare")
+            _init_pcmmulsquare_layer(key, layer);
+        if (type == "pcmheadcolsum")
+            _init_pcmheadcolsum_layer(key, layer);
+        if (type == "pcminvinit")
+            _init_pcminvinit_layer(key, layer);
+        if (type == "pcminviter")
+            _init_pcminviter_layer(key, layer);
+        if (type == "pcmctmul")
+            _init_pcmctmul_layer(key, layer);
+        if (type == "pcmpolymultct")
+            _init_pcmpolymultct_layer(key, layer);
+        if (type == "pcmcenter")
+            _init_pcmcenter_layer(key, layer);
+        if (type == "pcmgs")
+            _init_pcmgs_layer(key, layer);
         if (type == "pcminit" && layer.contains("parameter_sources")) {
             auto public_layer = layer;
             vector<double> coeffs(3, 0.0);
@@ -1480,7 +1494,8 @@ void InitInferenceProcess::load_public_matrix_layers() {
         if ((type == "pcmgeneralpoly" || type == "pcmgamma" || type == "pcm_add_pt") &&
             layer.contains("parameter_sources")) {
             const string generator = type == "pcmgeneralpoly" ? "stockmeyer_coeff_pt" :
-                                     type == "pcmgamma" ? "gamma_pt" : "add_pt";
+                                     type == "pcmgamma"       ? "gamma_pt" :
+                                                                "add_pt";
             const auto& sources = layer.at("parameter_sources");
             if (sources.contains(generator) && sources.at(generator).at("visibility") == "public") {
                 const auto& recipe = sources.at(generator).at("public_recipe").at("content");
@@ -1492,28 +1507,38 @@ void InitInferenceProcess::load_public_matrix_layers() {
                 if (type == "pcmgeneralpoly") {
                     const auto values = recipe.at("coefficients").get<vector<double>>();
                     const auto order = layer.at("order").get<uint32_t>();
-                    if (values.size() != order + 1) throw runtime_error("Invalid public PCM polynomial: " + key);
+                    if (values.size() != order + 1)
+                        throw runtime_error("Invalid public PCM polynomial: " + key);
                     Array<double, 2> coeffs({order + 1, feature.shape[1]});
                     for (uint32_t i = 0; i <= order; ++i)
-                        for (uint32_t j = 0; j < feature.shape[1]; ++j) coeffs.set(i, j, values[i]);
-                    auto poly = MakeU<ParBlockColMajorPoly>(param, feature.shape,
-                        get_feature_mat_head_shape(feature, fid), heads, feature.level, move(coeffs), order, d);
-                    _prepare_layer(key, move(poly), [](ParBlockColMajorPoly& l) { l.prepare_weight_stockmeyer_lazy(); },
-                                                   [](ParBlockColMajorPoly& l) { l.prepare_weight_stockmeyer(); });
+                        for (uint32_t j = 0; j < feature.shape[1]; ++j)
+                            coeffs.set(i, j, values[i]);
+                    auto poly =
+                        MakeU<ParBlockColMajorPoly>(param, feature.shape, get_feature_mat_head_shape(feature, fid),
+                                                    heads, feature.level, move(coeffs), order, d);
+                    _prepare_layer(
+                        key, move(poly), [](ParBlockColMajorPoly& l) { l.prepare_weight_stockmeyer_lazy(); },
+                        [](ParBlockColMajorPoly& l) { l.prepare_weight_stockmeyer(); });
                 } else if (type == "pcmgamma") {
                     Array<double, 1> values({feature.shape[1]});
-                    for (uint32_t i = 0; i < feature.shape[1]; ++i) values.set(i, recipe.at("scalar_value").get<double>());
-                    auto gamma = MakeU<ParBlockColMajorPolyActRNGamma>(param, feature.shape, d, heads,
-                        layer.value("K", 1u), feature.level, move(values), get_feature_mat_head_shape(feature, fid));
-                    _prepare_layer(key, move(gamma), [](ParBlockColMajorPolyActRNGamma&) {},
-                                                   [](ParBlockColMajorPolyActRNGamma& l) { l.prepare_weight(); });
+                    for (uint32_t i = 0; i < feature.shape[1]; ++i)
+                        values.set(i, recipe.at("scalar_value").get<double>());
+                    auto gamma = MakeU<ParBlockColMajorPolyActRNGamma>(
+                        param, feature.shape, d, heads, layer.value("K", 1u), feature.level, move(values),
+                        get_feature_mat_head_shape(feature, fid));
+                    _prepare_layer(
+                        key, move(gamma), [](ParBlockColMajorPolyActRNGamma&) {},
+                        [](ParBlockColMajorPolyActRNGamma& l) { l.prepare_weight(); });
                 } else {
                     Array<double, 2> values({feature.shape[0], feature.shape[1]});
                     for (uint32_t i = 0; i < feature.shape[0]; ++i)
-                        for (uint32_t j = 0; j < feature.shape[1]; ++j) values.set(i, j, recipe.at("value").get<double>());
-                    auto add = MakeU<ParBlockColMajorAddPt>(param, feature.shape, d, heads, feature.level, move(values));
-                    _prepare_layer(key, move(add), [](ParBlockColMajorAddPt&) {},
-                                                 [](ParBlockColMajorAddPt& l) { l.precompute_pts(); });
+                        for (uint32_t j = 0; j < feature.shape[1]; ++j)
+                            values.set(i, j, recipe.at("value").get<double>());
+                    auto add =
+                        MakeU<ParBlockColMajorAddPt>(param, feature.shape, d, heads, feature.level, move(values));
+                    _prepare_layer(
+                        key, move(add), [](ParBlockColMajorAddPt&) {},
+                        [](ParBlockColMajorAddPt& l) { l.precompute_pts(); });
                 }
             }
         }
@@ -1524,17 +1549,28 @@ void InitInferenceProcess::load_public_matrix_layers() {
             geometry["inv_var"] = 1.0;
             _init_pcmstats_layer(key, geometry);
         }
-        if (type == "pdmccmm") _init_pdmccmm_layer(key, layer);
-        if (type == "pdmtranspose") _init_pdmtranspose_layer(key, layer);
-        if (type == "pdmmulsquare") _init_pdmmulsquare_layer(key, layer);
-        if (type == "pdmheadcolsum") _init_pdmheadcolsum_layer(key, layer);
-        if (type == "pdminvinit") _init_pdminvinit_layer(key, layer);
-        if (type == "pdminviter") _init_pdminviter_layer(key, layer);
-        if (type == "pdmctmul") _init_pdmctmul_layer(key, layer);
-        if (type == "pdmupperpolymultct") _init_pdmupperpolymultct_layer(key, layer);
-        if (type == "pdmstats") _init_pdmstats_layer(key, layer);
-        if (type == "pdmcenter") _init_pdmcenter_layer(key, layer);
-        if (type == "pdmgs") _init_pdmgs_layer(key, layer);
+        if (type == "pdmccmm")
+            _init_pdmccmm_layer(key, layer);
+        if (type == "pdmtranspose")
+            _init_pdmtranspose_layer(key, layer);
+        if (type == "pdmmulsquare")
+            _init_pdmmulsquare_layer(key, layer);
+        if (type == "pdmheadcolsum")
+            _init_pdmheadcolsum_layer(key, layer);
+        if (type == "pdminvinit")
+            _init_pdminvinit_layer(key, layer);
+        if (type == "pdminviter")
+            _init_pdminviter_layer(key, layer);
+        if (type == "pdmctmul")
+            _init_pdmctmul_layer(key, layer);
+        if (type == "pdmupperpolymultct")
+            _init_pdmupperpolymultct_layer(key, layer);
+        if (type == "pdmstats")
+            _init_pdmstats_layer(key, layer);
+        if (type == "pdmcenter")
+            _init_pdmcenter_layer(key, layer);
+        if (type == "pdmgs")
+            _init_pdmgs_layer(key, layer);
     }
 }
 
@@ -2645,8 +2681,8 @@ void InferenceProcess::run_task(bool is_mpc, ls::ProgressCallback progress_cb) {
             Duo output_head_shape = get_feature_mat_head_shape(feature_output, ki.get<string>());
             if (fp->mat_pack_style == "par_diagonal_pack") {
                 auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
-                n_out_num = par_diagonal_ct_count(output_context->parameter(), feature_output.shape,
-                                                  output_head_shape, fp->n_heads, feature_output.is_transposed);
+                n_out_num = par_diagonal_ct_count(output_context->parameter(), feature_output.shape, output_head_shape,
+                                                  fp->n_heads, feature_output.is_transposed);
             } else {
                 uint32_t d = par_d;
                 n_out_num = div_ceil(output_head_shape[0], d) * div_ceil(output_head_shape[1], d) * par_G;
@@ -3358,8 +3394,8 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
             Duo output_head_shape = get_feature_mat_head_shape(feature_output, ki.get<string>());
             if (fp->mat_pack_style == "par_diagonal_pack") {
                 auto* output_context = ckks_contexts.at(feature_output.ckks_parameter_id).get();
-                n_out_num = par_diagonal_ct_count(output_context->parameter(), feature_output.shape,
-                                                  output_head_shape, fp->n_heads, feature_output.is_transposed);
+                n_out_num = par_diagonal_ct_count(output_context->parameter(), feature_output.shape, output_head_shape,
+                                                  fp->n_heads, feature_output.is_transposed);
                 output_mat_block_sizes[out_idx] =
                     next_pow2_u32(feature_output.is_transposed ? output_head_shape[0] : output_head_shape[1]);
             } else {
@@ -3375,10 +3411,10 @@ void InferenceProcess::run_task_lazy(bool is_mpc, ls::ProgressCallback progress_
                 n_out_num *= out_block_expansion[0] * out_block_expansion[1];
             }
         }
-        double encode_scale =
-            ckks_contexts.at(feature_output.ckks_parameter_id).get()->parameter().default_scale();
+        double encode_scale = ckks_contexts.at(feature_output.ckks_parameter_id).get()->parameter().default_scale();
         for (int i = 0; i < n_out_num; i++) {
-            z_lists[out_idx].emplace_back(ckks_contexts.at(feature_output.ckks_parameter_id)->parameter(), feature_output.level);
+            z_lists[out_idx].emplace_back(ckks_contexts.at(feature_output.ckks_parameter_id)->parameter(),
+                                          feature_output.level);
             z_lists[out_idx].back().set_scale(encode_scale);
         }
         cxx_args.push_back(CxxVectorArgument{ki, &z_lists[out_idx]});
@@ -3682,124 +3718,124 @@ ls::CkksPlaintext generate_matrix_parameter(ls::CkksContext& ckks_ctx, Layer* la
     const string type = attrs.at("type").get<string>();
     const int i = attrs.value("i", 0), j = attrs.value("j", 0), k = attrs.value("k", 0);
     CkksPlaintext pt;
-        if (op_class == "ParBlockColMajorPoly") {
-            auto* layer = static_cast<ParBlockColMajorPoly*>(layer_ptr);
-            if (type == "stockmeyer_coeff_pt") {
-                pt = layer->generate_weight_pt_for_stockmeyer(ckks_ctx, attrs.value("coeff_idx", i),
-                                                              attrs.value("ct_idx", j));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorPoly: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorPolyMultCt") {
-            auto* layer = static_cast<ParBlockColMajorPolyMultCt*>(layer_ptr);
-            if (type == "one_pt") {
-                pt = layer->generate_one_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
-                                            attrs.value("g", k));
-            } else if (type == "half_pt") {
-                pt = layer->generate_half_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
-                                             attrs.value("g", k));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorPolyMultCt: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorMultipleSquare") {
-            auto* layer = static_cast<ParBlockColMajorMultipleSquare*>(layer_ptr);
-            if (type == "mask_pt") {
-                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorMultipleSquare: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorHeadColSum") {
-            auto* layer = static_cast<ParBlockColMajorHeadColSum*>(layer_ptr);
-            if (type == "mask_pt") {
-                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else if (type == "input_mask_pt") {
-                pt = layer->generate_input_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorHeadColSum: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorInverseInit") {
-            auto* layer = static_cast<ParBlockColMajorInverseInit*>(layer_ptr);
-            if (type == "two_pt") {
-                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorInverseInit: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorInverseIter") {
-            auto* layer = static_cast<ParBlockColMajorInverseIter*>(layer_ptr);
-            if (type == "one_pt") {
-                pt = layer->generate_one_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else if (type == "two_pt") {
-                pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorInverseIter: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorCtMul") {
-            auto* layer = static_cast<ParBlockColMajorCtMul*>(layer_ptr);
-            if (type == "mask_pt") {
-                pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
-            } else {
-                throw runtime_error("encode_pt: unknown type for ParBlockColMajorCtMul: " + type);
-            }
-        } else if (op_class == "ParBlockColMajorCPMM") {
-            auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
-            if (type == "mask_h0_pt")
-                pt = layer->generate_mask_h0_pt(ckks_ctx);
-            else if (type == "bias_pt")
-                pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", i), attrs.value("bi", j), attrs.value("g", k));
-            else if (type == "row_chunk_seed")
-                pt = layer->generate_row_chunk_seed_pt(ckks_ctx, attrs.at("seed_id").get<uint32_t>());
-            else
-                pt = layer->generate_diag_pt(ckks_ctx, attrs.value("mb", i), attrs.value("g", j), attrs.value("bp", k),
-                                             attrs.value("k", 0));
-        } else if (op_class == "ParBlockColMajorCCMM") {
-            auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
-            if (type == "sigma_pt")
-                pt = layer->generate_sigma_pt(ckks_ctx, attrs.value("k", i));
-            else if (type == "tau_pt")
-                pt = layer->generate_tau_pt(ckks_ctx, attrs.value("offset_idx", i));
-            else if (type == "psi_k0_pt")
-                pt = layer->generate_psi_k0_pt(ckks_ctx);
-            else if (type == "psi_wk_pt")
-                pt = layer->generate_psi_wk_pt(ckks_ctx, i);
-            else
-                pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
-        } else if (op_class == "ParBlockColMajorPolyActRNGamma") {
-            auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
-            pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bi", 0), attrs.value("bj", j),
-                                          attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
-            auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
-            pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0),
-                                          attrs.value("bi", 0), attrs.value("bj", j), attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNStats") {
-            auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNXCentered") {
-            auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNMinimaxInit") {
-            auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNGoldschmidt") {
-            auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorLNAffine") {
-            auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
-                                    attrs.value("g", k));
-        } else if (op_class == "ParBlockColMajorTranspose") {
-            auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
-            pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
-        } else if (op_class == "ParBlockColMajorAddPt") {
-            auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
-            pt = layer->generate_pt(ckks_ctx, attrs.value("bi", i), attrs.value("bj", j), attrs.value("g", k));
+    if (op_class == "ParBlockColMajorPoly") {
+        auto* layer = static_cast<ParBlockColMajorPoly*>(layer_ptr);
+        if (type == "stockmeyer_coeff_pt") {
+            pt = layer->generate_weight_pt_for_stockmeyer(ckks_ctx, attrs.value("coeff_idx", i),
+                                                          attrs.value("ct_idx", j));
         } else {
-            throw runtime_error("Unknown matrix parameter class: " + op_class);
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorPoly: " + type);
         }
+    } else if (op_class == "ParBlockColMajorPolyMultCt") {
+        auto* layer = static_cast<ParBlockColMajorPolyMultCt*>(layer_ptr);
+        if (type == "one_pt") {
+            pt =
+                layer->generate_one_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j), attrs.value("g", k));
+        } else if (type == "half_pt") {
+            pt = layer->generate_half_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("ct_local", j),
+                                         attrs.value("g", k));
+        } else {
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorPolyMultCt: " + type);
+        }
+    } else if (op_class == "ParBlockColMajorMultipleSquare") {
+        auto* layer = static_cast<ParBlockColMajorMultipleSquare*>(layer_ptr);
+        if (type == "mask_pt") {
+            pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else {
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorMultipleSquare: " + type);
+        }
+    } else if (op_class == "ParBlockColMajorHeadColSum") {
+        auto* layer = static_cast<ParBlockColMajorHeadColSum*>(layer_ptr);
+        if (type == "mask_pt") {
+            pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else if (type == "input_mask_pt") {
+            pt = layer->generate_input_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else {
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorHeadColSum: " + type);
+        }
+    } else if (op_class == "ParBlockColMajorInverseInit") {
+        auto* layer = static_cast<ParBlockColMajorInverseInit*>(layer_ptr);
+        if (type == "two_pt") {
+            pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else {
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorInverseInit: " + type);
+        }
+    } else if (op_class == "ParBlockColMajorInverseIter") {
+        auto* layer = static_cast<ParBlockColMajorInverseIter*>(layer_ptr);
+        if (type == "one_pt") {
+            pt = layer->generate_one_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else if (type == "two_pt") {
+            pt = layer->generate_two_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else {
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorInverseIter: " + type);
+        }
+    } else if (op_class == "ParBlockColMajorCtMul") {
+        auto* layer = static_cast<ParBlockColMajorCtMul*>(layer_ptr);
+        if (type == "mask_pt") {
+            pt = layer->generate_mask_pt(ckks_ctx, attrs.value("ct_idx", i));
+        } else {
+            throw runtime_error("encode_pt: unknown type for ParBlockColMajorCtMul: " + type);
+        }
+    } else if (op_class == "ParBlockColMajorCPMM") {
+        auto* layer = static_cast<ParBlockColMajorCPMM*>(layer_ptr);
+        if (type == "mask_h0_pt")
+            pt = layer->generate_mask_h0_pt(ckks_ctx);
+        else if (type == "bias_pt")
+            pt = layer->generate_bias_pt(ckks_ctx, attrs.value("mb", i), attrs.value("bi", j), attrs.value("g", k));
+        else if (type == "row_chunk_seed")
+            pt = layer->generate_row_chunk_seed_pt(ckks_ctx, attrs.at("seed_id").get<uint32_t>());
+        else
+            pt = layer->generate_diag_pt(ckks_ctx, attrs.value("mb", i), attrs.value("g", j), attrs.value("bp", k),
+                                         attrs.value("k", 0));
+    } else if (op_class == "ParBlockColMajorCCMM") {
+        auto* layer = static_cast<ParBlockColMajorCCMM*>(layer_ptr);
+        if (type == "sigma_pt")
+            pt = layer->generate_sigma_pt(ckks_ctx, attrs.value("k", i));
+        else if (type == "tau_pt")
+            pt = layer->generate_tau_pt(ckks_ctx, attrs.value("offset_idx", i));
+        else if (type == "psi_k0_pt")
+            pt = layer->generate_psi_k0_pt(ckks_ctx);
+        else if (type == "psi_wk_pt")
+            pt = layer->generate_psi_wk_pt(ckks_ctx, i);
+        else
+            pt = layer->generate_psi_wkd_pt(ckks_ctx, i);
+    } else if (op_class == "ParBlockColMajorPolyActRNGamma") {
+        auto* layer = static_cast<ParBlockColMajorPolyActRNGamma*>(layer_ptr);
+        pt = layer->generate_gamma_pt(ckks_ctx, attrs.value("mb", 0), attrs.value("bi", 0), attrs.value("bj", j),
+                                      attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorPolyActRNPoly") {
+        auto* layer = static_cast<ParBlockColMajorPolyActRNPoly*>(layer_ptr);
+        pt = layer->generate_coeff_pt(ckks_ctx, attrs.value("coeff_idx", i), attrs.value("mb", 0), attrs.value("bi", 0),
+                                      attrs.value("bj", j), attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorLNStats") {
+        auto* layer = static_cast<ParBlockColMajorLNStats*>(layer_ptr);
+        pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorLNXCentered") {
+        auto* layer = static_cast<ParBlockColMajorLNXCentered*>(layer_ptr);
+        pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorLNMinimaxInit") {
+        auto* layer = static_cast<ParBlockColMajorLNMinimaxInit*>(layer_ptr);
+        pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorLNGoldschmidt") {
+        auto* layer = static_cast<ParBlockColMajorLNGoldschmidt*>(layer_ptr);
+        pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorLNAffine") {
+        auto* layer = static_cast<ParBlockColMajorLNAffine*>(layer_ptr);
+        pt = layer->generate_pt(ckks_ctx, attrs.value("pt_idx", i), attrs.value("bi", 0), attrs.value("bj", j),
+                                attrs.value("g", k));
+    } else if (op_class == "ParBlockColMajorTranspose") {
+        auto* layer = static_cast<ParBlockColMajorTranspose*>(layer_ptr);
+        pt = layer->generate_transpose_diag_pt(ckks_ctx, attrs.value("k_idx", i));
+    } else if (op_class == "ParBlockColMajorAddPt") {
+        auto* layer = static_cast<ParBlockColMajorAddPt*>(layer_ptr);
+        pt = layer->generate_pt(ckks_ctx, attrs.value("bi", i), attrs.value("bj", j), attrs.value("g", k));
+    } else {
+        throw runtime_error("Unknown matrix parameter class: " + op_class);
+    }
     return pt;
 }
 
@@ -3830,15 +3866,14 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             (op_class == "Avgpool1DLayer" || op_class == "Avgpool2DLayer")) {
             const auto divisor = attrs.at("divisor").get<uint32_t>();
             const auto level = attrs.at("level").get<uint32_t>();
-            pt = op_class == "Avgpool1DLayer" ? Avgpool1DLayer::normalization_pt(ckks_ctx, divisor, level)
-                                             : Avgpool2DLayer::normalization_pt(ckks_ctx, divisor, level);
+            pt = op_class == "Avgpool1DLayer" ? Avgpool1DLayer::normalization_pt(ckks_ctx, divisor, level) :
+                                                Avgpool2DLayer::normalization_pt(ckks_ctx, divisor, level);
             local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));
             return;
         }
 
         if (type == "seed_mask_pt" && self.input_nodes.empty() &&
-            (op_class == "MultiplexedConv2DPackedLayerDepthwise" ||
-             op_class == "InverseMultiplexedConv2DLayer" ||
+            (op_class == "MultiplexedConv2DPackedLayerDepthwise" || op_class == "InverseMultiplexedConv2DLayer" ||
              op_class == "InverseMultiplexedConv2DLayerDepthwise")) {
             const auto read_duo = [&attrs](const char* key) {
                 return Duo{attrs.at(key).at(0).get<uint32_t>(), attrs.at(key).at(1).get<uint32_t>()};
@@ -3855,8 +3890,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             return;
         }
 
-        if (op_class == "MultiplexedConv2DPackedLayer" &&
-            (type == "mask_pt" || type == "seed_mask_pt") && self.input_nodes.empty()) {
+        if (op_class == "MultiplexedConv2DPackedLayer" && (type == "mask_pt" || type == "seed_mask_pt") &&
+            self.input_nodes.empty()) {
             const auto input_shape_attr = attrs.at("input_shape");
             const auto skip_attr = attrs.at("skip");
             const auto stride_attr = attrs.at("stride");
@@ -3870,7 +3905,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
             vector<double> mask;
             if (type == "seed_mask_pt") {
                 const auto kernel_shape_attr = attrs.at("kernel_shape");
-                const Duo kernel_shape = {kernel_shape_attr.at(0).get<uint32_t>(), kernel_shape_attr.at(1).get<uint32_t>()};
+                const Duo kernel_shape = {kernel_shape_attr.at(0).get<uint32_t>(),
+                                          kernel_shape_attr.at(1).get<uint32_t>()};
                 mask = MultiplexedConv2DPackedLayer::seed_mask_tensor_for_config(
                     input_shape, skip, stride, attrs.at("n_channel_per_ct").get<uint32_t>(), external_upsample_factor,
                     attrs.at("seed_a").get<uint32_t>(), attrs.at("seed_b").get<uint32_t>(),
@@ -3878,8 +3914,8 @@ void InferenceProcess::register_custom_executors(unordered_map<string, ExecutorF
                     attrs.value("mask_kind", string()) == "kernel");
             } else {
                 mask = MultiplexedConv2DPackedLayer::select_tensor_for_config(
-                input_shape, skip, stride, attrs.at("n_channel_per_ct").get<uint32_t>(), external_upsample_factor,
-                i * prod(skip * stride / external_upsample_factor));
+                    input_shape, skip, stride, attrs.at("n_channel_per_ct").get<uint32_t>(), external_upsample_factor,
+                    i * prod(skip * stride / external_upsample_factor));
             }
             pt = fhe_api::encode_ringt(ckks_ctx, mask, ckks_ctx.parameter().q()[mask_level]);
             local_data[self.output_nodes[0]->id] = make_shared<CkksPlaintext>(move(pt));

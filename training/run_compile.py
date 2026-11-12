@@ -257,6 +257,7 @@ Examples:
         default='',
         help='Compile config JSON path containing packing, seed_weight_subgrid_stride, and storage scoring options',
     )
+    parser.add_argument('--split-manifest', type=Path, help='Validated logical ONNX split input manifest')
 
     parser.add_argument(
         '--set_btp_scale',
@@ -311,6 +312,11 @@ Examples:
     if args.deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
         raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
     model_type = infer_model_type(input_path)
+    if args.split_manifest:
+        from tools.onnx_split_contract import load_manifest
+
+        split_manifest = load_manifest(args.split_manifest, input_path, mat_pack_style)
+        model_type = 'bert' if split_manifest['model_kind'] == 'bert' else ''
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
     if set_btp_scale is None:
@@ -390,6 +396,7 @@ Examples:
             ),
             deployment_mode=args.deployment_mode,
             seed_weight_subgrid_stride=compile_config.get('seed_weight_subgrid_stride', [1, 1]),
+            split_suffix=args.split_manifest is not None,
             # enable_score_cache=False
         )
 
@@ -436,6 +443,11 @@ Examples:
             print(f'[Deployment] Provisioner: {task_dir / "provisioner"}')
             print(f'[Deployment] Runner:      {runner_dir}')
             print('[Deployment] Runner bundle config excludes secret_key.bin and model_parameters.h5.')
+
+        if args.split_manifest:
+            from tools.onnx_split_contract import write_contract
+
+            write_contract(args.split_manifest, task_dir)
 
         return 0
 

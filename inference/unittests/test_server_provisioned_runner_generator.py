@@ -53,6 +53,65 @@ def _data_with_missing_source(mega_ag):
 
 
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_single_matrix_input_can_start_with_drop_level_in_both_modes(self):
+        for encrypted_parameters in (False, True):
+            with self.subTest(encrypted_parameters=encrypted_parameters), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                features = {
+                    name: dict(
+                        _feature(level),
+                        dim=2,
+                        channel=1,
+                        shape=[8, 16],
+                        head_shape=[8, 8],
+                        skip=[1, 1],
+                        invalid_fill=[1, 1],
+                        data_type='feature_mat',
+                    )
+                    for name, level in [('input', 5), ('dropped', 4), ('output', 2)]
+                }
+                graph = dict(
+                    feature=features,
+                    input_feature=['input'],
+                    output_feature=['output'],
+                    layer={
+                        'drop': dict(type='drop_level', feature_input=['input'], feature_output=['dropped']),
+                        'linear': dict(type='parcpmm', feature_input=['dropped'], feature_output=['output']),
+                    },
+                )
+                config = dict(
+                    task_type='fhe',
+                    task_num=1,
+                    pack_style='multiplexed',
+                    block_shape=[1, 1],
+                    mat_pack_style='par_block_col_major',
+                    matmul_block_size=8,
+                    n_heads=2,
+                    head_dim=8,
+                    task_input_id=['input'],
+                    task_output_id=['output'],
+                    task_input_param={'input': features['input']},
+                    task_output_param={'output': features['output']},
+                    use_btp=False,
+                )
+                (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+                (root / 'task_config.json').write_text(json.dumps(config))
+                gen_custom_task(
+                    str(root),
+                    param_name='PN13Default',
+                    style='multiplexed',
+                    parameter_mode='encrypted_offline' if encrypted_parameters else 'plaintext_lazy',
+                    input_mode='plaintext' if encrypted_parameters else 'ciphertext',
+                    deployment_mode='server_provisioned_runner' if encrypted_parameters else 'client_encrypted_input',
+                    parameter_loading_mode='runtime_lazy' if encrypted_parameters else 'eager',
+                )
+                signature = json.loads((root / 'task_signature.json').read_text())
+                inputs = [arg for arg in signature['online'] if arg['id'] == 'input']
+                self.assertEqual(len(inputs), 1)
+                self.assertEqual(inputs[0]['type'], 'pt' if encrypted_parameters else 'ct')
+                self.assertEqual(inputs[0]['size'], [1])
+                self.assertEqual(_data_with_missing_source(json.loads((root / 'mega_ag.json').read_text())), [])
+
     def test_encrypted_parameter_above_residual_chain_is_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

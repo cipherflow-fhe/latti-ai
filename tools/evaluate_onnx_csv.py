@@ -66,8 +66,11 @@ def expand_polynomials(model):
         coeff = get_hermite_coeffs_for_module(_resolve_activation_cls(activation), int(attrs['degree']))
         x = node.input[0]
         if node.op_type.startswith('RangeNormPoly'):
-            scale = op('Add', op('Div', node.input[1], constant(attrs.get('upper_bound', 3.0))),
-                       constant(attrs.get('eps', 1e-3)))
+            scale = op(
+                'Add',
+                op('Div', node.input[1], constant(attrs.get('upper_bound', 3.0))),
+                constant(attrs.get('eps', 1e-3)),
+            )
             x = op('Div', x, scale)
         else:
             scale = constant(attrs.get('scale_after', 1.0))
@@ -75,16 +78,27 @@ def expand_polynomials(model):
 
         # Match the training forward's special evaluation order for degree 2/4.
         if len(coeff) == 3:
-            y = op('Sub', op('Add', constant(coeff[0]),
-                            op('Mul', op('Add', constant(coeff[1]), op('Mul', constant(coeff[2]), x)), x)),
-                   constant(coeff[2]))
+            y = op(
+                'Sub',
+                op(
+                    'Add',
+                    constant(coeff[0]),
+                    op('Mul', op('Add', constant(coeff[1]), op('Mul', constant(coeff[2]), x)), x),
+                ),
+                constant(coeff[2]),
+            )
         elif len(coeff) == 5:
             x2 = op('Mul', x, x)
             x4 = op('Mul', x2, x2)
-            y = op('Add', op('Add', op('Add', constant(coeff[0]), op('Mul', constant(coeff[1]), x)),
-                                   op('Mul', constant(coeff[2]), op('Sub', x2, constant(1)))),
-                   op('Mul', constant(coeff[4]),
-                      op('Add', op('Sub', x4, op('Mul', constant(6), x2)), constant(3))))
+            y = op(
+                'Add',
+                op(
+                    'Add',
+                    op('Add', constant(coeff[0]), op('Mul', constant(coeff[1]), x)),
+                    op('Mul', constant(coeff[2]), op('Sub', x2, constant(1))),
+                ),
+                op('Mul', constant(coeff[4]), op('Add', op('Sub', x4, op('Mul', constant(6), x2)), constant(3))),
+            )
         else:
             previous2, previous1 = constant(1), x
             y = op('Add', constant(coeff[0]), op('Mul', constant(coeff[1]), x))
@@ -98,7 +112,25 @@ def expand_polynomials(model):
     return model
 
 
-def evaluate(onnx_path, csv_path, warmup=1, repeats=3):
+def execute(model, feeds, requested_outputs=None):
+    """Execute logical arrays without CSV shape guesses or physical packing."""
+    import copy
+    import onnxruntime as ort
+
+    model = expand_polynomials(copy.deepcopy(model))
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 8
+    session = ort.InferenceSession(model.SerializeToString(), sess_options=options, providers=['CPUExecutionProvider'])
+    if set(feeds) != {meta.name for meta in session.get_inputs()}:
+        raise ValueError('Named feeds do not match model inputs')
+    names = requested_outputs or [meta.name for meta in session.get_outputs()]
+    outputs = dict(zip(names, session.run(names, feeds)))
+    if not all(np.isfinite(value).all() for value in outputs.values()):
+        raise ValueError('Plaintext outputs contain nonfinite values')
+    return outputs
+
+
+def evaluate_arrays(onnx_path, csv_path, warmup=1, repeats=3, requested_outputs=None):
     import onnxruntime as ort
 
     started = time.perf_counter()
@@ -122,12 +154,15 @@ def evaluate(onnx_path, csv_path, warmup=1, repeats=3):
         dtype = helper.tensor_dtype_to_np_dtype(tensor.type.tensor_type.elem_type)
         feeds[meta.name] = np.loadtxt(paths[meta.name], delimiter=',', dtype=dtype).reshape(shape)
     preparation_ms = (time.perf_counter() - started) * 1000
+    output_names = list(requested_outputs) if requested_outputs is not None else None
     samples, outputs = [], None
     for i in range(warmup + repeats):
         started = time.perf_counter()
-        outputs = session.run(None, feeds)
+        outputs = session.run(output_names, feeds)
         samples.append({'warmup': i < warmup, 'wall_ms': (time.perf_counter() - started) * 1000})
-    results = {meta.name: values.reshape(-1) for meta, values in zip(session.get_outputs(), outputs)}
+    if output_names is None:
+        output_names = [meta.name for meta in session.get_outputs()]
+    results = {name: values for name, values in zip(output_names, outputs)}
     if not all(np.isfinite(v).all() for v in results.values()):
         raise ValueError('Plaintext logits contain nonfinite values')
     return results, {
@@ -136,9 +171,15 @@ def evaluate(onnx_path, csv_path, warmup=1, repeats=3):
         'provider': 'CPUExecutionProvider',
         'preparation_wall_ms': preparation_ms,
         'plaintext_wall_ms': statistics.median(s['wall_ms'] for s in samples if not s['warmup']),
-        'samples': samples, 'output_counts': {name: len(v) for name, v in results.items()},
+        'samples': samples,
+        'output_counts': {name: v.size for name, v in results.items()},
         'top1': {name: int(np.argmax(v)) for name, v in results.items()},
     }
+
+
+def evaluate(onnx_path, csv_path, warmup=1, repeats=3):
+    results, report = evaluate_arrays(onnx_path, csv_path, warmup, repeats)
+    return {name: values.reshape(-1) for name, values in results.items()}, report
 
 
 def write_logits(path, outputs):

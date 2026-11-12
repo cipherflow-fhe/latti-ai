@@ -32,6 +32,19 @@ class LevelBudgetTest(unittest.TestCase):
         config.set_btp_scale = scale
         pipeline.set_fhe_param(profile)
 
+    def test_multiresolution_boundary_tiling_is_independent_of_input_order(self):
+        small = FeatureNode('small', 2, 8, shape=[16, 16])
+        large = FeatureNode('large', 2, 8, shape=[64, 64])
+        vector = FeatureNode('vector', 0, 32)
+        for inputs in ((small, large), (large, small), (vector, small, large)):
+            with self.subTest(inputs=inputs):
+                graph = LayerAbstractGraph()
+                graph.dag.add_nodes_from(inputs)
+                consumer = ComputeNode('consumer', 'add2d', len(inputs), 1)
+                graph.dag.add_edges_from((node, consumer) for node in inputs)
+                pipeline.set_block_shape(PN15Default, graph)
+                self.assertEqual(config.block_shape, [64, 64])
+
     def test_profile_bounds_and_serialized_physical_chain(self):
         for profile in (PN14Default, PN15Default):
             for encrypted in (False, True):

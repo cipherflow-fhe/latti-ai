@@ -20,6 +20,7 @@ import copy
 import time
 import json
 import logging
+import math
 
 import networkx as nx
 import numpy as np
@@ -131,11 +132,11 @@ def set_fhe_param(params):
 
 
 def set_block_shape(params, raw_graph: LayerAbstractGraph):
-    """Set config.block_shape based on the input graph's leading feature node shape and real slot capacity.
+    """Set config.block_shape from the largest spatial input and real slot capacity.
 
     Rules:
       (0) BERT/feature_mat graphs do not use block_shape-based spatial tiling.
-      (1) If leading node is not 2D, use sqrt(n_real_num_slot) as a square default.
+      (1) Without spatial inputs, retain the vector/sequence defaults.
       (2) If shape0 * shape1 <= n_real_num_slot, block_shape = [shape0, shape1]
       (3) Otherwise, divide both shape0 and shape1 by 2, 4, 8, 16, ...,
           until shape0 * shape1 <= n_real_num_slot. If this leaves half the slots
@@ -146,16 +147,17 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
     if getattr(config, 'model_type', '') == 'bert' or any(node.data_type == 'feature_mat' for node in leading_nodes):
         config.block_shape = [1, 1]
         return
-    if not leading_nodes or len(leading_nodes[0].shape) == 0:
+    spatial = [node.shape for node in leading_nodes if node.dim == 2]
+    if not leading_nodes or (not spatial and len(leading_nodes[0].shape) == 0):
         side = 1 << ((slot_num.bit_length() - 1) // 2)
         config.block_shape = [side, side]
         return
-    leading_shape = leading_nodes[0].shape
+    # Split boundaries may expose several spatial resolutions. A smaller first
+    # input must not force larger, slot-fitting inputs into interleaved tiling.
+    leading_shape = max(spatial, key=lambda shape: math.prod(shape)) if spatial else leading_nodes[0].shape
     block = list(leading_shape)
     slot_num = params.n_slots
     # Threshold is the v6 real slot capacity.
-    import math
-
     while math.prod(block) > slot_num:
         block = [s // 2 for s in block]
     if len(block) == 2 and math.prod(leading_shape) > slot_num and math.prod(block) * 2 == slot_num:
@@ -165,7 +167,7 @@ def set_block_shape(params, raw_graph: LayerAbstractGraph):
     print('block_shape=', config.block_shape)
 
 
-def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph | None, float]:
+def try_no_btp(raw_graph: LayerAbstractGraph, params=None) -> tuple[bool, LayerAbstractGraph | None, float]:
     """
     Try no-BTP mode compilation with prepared graph
 
@@ -177,7 +179,7 @@ def try_no_btp(raw_graph: LayerAbstractGraph) -> tuple[bool, LayerAbstractGraph 
     """
     print('Step 2: Trying no-BTP mode...')
 
-    no_btp_params = [PN12Default, PN13Default, PN14Default, PN15Default]
+    no_btp_params = params if params is not None else [PN12Default, PN13Default, PN14Default, PN15Default]
 
     for params in no_btp_params:
         if params.max_level - get_compile_level_reserve() < get_min_feature_level():
@@ -868,6 +870,7 @@ def run_pipeline(
     encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
     deployment_mode: str = 'client_encrypted_input',
     seed_weight_subgrid_stride: list[int] | tuple[int, int] = (1, 1),
+    split_suffix: bool = False,
 ):
     """
     Run multiple compilations in parallel and select the best result
@@ -975,7 +978,8 @@ def run_pipeline(
 
     if not is_use_btp:
         use_btp = False
-        succeeded, graph, score = try_no_btp(raw_graph)
+        # Split acceptance retains the full-model CI profile, even for short suffixes.
+        succeeded, graph, score = try_no_btp(raw_graph, [PN15Default] if split_suffix else None)
         if not succeeded:
             use_btp = True
             succeeded, graph, score = try_btp(
