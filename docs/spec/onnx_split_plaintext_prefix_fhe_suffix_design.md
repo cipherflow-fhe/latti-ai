@@ -10,9 +10,15 @@
 
 1. 切分对象是原始 ONNX；切分比例、节点身份和边界名称都以原始图为准。
 2. 前缀和后缀之间传递逻辑张量值。CSV 只保存 dtype、shape 和轴顺序对应的普通数值，不保存 skip、padding slot、CKKS level、scale 或密文布局。
-3. 边界按真实数据依赖计算，不能假设图是串行链。残差旁路、分支、多输出和原输入直达后缀都必须保留。
+3. 边界按真实数据依赖计算，不能假设图是串行链。残差旁路、分支和多输出都必须保留；原始输入直达后缀必须被门禁拒绝。
 4. 后缀作为新模型重新编译。每个边界张量的 Feature 类型和物理打包由其逻辑语义、后缀消费算子和最终编译契约确定，不能从 CSV 文件名或 rank 猜测。
 5. 明文等价验证必须在编译和密钥生成之前完成；不支持的算子、控制流或输入布局必须提前失败。
+
+### 云端后缀的输入安全边界
+
+prefix 在本地执行并可审计；suffix 在云端执行，云端可见 suffix 的全部输入。因此 suffix 的每个动态输入必须是 prefix 产生的 crossing tensor。原始 graph input 不得直接进入 suffix，否则云端可从旁路输入观察本地原始数据。遇到长 skip connection 或多输入旁路时，切分准备阶段必须失败并要求调用者选择满足该边界的切点；不能通过把原始输入加入 suffix 接口、复制 CSV 或插入无语义的 Identity 绕过门禁。initializer、Constant 等静态值可随 suffix 模型保留，不属于动态输入。
+
+该结构门禁不能证明中间张量隐藏了原始数据：Identity、可逆变换或泄露敏感信息的特征仍可能原样或近似暴露输入。本地须审计 prefix 和每个 crossing 的内容及用途，确认符合实际隐私要求后才向云端发送；门禁不替代隐私评估。
 
 ```mermaid
 flowchart LR
@@ -116,18 +122,19 @@ crossing = {
 prefix_inputs  = {t ∈ I | t 被 P 中节点消费}
 forwarded      = {t ∈ I | t 被 S 中节点消费}
 prefix_outputs = crossing ∪ {t ∈ O | producer(t) ∈ P}
-suffix_inputs  = crossing ∪ forwarded
+suffix_inputs  = crossing
 suffix_outputs = {t ∈ O | producer(t) ∈ S}
 ```
 
 规则如下：
 
-- crossing 按 producer 的拓扑位置、输出端口排序；forwarded 按原始 graph input 顺序追加；所有集合按 tensor 名去重。
+- crossing 按 producer 的拓扑位置、输出端口排序；所有集合按 tensor 名去重。
+- `forwarded` 非空时立即拒绝切分；这条门禁保证 suffix 没有原始输入旁路。prefix 仍可消费原始 graph input。
 - 一个 crossing 被多个后缀节点或多个输入端口使用时，只生成一个逻辑输入，manifest 记录全部 consumer 位置。
 - 前缀最终输出、后缀最终输出、原输入直接作为输出的情况都要记录 `output_routes`，最终汇合必须恢复原始输出顺序。
 - initializer 和 Constant 输出按静态依赖保留，不作为 crossing CSV。原始输出若直接来自输入或静态源，也必须记录相应 route。
 - 使用 `onnx.utils.extract_model` 按 `prefix_inputs/prefix_outputs` 和 `suffix_inputs/suffix_outputs` 提取两侧模型：从目标输出反向收集依赖，遇到指定输入即停止；必要的 initializer、Constant、opset、value_info、函数和 external data 随模型保留。动态张量不能物化为 initializer。它不完整保留源模型元数据；需要的 `metadata_props` 用 `onnx.helper.set_model_props` 显式写入，语义信息同时记录在 manifest 中。
-- prefix 输出至少包括 crossing 和 prefix 负责的原始输出；suffix 输入至少包括 crossing 和 forwarded。不能只取切点最后一个节点的一个输出。
+- prefix 输出至少包括 crossing 和 prefix 负责的原始输出；suffix 输入只能包括 crossing。不能只取切点最后一个节点的一个输出。
 - 复用提取接口的 checker，另核对切分专有的接口名称、dtype、shape、producer/consumer 映射和模型 hash；若之后修改模型，则重新校验。
 
 已核对现成接口的职责边界：`lexicographical_topological_sort` 负责稳定排序，`edge_boundary` 负责跨区依赖，`extract_model` 负责按输入/输出闭包生成 ONNX。不能再用 `nx.ancestors` 或 `dag.subgraph` 替代模型提取：前者不会在边界输入处停止，后者不生成 ONNX 接口，也不保留 initializer、ValueInfo 和 external data。
@@ -145,7 +152,8 @@ suffix_outputs = {t ∈ O | producer(t) ∈ S}
     "count_policy": "top_level_non_constant_v1",
     "node_count": 100,
     "prefix_count": 90,
-    "topology": "networkx_lexicographical_original_index"
+    "topology": "networkx_lexicographical_original_index",
+    "suffix_input_policy": "prefix_outputs_only_v1"
   },
   "models": {"prefix": "prefix.onnx", "suffix": "suffix.onnx"},
   "inputs": [],
@@ -153,7 +161,7 @@ suffix_outputs = {t ∈ O | producer(t) ∈ S}
 }
 ```
 
-真实 manifest 还要保存每个边界 tensor 的原始名称、稳定 ID、producer/consumer 端口、dtype、shape、轴语义和 CSV 路径；示例中的空数组不能作为运行时接口。
+真实 manifest 还要保存每个边界 tensor 的原始名称、稳定 ID、producer/consumer 端口、dtype、shape、轴语义和 CSV 路径，并记录 `security.original_input_bypass = rejected`；示例中的空数组不能作为运行时接口。
 
 ## 4. 前缀明文执行与 CSV
 

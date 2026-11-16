@@ -96,6 +96,32 @@ def split_graph(model, ratio_text):
 
     prefix_inputs = [name for name in inputs if name in consumed(prefix)]
     forwarded = [name for name in inputs if name in consumed(suffix)]
+    if forwarded:
+        raise ValueError(
+            'Unsafe split: suffix directly consumes original graph inputs '
+            f'{forwarded}; every dynamic suffix input must be produced by the prefix'
+        )
+    passthrough_paths = []
+    for boundary in crossing:
+        tensor = boundary
+        path = []
+        while tensor in producer:
+            index, _ = producer[tensor]
+            node = model.graph.node[index]
+            if (
+                index not in prefix
+                or node.domain not in ('', 'ai.onnx')
+                or node.op_type not in ('Identity', 'Reshape', 'Transpose')
+                or not node.input
+                or not node.input[0]
+            ):
+                break
+            path.append(f'{node.name or f"#{index}"}({node.op_type})')
+            tensor = node.input[0]
+        if tensor in inputs and path:
+            passthrough_paths.append(f'{tensor} -> {" -> ".join(reversed(path))} -> {boundary}')
+    if passthrough_paths:
+        raise ValueError('Unsafe split: lossless input passthrough: ' + '; '.join(passthrough_paths))
     routes = []
     for value in model.graph.output:
         name = value.name
@@ -122,7 +148,7 @@ def split_graph(model, ratio_text):
         prefix_inputs=prefix_inputs,
         forwarded=forwarded,
         prefix_outputs=prefix_outputs,
-        suffix_inputs=crossing + forwarded,
+        suffix_inputs=crossing,
         suffix_outputs=suffix_outputs,
         routes=routes,
         node_count=len(compute),
@@ -381,6 +407,10 @@ def prepare(
             )
             onnx.checker.check_model(str(path))
     prefix_model, suffix_model = onnx.load(prefix_path), onnx.load(suffix_path)
+    suffix_initializers = {value.name for value in suffix_model.graph.initializer}
+    suffix_dynamic_inputs = [value.name for value in suffix_model.graph.input if value.name not in suffix_initializers]
+    if suffix_dynamic_inputs != plan['crossing']:
+        raise ValueError('Extracted suffix inputs differ from prefix crossing tensors')
     actual_counts = {}
     for label, extracted in [('prefix', prefix_model), ('suffix', suffix_model)]:
         indices = []
@@ -397,7 +427,7 @@ def prepare(
     suffix_feeds = {}
     inputs = []
     for index, name in enumerate(plan['suffix_inputs']):
-        array = prefix_result[name] if name in prefix_result else feeds[name]
+        array = prefix_result[name]
         consumers = [
             {'node_index': i, 'input_port': port}
             for i in plan['topo']
@@ -409,7 +439,7 @@ def prepare(
             'name': name,
             'id': f'boundary_{index:03d}',
             'consumers': consumers,
-            'source': 'prefix' if name in plan['crossing'] else 'original_input',
+            'source': 'prefix',
             **tensor_semantics(model, plan, entries, boundary_hints or {}, name, array, model_kind),
         }
         if name in plan['producer']:
@@ -445,6 +475,7 @@ def prepare(
             'node_count': plan['node_count'],
             'prefix_count': plan['prefix_count'],
             'topology': 'networkx_lexicographical_original_index',
+            'suffix_input_policy': 'prefix_outputs_only_v1',
             'nodes': [
                 {
                     'original_index': i,
@@ -461,6 +492,10 @@ def prepare(
         'models': {'prefix': prefix_path.name, 'suffix': suffix_path.name},
         'model_files': {'prefix': model_files(prefix_path), 'suffix': model_files(suffix_path)},
         'model_kind': model_kind,
+        'security': {
+            'suffix_input_policy': 'prefix_outputs_only_v1',
+            'original_input_bypass': 'rejected',
+        },
         'original_inputs': list(entries.values()),
         'inputs': inputs,
         'output_routes': plan['routes'],

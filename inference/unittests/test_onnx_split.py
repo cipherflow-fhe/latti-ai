@@ -46,24 +46,25 @@ class OnnxSplitTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'count differs'):
                 validate_signature_size({'id': 'input', 'size': [1]}, packing, contract)
 
-    def test_residual_multiple_outputs_forwarded_input_static_and_external_data(self):
+    def test_residual_multiple_outputs_prefix_inputs_static_and_external_data(self):
         constant = numpy_helper.from_array(np.ones((1, 4), dtype=np.float32), 'constant')
         source = model(
             [
+                helper.make_node('Add', ['z', 'z'], ['z_prefix']),
                 helper.make_node('Constant', [], ['c'], value=constant),
                 helper.make_node('Add', ['x', 'c'], ['a']),
                 helper.make_node('Split', ['a'], ['left', 'right'], axis=1),
-                helper.make_node('Add', ['left', 'z'], ['b']),
+                helper.make_node('Add', ['left', 'z_prefix'], ['b']),
                 helper.make_node('Add', ['b', 'right'], ['out']),
             ],
             [value('x'), value('z', (1, 2))],
             [value('out', (1, 2)), value('a'), value('x'), value('w')],
             [numpy_helper.from_array(np.ones((1, 4), dtype=np.float32), 'w')],
         )
-        plan = split_graph(source, '0.5')
-        self.assertEqual(plan['node_count'], 4)
-        self.assertEqual(plan['crossing'], ['left', 'right'])
-        self.assertEqual(plan['forwarded'], ['z'])
+        plan = split_graph(source, '0.6')
+        self.assertEqual(plan['node_count'], 5)
+        self.assertEqual(plan['crossing'], ['z_prefix', 'left', 'right'])
+        self.assertEqual(plan['forwarded'], [])
         self.assertEqual([r['route'] for r in plan['routes']], ['suffix', 'prefix', 'input', 'static'])
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -73,14 +74,15 @@ class OnnxSplitTest(unittest.TestCase):
             np.savetxt(root / 'x.csv', [[1, 2, 3, 4]], delimiter=',')
             np.savetxt(root / 'z.csv', [[10, 20]], delimiter=',')
             entries = [{'name': n, 'csv': n + '.csv', 'axes': ['N', 'F']} for n in ('x', 'z')]
-            hints = {n: {'axes': ['N', 'F']} for n in ('left', 'right')}
+            hints = {n: {'axes': ['N', 'F']} for n in ('z_prefix', 'left', 'right')}
             manifest = prepare(
-                root / 'source.onnx', root / 'split', entries, '0.5', boundary_hints=hints, base_dir=root
+                root / 'source.onnx', root / 'split', entries, '0.6', boundary_hints=hints, base_dir=root
             )
             self.assertEqual(len(manifest['source']['files']), 2)
-            self.assertEqual(manifest['validation']['actual_node_counts'], {'prefix': 2, 'suffix': 2})
-            self.assertEqual([e['name'] for e in manifest['inputs']], ['left', 'right', 'z'])
-            np.testing.assert_array_equal(np.loadtxt(root / 'split/boundary_000.csv', delimiter=','), [2, 3])
+            self.assertEqual(manifest['validation']['actual_node_counts'], {'prefix': 3, 'suffix': 2})
+            self.assertEqual([e['name'] for e in manifest['inputs']], ['z_prefix', 'left', 'right'])
+            self.assertEqual(manifest['security']['original_input_bypass'], 'rejected')
+            np.testing.assert_array_equal(np.loadtxt(root / 'split/boundary_001.csv', delimiter=','), [2, 3])
             for name in ('prefix', 'suffix'):
                 onnx.checker.check_model(str(root / f'split/{name}.onnx'))
             with np.load(root / 'split/original_full_onnx_outputs.npz') as reference:
@@ -116,9 +118,70 @@ class OnnxSplitTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'artifact hash mismatch'):
                 load_manifest(root / 'split/split_manifest.json')
 
+    def test_long_original_input_skip_is_rejected(self):
+        source = model(
+            [helper.make_node('Identity', ['x'], ['a']), helper.make_node('Add', ['a', 'x'], ['out'])],
+            [value('x')],
+            [value('out')],
+        )
+        with self.assertRaisesRegex(ValueError, 'Unsafe split.*original graph inputs'):
+            split_graph(source, '0.5')
+
+    def test_lossless_paths_are_rejected_for_each_boundary(self):
+        shape = numpy_helper.from_array(np.array([1, 4], dtype=np.int64), 'shape')
+        source = model(
+            [
+                helper.make_node('Identity', ['x'], ['a'], name='identity'),
+                helper.make_node('Reshape', ['a', 'shape'], ['b'], name='reshape'),
+                helper.make_node('Transpose', ['b'], ['c'], name='transpose', perm=[1, 0]),
+                helper.make_node('Identity', ['y'], ['d'], name='other'),
+                helper.make_node('Add', ['c', 'd'], ['out']),
+            ],
+            [value('x'), value('y', (4, 1))],
+            [value('out', (4, 1))],
+            [shape],
+        )
+        with self.assertRaises(ValueError) as error:
+            split_graph(source, '0.8')
+        message = str(error.exception)
+        self.assertIn('x -> identity(Identity) -> reshape(Reshape) -> transpose(Transpose) -> c', message)
+        self.assertIn('y -> other(Identity) -> d', message)
+        for op in ('Identity', 'Reshape', 'Transpose'):
+            with self.subTest(op=op):
+                inputs = ['x', 'shape'] if op == 'Reshape' else ['x']
+                single = model(
+                    [helper.make_node(op, inputs, ['a']), helper.make_node('Add', ['a', 'a'], ['out'])],
+                    [value('x')],
+                    [value('out')],
+                    [shape],
+                )
+                with self.assertRaisesRegex(ValueError, 'lossless input passthrough'):
+                    split_graph(single, '0.5')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            onnx.save(source, root / 'source.onnx')
+            with self.assertRaisesRegex(ValueError, 'lossless input passthrough'):
+                prepare(root / 'source.onnx', root / 'split', [], '0.8', base_dir=root)
+            self.assertFalse((root / 'split').exists())
+
+    def test_lossless_gate_stops_at_computation_and_custom_operators(self):
+        source = model(
+            [
+                helper.make_node('Add', ['x', 'y'], ['a']),
+                helper.make_node('Identity', ['a'], ['b']),
+                helper.make_node('Add', ['b', 'b'], ['out']),
+            ],
+            [value('x'), value('y')],
+            [value('out')],
+        )
+        self.assertEqual(split_graph(source, '0.67')['crossing'], ['b'])
+        source.graph.node[0].op_type = 'Identity'
+        source.graph.node[0].domain = 'custom'
+        self.assertEqual(split_graph(source, '0.67')['crossing'], ['b'])
+
     def test_transformer_baseline_reads_original_csv_as_float64(self):
         source = model(
-            [helper.make_node('Identity', ['x'], ['a']), helper.make_node('Identity', ['a'], ['out'])],
+            [helper.make_node('Add', ['x', 'x'], ['a']), helper.make_node('Identity', ['a'], ['out'])],
             [value('x')],
             [value('out')],
         )
@@ -136,14 +199,14 @@ class OnnxSplitTest(unittest.TestCase):
                 base_dir=root,
             )
             with np.load(root / 'split/original_full_onnx_outputs.npz') as reference:
-                np.testing.assert_array_equal(reference['out'], decimals)
+                np.testing.assert_array_equal(reference['out'], decimals * 2)
             self.assertGreater(manifest['validation']['split_max_abs']['out'], 0)
 
     def test_stable_topology_parallel_ports_and_decimal_floor(self):
         source = model(
             [
-                helper.make_node('Identity', ['x'], ['a']),
-                helper.make_node('Identity', ['x'], ['b']),
+                helper.make_node('Add', ['x', 'x'], ['a']),
+                helper.make_node('Add', ['x', 'x'], ['b']),
                 helper.make_node('Add', ['a', 'a'], ['aa']),
                 helper.make_node('Add', ['aa', 'b'], ['out']),
             ],
@@ -155,7 +218,7 @@ class OnnxSplitTest(unittest.TestCase):
         self.assertEqual(plan['dag'].number_of_edges(0, 2), 2)
         self.assertEqual(plan['crossing'], ['a', 'b'])
         ten = model(
-            [helper.make_node('Identity', ['x' if i == 0 else f'v{i - 1}'], [f'v{i}']) for i in range(10)],
+            [helper.make_node('Add', ['x' if i == 0 else f'v{i - 1}'] * 2, [f'v{i}']) for i in range(10)],
             [value('x')],
             [value('v9')],
         )
@@ -182,7 +245,7 @@ class OnnxSplitTest(unittest.TestCase):
 
     def test_ambiguous_axes_and_subgraphs_fail_before_encryption(self):
         source = model(
-            [helper.make_node('Identity', ['x'], ['a']), helper.make_node('Identity', ['a'], ['out'])],
+            [helper.make_node('Add', ['x', 'x'], ['a']), helper.make_node('Identity', ['a'], ['out'])],
             [value('x', (1, 2, 3))],
             [value('out', (1, 2, 3))],
         )
