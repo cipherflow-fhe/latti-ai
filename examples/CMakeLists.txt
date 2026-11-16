@@ -53,3 +53,8 @@ set_tests_properties(example-mnist-cpu example-mnist-gpu PROPERTIES TIMEOUT 300)
 set_tests_properties(example-cifar10-cpu example-cifar10-gpu PROPERTIES TIMEOUT 1800)
 set_tests_properties(example-imagenet-cpu example-imagenet-gpu PROPERTIES TIMEOUT 3600)
 set_tests_properties(example-retina-dkd-cpu example-retina-dkd-gpu PROPERTIES TIMEOUT 3600)
+
+if(INFERENCE_SDK_ENABLE_GPU)
+    add_executable(ckks_step_gpu logistic_regression/ckks_step_gpu.cpp)
+    target_link_libraries(ckks_step_gpu PRIVATE lattisense)
+endif()

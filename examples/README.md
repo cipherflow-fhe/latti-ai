@@ -74,3 +74,7 @@ MobileNetV2 on ImageNet — a larger-scale example with 1000-class classificatio
 - **Output**: 1000-class logits
 - **Poly degree**: N = 65536
 
+
+## Encrypted logistic-regression training
+
+[logistic_regression](logistic_regression/README.md) demonstrates polynomial sigmoid training expanded into a primitive CKKS DAG, with a matched plaintext reference, GPU execution, and weight/prediction verification. Unlike the inference examples above, its task is generated locally.

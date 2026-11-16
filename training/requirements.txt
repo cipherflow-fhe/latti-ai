@@ -12,3 +12,5 @@ graphviz==0.21
 h5py==3.14.0
 pytest==8.3.4
 matplotlib==3.10.8
+
+scikit-learn==1.2.2
