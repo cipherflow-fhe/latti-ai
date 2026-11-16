@@ -1,7 +1,6 @@
 # 代码修改记录
 
 起始 revision：`3cbcc86`；实现与本报告在同一次 latti-ai 提交中，不 push。
-实测源码的逐文件 SHA-256 及依赖 revision 见 `source_provenance.json`。
 
 ## 参数布局
 
@@ -21,8 +20,7 @@ global stride 仍由 `training/run_compile.py --config` 读取。
 `training/model_compiler/{components,pipeline,score}.py` 持久化选定布局，并按最终
 use-site level 和实际序列化 CT 字节计费。候选不能节省 bytes、几何不适用或 seed
 level 不可用时保持原布局；`[1,1]` 作为无 seed 的对照。最终 level 重算与 DP
-计费不一致时报错。逐层计数、level、候选收益和未采用压缩的层见
-`layout_storage_audit.json`。
+计费不一致时报错。
 
 ## level、scale 与公开 mask
 
@@ -32,7 +30,7 @@ level 不可用时保持原布局；`[1,1]` 作为无 seed 的对照。最终 le
 `q(L+1)` 的 PT，各 rescale 一次。旋转加法不改 scale，恢复不增加 activation
 算子的 `level_cost`。Dense tile 和同 degree poly 恢复均只增加参数分支的一层。
 两组独立编译的 DP 会因 storage score 改变而选择不同的 level/bootstrap 计划；
-逐层输入/use-site level 均保存在 audit 中，耗时对照包含这一影响。
+耗时对照包含这一影响。
 
 weight seed 保留旧权重的 `q(L)` scale；bias 保留 default scale；poly 保留各 degree
 经真实模数漂移计算的 scale，不能因 level 相等就混合。导出的 signature、manifest
@@ -66,15 +64,15 @@ cache 使用 64 MiB 有界 LRU，计费口径为序列化 CT payload；已交给
 ## 检查与覆盖范围
 
 Python 45 项测试通过，C++ CKKS 7 cases / 1,919 assertions 和参数 store
-2 cases / 54 assertions 通过（包括 JSON 对象键顺序不影响布局比较的回归测试）。测试结果和验收摘要保留在本目录的 JSON/Markdown 报告中。
+2 cases / 54 assertions 通过（包括 JSON 对象键顺序不影响布局比较的回归测试）。测试结果和验收摘要保留在本目录的 Markdown 报告中。
 覆盖不同 output/input/channel 值、K=1/3×3、stride/skip、旋转方向、尾组、两个物理
 block、Dense bias pre-fold、degree scale 漂移、eager/lazy、旧 manifest 与 cache eviction。
 
 GPU 实测范围为规范指定的 ResNet20、MobileNetV2 和各一份固定输入，不能据此声称
 所有网络/shape 或 client 模式均已通过端到端验证。inverse canonical 另有真实 CKKS
 单元测试。本次没有扩展或验收 concat/upsample/padding 等算子的 public mask 路径；
-这些路径不在两模型的端到端覆盖范围内。mult-scalar、普通/inverse bias 保留密文原布局；未压缩层和
-各 degree 的选择记录见逐层 audit。完整 GPU 验收结论见 `acceptance_summary.md`。
+这些路径不在两模型的端到端覆盖范围内。mult-scalar、普通/inverse bias 保留密文原布局。
+完整 GPU 验收结论见 `acceptance_summary.md`。
 
 ## 临时依赖修改
 

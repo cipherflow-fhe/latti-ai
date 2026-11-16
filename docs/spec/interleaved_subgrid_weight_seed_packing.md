@@ -61,19 +61,25 @@ is_power_of_two(a) && is_power_of_two(b)
 {
   "encrypted_parameter_storage_weight": 1.0,
   "encrypted_parameter_storage_normalization_bytes": 1073741824,
-  "seed_weight_subgrid_stride": [4, 4]
+  "seed_weight_subgrid_stride": [16, 16]
 }
 ```
 
-配置文件必须由 `--config` 显式传入，程序不自动查找该文件。可将 `[4,4]` 改成
+配置文件必须由 `--config` 显式传入，程序不自动查找该文件。可将 `[16,16]` 改成
 其他合法的 `[a,b]`；代码默认仍为 `[1,1]`。省略字段或设为 `[1,1]` 时不添加
 逐层 seed 字段，保持旧图和参数格式。非法类型、非正数或非 2 幂的全局值回退
-`[1,1]` 并记录 debug 信息；不能整除某层逻辑空间尺寸的值只在该层回退。
+`[1,1]` 并记录 debug 信息。
+
+合法全局值表示每个空间轴的最大 seed stride。编译器按层确定 `seed_shape`，
+将两个轴的 stride 独立除以 2，直到分别整除对应尺寸。例如 `[16,16]` 对
+`8×12` 得到 `[8,4]`；inverse 卷积使用 `block_shape`，其余使用逻辑输入空间。
+只有两个轴都降为 1 时才直接回退旧路径；全局配置保持不变。后续仍使用现有
+存储收益和 level 约束判断是否启用 seed。
 
 该全局入口用于 `server_provisioned_runner` 的 multiplexed 普通 Conv2D、
 depthwise Conv2D 和 inverse multiplexed Conv2D；ConvTranspose 和其他卷积实现
 继续使用原路径。编译器在布局和
-层类型确定后、DP 评分之前，把该值写入适用卷积节点的
+层类型确定后、DP 评分之前，把适配后的值写入适用卷积节点的
 `seed_weight_subgrid_stride` 属性；全局值不作为 DP 搜索变量，也不改变 activation
 的 `level_cost` 或主图最高 feature level。
 

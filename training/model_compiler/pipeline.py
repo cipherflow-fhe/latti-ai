@@ -69,8 +69,15 @@ def set_seed_weight_subgrid_stride(graph: LayerAbstractGraph) -> None:
         ):
             input_feature = next(graph.dag.predecessors(node))
             seed_shape = config.block_shape if node.is_big_size else input_feature.shape
-            if all(size % step == 0 for size, step in zip(seed_shape, stride)):
-                node.seed_weight_subgrid_stride = list(stride)
+            # The configured stride is the maximum compression ratio.  A split
+            # suffix may start at a smaller spatial resolution, so reduce each
+            # axis independently until its stride divides that axis exactly.
+            effective_stride = list(stride)
+            for axis, size in enumerate(seed_shape):
+                while effective_stride[axis] > 1 and size % effective_stride[axis] != 0:
+                    effective_stride[axis] //= 2
+            if effective_stride != [1, 1]:
+                node.seed_weight_subgrid_stride = effective_stride
                 node.seed_weight_layout = 'canonical' if node.is_big_size else 'joint'
             else:
                 logging.debug(

@@ -15,6 +15,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Verify storage scoring at candidate levels and after inserted level drops."""
+
 import copy
 import contextlib
 import io
@@ -44,8 +45,7 @@ class StorageScoreTest(unittest.TestCase):
         self.graph = LayerAbstractGraph()
         self.input = FeatureNode('input', 2, 16, shape=[8, 8])
         self.output = FeatureNode('output', 2, 32, shape=[8, 8])
-        self.conv = ConvComputeNode('conv', 'conv2d', 16, 32, groups=1,
-                                    stride=[1, 1], kernel_shape=[3, 3])
+        self.conv = ConvComputeNode('conv', 'conv2d', 16, 32, groups=1, stride=[1, 1], kernel_shape=[3, 3])
         self.conv.depth = 0
         self.graph.dag.add_node(self.input, level=9, skip=[1, 1], pack_num=32)
         self.graph.dag.add_node(self.output, level=1, skip=[1, 1], pack_num=32)
@@ -66,8 +66,9 @@ class StorageScoreTest(unittest.TestCase):
             self.assertEqual(get_compute_score(self.graph.dag, self.conv, self.params), runtime)
         config.encrypted_parameter_storage_weight = 2.0
         storage = self.score_param().get_encrypted_parameter_storage()
-        self.assertAlmostEqual(get_compute_score(self.graph.dag, self.conv, self.params),
-                               runtime + 2 * storage['bytes'] / (1 << 30))
+        self.assertAlmostEqual(
+            get_compute_score(self.graph.dag, self.conv, self.params), runtime + 2 * storage['bytes'] / (1 << 30)
+        )
 
     def test_actual_use_site_matches_inserted_drop_level(self):
         score_param = self.score_param()
@@ -102,8 +103,7 @@ class StorageScoreTest(unittest.TestCase):
         self.assertEqual(score.dense_seed_tiles['weight_shape'], [64, 96])
         self.assertEqual(score.dense_seed_tiles['skip'], [1, slots])
         config.seed_weight_subgrid_stride = [1, 1]
-        self.assertEqual(self.score_param().get_encrypted_param_count(),
-                         {1: {'weight': 6144}, 0: {'bias': 64}})
+        self.assertEqual(self.score_param().get_encrypted_param_count(), {1: {'weight': 6144}, 0: {'bias': 64}})
 
     def test_big_poly_counts_spatial_blocks_in_each_degree(self):
         config.seed_weight_subgrid_stride = [16, 16]
@@ -116,8 +116,9 @@ class StorageScoreTest(unittest.TestCase):
         self.graph.dag.nodes[self.output].update(skip=[1, 1], pack_num=1, level=4)
         self.graph.dag.nodes[self.conv]['level_cost'] = 4
         score = self.score_param()
-        self.assertEqual(score.get_encrypted_param_count(), {5: {'coefficient': 1},
-                                                            6: {'coefficient': 4}, 7: {'coefficient': 4}})
+        self.assertEqual(
+            score.get_encrypted_param_count(), {5: {'coefficient': 1}, 6: {'coefficient': 4}, 7: {'coefficient': 4}}
+        )
         self.assertEqual(score.poly_seed_layout['channel_groups'], 128)
         self.assertEqual(score.poly_seed_layout['input_shape'], [128, 256])
 
@@ -137,9 +138,11 @@ class StorageScoreTest(unittest.TestCase):
         self.graph.encrypted_parameter_dp_report = previous
         self.graph.dag.nodes[self.output]['level'] = 2
         with tempfile.TemporaryDirectory() as output_dir:
-            with patch.object(pipeline, 'insert_btp_scale_gamma_layers'), \
-                    patch.object(pipeline, 'absorb_pcmgamma_layers'), \
-                    patch.object(pipeline, 'recompute_final_level'):
+            with (
+                patch.object(pipeline, 'insert_btp_scale_gamma_layers'),
+                patch.object(pipeline, 'absorb_pcmgamma_layers'),
+                patch.object(pipeline, 'recompute_final_level'),
+            ):
                 with self.assertRaisesRegex(ValueError, 'Final level recompute changed'):
                     pipeline.dump_graph(self.graph, Path(output_dir), 0.0, True)
 
@@ -172,8 +175,11 @@ class StorageScoreTest(unittest.TestCase):
         self.conv.seed_weight_subgrid_stride = [2, 2]
         self.graph.dag.nodes[self.output]['level'] = 7
         self.assertEqual(self.score_param().get_encrypted_param_count(), {11: {'weight': 36}, 8: {'bias': 1}})
-        self.assertEqual(self.score_param().get_encrypted_parameter_storage()['bytes'],
-                         36 * encrypted_parameter_bytes(self.params['param0'], 11) + encrypted_parameter_bytes(self.params['param0'], 8))
+        self.assertEqual(
+            self.score_param().get_encrypted_parameter_storage()['bytes'],
+            36 * encrypted_parameter_bytes(self.params['param0'], 11)
+            + encrypted_parameter_bytes(self.params['param0'], 8),
+        )
 
     def test_seed_config_reading_and_pipeline_defaults(self):
         import pipeline
@@ -185,12 +191,18 @@ class StorageScoreTest(unittest.TestCase):
                 config_path.write_text(json.dumps(values))
                 self.assertEqual(read_compile_config(str(config_path))['seed_weight_subgrid_stride'], expected)
             for stride in ([2, 4], [1, 1], [0, 2], [-2, 2], [3, 2], [2], [2.0, 2], [True, 2], None):
-                with self.subTest(stride=stride), contextlib.redirect_stdout(io.StringIO()), \
-                        patch.object(pipeline.LayerAbstractGraph, 'from_json', return_value=self.graph), \
-                        patch.object(pipeline, 'try_no_btp', return_value=(True, self.graph, 0.0)), \
-                        patch.object(pipeline, 'dump_graph'):
+                with (
+                    self.subTest(stride=stride),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    patch.object(pipeline.LayerAbstractGraph, 'from_json', return_value=self.graph),
+                    patch.object(pipeline, 'try_no_btp', return_value=(True, self.graph, 0.0)),
+                    patch.object(pipeline, 'dump_graph'),
+                ):
                     pipeline.run_pipeline(
-                        1, Path('unused.json'), Path(output_dir), deployment_mode='server_provisioned_runner',
+                        1,
+                        Path('unused.json'),
+                        Path(output_dir),
+                        deployment_mode='server_provisioned_runner',
                         seed_weight_subgrid_stride=stride,
                     )
                     self.assertEqual(config.seed_weight_subgrid_stride, [2, 4] if stride == [2, 4] else [1, 1])
@@ -213,13 +225,38 @@ class StorageScoreTest(unittest.TestCase):
                 setattr(node, key, value)
             set_seed_weight_subgrid_stride(graph)
             self.assertFalse(hasattr(node, 'seed_weight_subgrid_stride'))
-        for style, stride in [('ordinary', [2, 4]), ('multiplexed', [1, 1]), ('multiplexed', [16, 2])]:
+        for style, stride in [('ordinary', [2, 4]), ('multiplexed', [1, 1])]:
             del self.conv.seed_weight_subgrid_stride
             config.style, config.seed_weight_subgrid_stride = style, stride
             set_seed_weight_subgrid_stride(self.graph)
             self.assertFalse(hasattr(self.conv, 'seed_weight_subgrid_stride'))
             # Restore only the test fixture for the next case.
             self.conv.seed_weight_subgrid_stride = [2, 4]
+
+    def test_seed_stride_adapts_each_axis_to_spatial_shape(self):
+        from pipeline import set_seed_weight_subgrid_stride
+
+        config.seed_weight_subgrid_stride = [16, 16]
+        for big in (False, True):
+            for shape, expected in [
+                ([8, 8], [8, 8]),
+                ([8, 12], [8, 4]),
+                ([12, 8], [4, 8]),
+                ([32, 64], [16, 16]),
+                ([3, 8], [1, 8]),
+                ([8, 5], [8, 1]),
+                ([3, 5], None),
+            ]:
+                with self.subTest(big=big, shape=shape):
+                    graph = copy.deepcopy(self.graph)
+                    conv = next(n for n in graph.dag if isinstance(n, ConvComputeNode))
+                    conv.is_big_size = big
+                    feature = next(graph.dag.predecessors(conv))
+                    feature.shape = [32, 32] if big else shape
+                    config.block_shape = shape
+                    set_seed_weight_subgrid_stride(graph)
+                    self.assertEqual(getattr(conv, 'seed_weight_subgrid_stride', None), expected)
+                    self.assertEqual(config.seed_weight_subgrid_stride, [16, 16])
 
     def test_depthwise_and_inverse_share_seed_config_and_storage_scoring(self):
         from pipeline import set_seed_weight_subgrid_stride

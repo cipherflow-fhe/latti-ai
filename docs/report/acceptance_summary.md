@@ -4,8 +4,7 @@
 以下数值来自模型 JSON、完整 logits CSV 与 monitor CSV；时间和峰值内存取三次正式运行的中位数。
 
 环境：NVIDIA RTX 5880 Ada（GPU 0，49 GB），driver 535.230.02，CUDA toolkit 12.8；
-GPU=ON、DEV=ON。原 ONNX 和输入 CSV 的 SHA-256、CKKS 参数、全部 argv/returncode、
-源码逐文件 hash 和 binary hash 均已保留。两组每模型使用相同 CKKS 参数与输入。
+GPU=ON、DEV=ON。两组每模型使用相同 CKKS 参数与输入。
 
 ## 实际存储量
 
@@ -45,7 +44,6 @@ evaluation context 中的 keys 不随 seed 数同比缩小，因此完整 runner
 | mobilenet | multiplexed weight | 13,360 / 32,433,813,552 | 877 / 2,657,997,432 |
 | mobilenet | poly coefficient | 1,245 / 5,266,685,399 | 200 / 954,651,868 |
 
-逐层决策、候选 bytes、seed/use-site level、未压缩项和原因见 `layout_storage_audit.json`；
 完整 geometry/scale/signature/manifest 已在验收期间核对。四组最终编译预测与
 实际 payload 的每层、每 level、每参数类型均一致，各 level 元素长度与校准表一致，`unaccounted` 为空。
 
@@ -58,7 +56,7 @@ evaluation context 中的 keys 不随 seed 数同比缩小，因此完整 runner
 | mobilenet | legacy | 1000 | 0.0014371854 | 0.0004101852 | 0.999999990426 | 一致 |
 | mobilenet | compressed | 1000 | 0.0015419532 | 0.00039857863 | 0.999999990809 | 一致 |
 
-mean_abs、max_rel 和每次原始指标保留在模型 JSON。上表采用正式样本中 max_abs 最大的一次；
+上表采用正式样本中 max_abs 最大的一次；
 所有压缩样本（含预热）均满足 max_abs≤0.01、RMSE≤0.001、cosine≥0.9999、top-1 一致，
 并满足 max_abs_compressed≤2×max_abs_legacy+1e-6；相对门槛的 legacy baseline 取该组四次样本的最大值。
 ResNet20 解密最大 logit 约为 18.9296。MobileNet 比较全部 1,000 logits，未截取前十项代替校验。
@@ -111,14 +109,14 @@ eviction 只移除 store 引用，不会销毁 executor 仍持有的 shared_ptr�
 
 此统计从 packed load 出发，遇到包含其它 CT 输入的算子停止；它包括原有参数旋转，
 并会包含明文输入首层中仅以参数 CT 与输入 PT 计算的部分乘加，因此不是新增恢复成本的净差。
-完整 MegaAG 各类型节点总数另见 JSON 的 `graph_operations`。恢复分支的选择/边界 mask 均使用公开 PT，
+恢复分支的选择/边界 mask 均使用公开 PT，
 按各自 level 的 q 编码并 rescale，seed 的 scale 保留对应权重、bias 或 degree 的真实目标 scale。
 
 ## 检查、失败与覆盖边界
 
 - Python 45 tests、CKKS 7 cases / 1,919 assertions、store/manifest 2 cases / 54 assertions 通过；验收原始日志、命令和复核文件已在结论确认后清理。
-- 早期 smoke、首次缺少 mult-scalar signature scale 的失败，以及 ResNet20 布局键顺序回归均已在验收期间处理；最终命令结果和源码 hash 保留在模型 JSON 与 `source_provenance.json` 中。
+- 早期 smoke、首次缺少 mult-scalar signature scale 的失败，以及 ResNet20 布局键顺序回归均已在验收期间处理。
 - MobileNet 从 compile 到全部测量使用最终源码与 binary。
 - inverse canonical 有真实 CKKS 单元测试；两个固定 ONNX 未据此覆盖所有 inverse、client 模式或其它 shape。concat/upsample/padding 等 public mask 路径未扩展或验收。
-- mult-scalar、普通/inverse bias 保留原密文布局；不跨层、跨 degree 或不兼容 scale 共享。部分层或 degree 因单请求、几何不适用、level 不可用或无正 bytes 收益保留原布局，逐层决策在 audit 中列出。
+- mult-scalar、普通/inverse bias 保留原密文布局；不跨层、跨 degree 或不兼容 scale 共享。部分层或 degree 因单请求、几何不适用、level 不可用或无正 bytes 收益保留原布局。
 - lattisense 临时修改仅修复 DEV monitor 的一行调用；lattigo 两个 header 为构建自动生成差异。验收后均已撤销，未提交依赖文件或子模块指针；复现 DEV 构建需要该临时 monitor 修复，细节见 `code_change_summary.md`。
