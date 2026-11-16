@@ -99,6 +99,7 @@ def prepare_graph(raw_graph: LayerAbstractGraph) -> LayerAbstractGraph:
     set_is_adaptive_avgpool(pt_graph)
     transforms.expand_multi_head_attention(pt_graph)
     transforms.expand_layer_norm(pt_graph)
+    transforms.expand_maxpool_for_btp(pt_graph)
     transforms.expand_bert_custom_poly_functions(pt_graph)
     transforms.expand_poly_act_rn(pt_graph)
     transforms.expand_parcpmm_add_pt(pt_graph)
@@ -866,6 +867,7 @@ def run_pipeline(
     bert_softmax_later_refinement_denominator_scale: float | None = None,
     use_gpu: bool = True,
     enable_score_cache: bool = True,
+    maxpool_config: dict | None = None,
     encrypted_parameter_storage_weight: float = 0.0,
     encrypted_parameter_storage_normalization_bytes: int = 1 << 30,
     deployment_mode: str = 'client_encrypted_input',
@@ -975,6 +977,9 @@ def run_pipeline(
     config.encrypted_parameter_storage_normalization_bytes = encrypted_parameter_storage_normalization_bytes
 
     raw_graph = LayerAbstractGraph.from_json(input_file_path)
+    if maxpool_config is not None:
+        from training.nn_tools import configure_maxpool
+        configure_maxpool(raw_graph, maxpool_config)
 
     if not is_use_btp:
         use_btp = False

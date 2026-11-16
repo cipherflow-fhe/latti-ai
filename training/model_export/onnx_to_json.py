@@ -437,7 +437,7 @@ def onnx_to_json(
                 compute_node = AveragePoolComputeNode(
                     layer_id, 'avgpool2d', feature_input, feature_output, kernel_shape=ks, stride=ks, pads=[0, 0]
                 )
-            case 'MaxPool':
+            case 'MaxPool' | 'PolyMaxPool2d':
                 compute_node = MaxPoolComputeNode.from_onnx_node(n, features_nodes)
             case 'Dense':
                 compute_node = DenseComputeNode.from_onnx_node(n, features_nodes)

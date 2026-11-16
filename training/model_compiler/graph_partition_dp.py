@@ -160,7 +160,7 @@ def get_compute_score(
         'upsample_nearest',
         'resize',
     }
-    if compute.layer_type in supported_fhe_score_layers:
+    if compute.layer_type in supported_fhe_score_layers or compute.layer_type.startswith('maxpool2d_'):
         preds = list(enclosing_graph.predecessors(compute))
         level = min(enclosing_graph.nodes[p]['level'] for p in preds)
         s_param = FheScoreParam(
@@ -253,6 +253,11 @@ AUX_LV = 255
 class GraphPartitioner:
     def __init__(self, entire_graph: nx.DiGraph, temperature: float = 1.0, enable_score_cache: bool = True):
         self.entire_graph = entire_graph
+        # Expanded MaxPool has many independently live branches. Keep a bounded
+        # beam of complete frontier states rather than fusing those branches
+        # back into opaque rounds. Zero requests the original exact search.
+        self.max_frontier_states = (getattr(config, 'maxpool_dp_max_states', 256)
+                                    if any(hasattr(n, 'maxpool_primitive') for n in entire_graph) else 0)
         self.param_dict = generate_param_dict_for_graph()
         self.enable_score_cache = enable_score_cache
         self.compute_score_cache: dict[tuple[ComputeNode, tuple[int, ...], tuple[int, ...]], float] = {}
@@ -348,32 +353,22 @@ class GraphPartitioner:
             if dag.nodes[leading_comp]['level_cost'] + terminal_lv > config.fhe_param.max_level:
                 continue
 
-            frontier_lvs = []
             dag.nodes[new_node]['level'] = terminal_lv
-            for node_max_lv in pred_frontier:
-                frontier_lvs.append(
-                    list(range(dag.nodes[leading_comp]['level_cost'] + terminal_lv, node_max_lv.level + 1)) + [AUX_LV]
-                )
-            for node_max_lv in other_frontier:
-                frontier_lvs.append(list(range(min_feature_level, node_max_lv.level + 1)) + [AUX_LV])
-
-            frontier_lv_product = product(*frontier_lvs)
-
-            for lv_comb in frontier_lv_product:
-                frontier_key = []
-                new_frontier_key = []
-                for node_max_lv, lv in zip(frontier, lv_comb):
-                    frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
-                    if node_max_lv.node_idx not in nodes_became_internal:
-                        new_frontier_key.append(NodeLevel(node_max_lv.node_idx, lv))
+            required_level = dag.nodes[leading_comp]['level_cost'] + terminal_lv
+            # Iterate existing states rather than the Cartesian product of all
+            # possible levels. With explicit arithmetic branches most of that
+            # product is absent; enumerating it makes otherwise small DAGs
+            # prohibitively expensive. This preserves the exact DP search.
+            for frontier_key, (initial_score, sol_graph_vec) in frontier_solutions.items():
+                level_by_idx = dict(frontier_key)
+                lv_comb = [level_by_idx[f.node_idx] for f in frontier]
+                if any(lv != AUX_LV and lv < required_level
+                       for lv in lv_comb[:len(pred_frontier)]):
+                    continue
+                new_frontier_key = [NodeLevel(idx, lv) for idx, lv in frontier_key
+                                    if idx not in nodes_became_internal]
                 new_frontier_key.append(NodeLevel(node_to_idx[new_node], terminal_lv))
                 new_frontier_key.sort(key=lambda x: x.node_idx)
-                frontier_key.sort(key=lambda x: x.node_idx)
-
-                if tuple(frontier_key) not in frontier_solutions:
-                    continue
-
-                initial_score, sol_graph_vec = frontier_solutions[tuple(frontier_key)]
 
                 for node_max_lv, lv in zip(frontier, lv_comb):
                     dag.nodes[idx_to_node[node_max_lv.node_idx]]['level'] = (
@@ -410,7 +405,15 @@ class GraphPartitioner:
 
                     sol_graph_vec_aux_lv = solution[1].copy()
                     sol_graph_vec_aux_lv[node_to_idx[new_node]] = AUX_LV
-                    sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
+                    if leading_comp.layer_type.startswith('maxpool2d_'):
+                        # Refresh the output live set, not the larger input
+                        # set of the reduction that just produced it.
+                        score_graph = dag.copy()
+                        refresh = transforms.add_btp_layer(
+                            score_graph, new_node, self.param_dict, config.fhe_param.max_level - terminal_lv)
+                        sol_aux_lv_score = get_restoring_score(score_graph, refresh, self.param_dict)
+                    else:
+                        sol_aux_lv_score = get_restoring_score(dag, leading_comp, self.param_dict)
                     aux_lv_solutions[tuple(sol_key)] = (
                         solution[0] + sol_aux_lv_score,
                         sol_graph_vec_aux_lv,
@@ -520,6 +523,11 @@ class GraphPartitioner:
             frontier, frontier_solutions = self.generate_solutions(
                 node, frontier, frontier_solutions, processed_feature_nodes, node_to_idx, idx_to_node, H
             )
+            if self.max_frontier_states and len(frontier_solutions) > self.max_frontier_states:
+                ranked = sorted(frontier_solutions.items(), key=lambda item: (
+                    item[1][0], -sum(config.fhe_param.max_level if lv == AUX_LV else lv
+                                      for _, lv in item[0])))
+                frontier_solutions = dict(ranked[:self.max_frontier_states])
             pbar.update(1)
 
         final_solution_frontier = tuple(

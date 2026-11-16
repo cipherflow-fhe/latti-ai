@@ -21,13 +21,77 @@ activations in an existing model, in-place.
 
 import logging
 from typing import Type, Callable
+from xml.parsers.expat import model
 
 import torch.nn as nn
 
 from .activations import RangeNormPoly2d, PolyAct, PolyActRNPoly, FHELayerNorm
-from .modules import DepthwiseAvgPool2d
+from .modules import DepthwiseAvgPool2d, PolyMaxPool2d, _pair
+from .fixed_maxpool_profiles import get_maxpool_profile
 
 log = logging.getLogger(__name__)
+
+
+def configure_maxpool(graph, settings):
+    """Configure staged MaxPool layers before compiler lowering.
+
+    This is the graph counterpart of :func:`replace_activation_with_poly`:
+    it validates and attaches the approximation profile to the original
+    ``maxpool2d`` nodes, after which the compiler expands them into the same
+    explicit arithmetic graph used by the other FHE layers.
+
+    ``settings`` maps a layer id to exactly ``alpha``, ``upper_bound`` and
+    ``B``.  The graph is only mutated after the complete request validates.
+    """
+    import math
+
+    if not isinstance(settings, dict):
+        raise ValueError('MaxPool configuration must be an object keyed by layer ID')
+    nodes = {node.layer_id: node for node in graph.dag.nodes
+             if getattr(node, 'layer_type', None) == 'maxpool2d'}
+    pending = []
+    for layer_id, values in settings.items():
+        if layer_id not in nodes:
+            raise ValueError(f'Unknown original MaxPool layer: {layer_id}')
+        if not isinstance(values, dict) or set(values) != {'alpha', 'upper_bound', 'B'}:
+            raise ValueError(f'{layer_id}: specify exactly alpha, upper_bound and B')
+        get_maxpool_profile(values['alpha'])
+        checked = {'alpha': values['alpha']}
+        for name in ('upper_bound', 'B'):
+            value = values[name]
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value <= 0):
+                raise ValueError(f'{layer_id}: {name} must be positive and finite')
+            checked[name] = float(value)
+        node = nodes[layer_id]
+        if (list(node.kernel_shape), list(node.stride), list(node.padding)) != ([3, 3], [2, 2], [1, 1]):
+            raise ValueError(f'{layer_id}: configurable staged MaxPool requires kernel=3, stride=2, padding=1')
+        pending.append((node, checked))
+    for node, values in pending:
+        for name, value in values.items():
+            setattr(node, name, value)
+
+
+def replace_maxpool_with_poly(model: nn.Module, *, alpha: int = 7,
+                              upper_bound: float = 1.0, B: float = 1.0) -> nn.Module:
+    """Replace supported ``nn.MaxPool2d`` modules with exportable PolyMaxPool2d.
+
+    Like :func:`replace_activation_with_poly`, this changes the model in place
+    using differentiable plaintext polynomial pooling. Export preserves the
+    same approximation and input bound for compiler lowering.
+    """
+    get_maxpool_profile(alpha)
+    for name, child in list(model.named_children()):
+        replace_maxpool_with_poly(child, alpha=alpha, upper_bound=upper_bound, B=B)
+        if isinstance(child, nn.MaxPool2d) and not isinstance(child, PolyMaxPool2d):
+            if child.ceil_mode or child.return_indices or _pair(child.dilation) != (1, 1):
+                raise ValueError(f"{name}: ceil_mode, return_indices and dilation are unsupported")
+            if (_pair(child.kernel_size), _pair(child.stride), _pair(child.padding)) != ((3, 3), (2, 2), (1, 1)):
+                raise ValueError(f'{name}: PolyMaxPool2d requires kernel=3, stride=2, padding=1')
+            setattr(model, name, PolyMaxPool2d(
+                child.kernel_size, child.stride, child.padding,
+                alpha=alpha, upper_bound=upper_bound, B=B).train(child.training))
+    return model
 
 
 def replace_activation(
@@ -314,12 +378,15 @@ def prepare_for_fhe(
     upper_bound: float = 3.0,
     degree: int = 4,
     input_size: tuple = None,
+    *,
+    maxpool_alpha: int = 7,
+    maxpool_upper_bound: float = 1.0,
+    maxpool_B: float = 1.0,
 ) -> nn.Module:
     """Convert a standard PyTorch model to be FHE-compatible.
 
-    Performs three in-place replacements:
+    Replaces supported MaxPool2d with differentiable PolyMaxPool2d and performs:
 
-    1. ``nn.MaxPool2d`` → ``nn.AvgPool2d``
     2. General ``nn.AvgPool2d`` → ``DepthwiseAvgPool2d`` (depthwise conv)
     3. ``nn.ReLU`` → *poly_module* (default ``RangeNormPoly2d``)
 
@@ -328,6 +395,9 @@ def prepare_for_fhe(
     buffers (required before ONNX export).
 
     Args:
+        maxpool_alpha: Fixed MaxPool sign approximation profile (7..14).
+        maxpool_upper_bound: MaxPool normalized input bound.
+        maxpool_B: MaxPool comparison scale.
         model:       PyTorch model (modified in-place).
         poly_module: Polynomial activation constructor (default ``RangeNormPoly2d``).
         upper_bound: Normalization upper bound for the polynomial activation.
@@ -345,7 +415,11 @@ def prepare_for_fhe(
     """
     import torch
 
-    replace_maxpool_with_avgpool(model)
+    replace_maxpool_with_poly(
+        model, alpha=maxpool_alpha, upper_bound=maxpool_upper_bound, B=maxpool_B)
+
+
+
     replace_layernorm_with_fhe(model)
     _replace_general_avgpool_recursive(model, freeze=True)
     replace_activation_with_poly(model, new_module_factory=poly_module, upper_bound=upper_bound, degree=degree)
