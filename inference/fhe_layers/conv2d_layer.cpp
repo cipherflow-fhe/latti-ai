@@ -19,6 +19,7 @@
 #include "conv2d_layer.h"
 #include "../util/types.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <sstream>
@@ -44,6 +45,7 @@ Conv2DLayer::Conv2DLayer(const CkksParameter& param,
     n_out_channel_ = weight_shape[0];
     n_in_channel_ = weight_shape[1];
     kernel_shape_ = {static_cast<uint32_t>(weight_shape[2]), static_cast<uint32_t>(weight_shape[3])};
+    plaintext_padding_ = kernel_shape_ / 2;
 
     if ((input_shape_[0] & (input_shape_[0] - 1)) != 0 || (input_shape_[1] & (input_shape_[1] - 1)) != 0) {
         throw std::invalid_argument("input_shape must be powers of 2, got: " + str(input_shape_));
@@ -92,9 +94,11 @@ Array<double, 3> Conv2DLayer::run_plaintext(const Array<double, 3>& x, double mu
         throw std::invalid_argument(oss.str());
     }
 
-    const Duo padding = kernel_shape_ / 2;
+    const Duo padding = plaintext_padding_;
     const Duo output_shape = actual_input_shape / stride_;
-    const Duo padded_shape = actual_input_shape + padding * 2;
+    const Duo padded_shape = {
+        std::max(actual_input_shape[0] + 2 * padding[0], (output_shape[0] - 1) * stride_[0] + kernel_shape_[0]),
+        std::max(actual_input_shape[1] + 2 * padding[1], (output_shape[1] - 1) * stride_[1] + kernel_shape_[1])};
     const double weight_scale = 1.0 / multiplier;
 
     Array<double, 3> padded_input({n_in_channel_, padded_shape[0], padded_shape[1]}, 0.0);

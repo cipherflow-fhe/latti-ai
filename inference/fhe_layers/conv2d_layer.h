@@ -51,6 +51,8 @@ protected:
 
     Duo kernel_shape_;
 
+    Duo plaintext_padding_;
+
     Duo stride_;
 
     double compute_output_element(uint32_t out_ch,

@@ -35,7 +35,8 @@ InverseMultiplexedConv2DLayerDepthwise::InverseMultiplexedConv2DLayerDepthwise(c
                                                                                const Duo& block_shape_in,
                                                                                uint32_t level_in,
                                                                                double residual_scale,
-                                                                             const Duo& seed_weight_subgrid_stride_in, bool canonical_seed_kernels)
+                                                                               const Duo& seed_weight_subgrid_stride_in,
+                                                                               bool canonical_seed_kernels)
     : Conv2DLayer(param_in, input_shape_in, move(weight_in), move(bias_in), stride_in) {
     block_shape = block_shape_in;
     std::array<uint64_t, 4UL> weight_shape = weight_.get_shape();
@@ -54,6 +55,7 @@ InverseMultiplexedConv2DLayerDepthwise::InverseMultiplexedConv2DLayerDepthwise(c
     } else {
         throw std::invalid_argument("Invalid padding inputs in InverseMultiplexedConv2DLayerDepthwise");
     }
+    plaintext_padding_ = {static_cast<uint32_t>(pad_[0]), static_cast<uint32_t>(pad_[1])};
 
     // Store original stride and check if repacking is needed
     ct_stride_ = stride_in;
@@ -95,9 +97,8 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight() {
         weight_pt[out_channel_idx].resize(total_kernel_count);
         for (int kernel_count = 0; kernel_count < total_kernel_count; ++kernel_count) {
             weight_pt[out_channel_idx][kernel_count] =
-                use_seed_weight_pack_
-                        ? generate_weight_pt_for_seed_indices(ctx_copy, out_channel_idx, kernel_count)
-                        : generate_weight_pt_for_indices(ctx_copy, out_channel_idx, kernel_count);
+                use_seed_weight_pack_ ? generate_weight_pt_for_seed_indices(ctx_copy, out_channel_idx, kernel_count) :
+                                        generate_weight_pt_for_indices(ctx_copy, out_channel_idx, kernel_count);
         }
         bias_pt[out_channel_idx] = generate_bias_pt_for_index(ctx_copy, out_channel_idx);
     });
@@ -121,33 +122,40 @@ void InverseMultiplexedConv2DLayerDepthwise::prepare_weight_lazy() {
     }
 }
 
-vector<double> InverseMultiplexedConv2DLayerDepthwise::generate_weight_values_for_indices(int ct_idx, int kernel_index, bool boundary) const {
-    const auto position = interleaved_seed::inverse_kernel_position(
-        kernel_shape_, ct_stride_, output_step, pad_, kernel_index);
+vector<double> InverseMultiplexedConv2DLayerDepthwise::generate_weight_values_for_indices(int ct_idx,
+                                                                                          int kernel_index,
+                                                                                          bool boundary) const {
+    const auto position =
+        interleaved_seed::inverse_kernel_position(kernel_shape_, ct_stride_, output_step, pad_, kernel_index);
     vector<double> values(n_real_num_slot, 0.0);
-    const auto valid = interleaved_seed::mask(block_shape, {1, 1}, 1, n_real_num_slot,
-                                              {1, 1}, 0, position.step, true);
+    const auto valid = interleaved_seed::mask(block_shape, {1, 1}, 1, n_real_num_slot, {1, 1}, 0, position.step, true);
     const double value = weight_.get(ct_idx, 0, position.kernel[0], position.kernel[1]);
     for (uint32_t i = 0; i < prod(block_shape); ++i) {
-        if (!boundary || valid[i]) values[i] = value;
+        if (!boundary || valid[i])
+            values[i] = value;
     }
     return values;
 }
 
-CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx, int ct_idx, int kernel_index) const {
+CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_indices(CkksContext& ctx,
+                                                                                     int ct_idx,
+                                                                                     int kernel_index) const {
     return fhe_api::encode_ringt(ctx, generate_weight_values_for_indices(ct_idx, kernel_index, true), weight_scale);
 }
 
-CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_seed_indices(CkksContext& ctx, int ct_idx, int seed_kernel) const {
+CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_seed_indices(CkksContext& ctx,
+                                                                                          int ct_idx,
+                                                                                          int seed_kernel) const {
     if (seed_kernel < 0 || seed_kernel >= static_cast<int>(seed_weight_kernel_count()))
         throw std::out_of_range("inverse seed index");
     const int count = canonical_seed_kernels_ ? prod(kernel_shape_) : cached_kernel_total_count;
-    auto seed = interleaved_seed::pack_kernels(count, seed_kernel, seed_weight_subgrid_stride_,
-        block_shape, {1, 1}, 1, n_real_num_slot, [&](int kernel_index) {
+    auto seed = interleaved_seed::pack_kernels(
+        count, seed_kernel, seed_weight_subgrid_stride_, block_shape, {1, 1}, 1, n_real_num_slot,
+        [&](int kernel_index) {
             if (canonical_seed_kernels_) {
                 vector<double> values(n_real_num_slot, 0.0);
-                std::fill_n(values.begin(), prod(block_shape), weight_.get(ct_idx, 0,
-                    kernel_index / kernel_shape_[1], kernel_index % kernel_shape_[1]));
+                std::fill_n(values.begin(), prod(block_shape),
+                            weight_.get(ct_idx, 0, kernel_index / kernel_shape_[1], kernel_index % kernel_shape_[1]));
                 return values;
             }
             return generate_weight_values_for_indices(ct_idx, kernel_index, false);
@@ -155,20 +163,24 @@ CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_weight_pt_for_see
     return fhe_api::encode_ringt(ctx, seed, weight_scale);
 }
 
-vector<double> InverseMultiplexedConv2DLayerDepthwise::seed_mask_values(int subgrid, int kernel_index, bool boundary) const {
-    const auto step = interleaved_seed::inverse_kernel_position(kernel_shape_, ct_stride_, output_step, pad_, kernel_index).step;
-    return interleaved_seed::mask(block_shape, {1, 1}, 1, n_real_num_slot,
-                                   seed_weight_subgrid_stride_, subgrid, step, boundary);
+vector<double>
+InverseMultiplexedConv2DLayerDepthwise::seed_mask_values(int subgrid, int kernel_index, bool boundary) const {
+    const auto step =
+        interleaved_seed::inverse_kernel_position(kernel_shape_, ct_stride_, output_step, pad_, kernel_index).step;
+    return interleaved_seed::mask(block_shape, {1, 1}, 1, n_real_num_slot, seed_weight_subgrid_stride_, subgrid, step,
+                                  boundary);
 }
 
-CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_mask_pt_for_seed_indices(
-    CkksContext& ctx, int subgrid, int kernel_index, bool boundary) const {
+CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_mask_pt_for_seed_indices(CkksContext& ctx,
+                                                                                        int subgrid,
+                                                                                        int kernel_index,
+                                                                                        bool boundary) const {
     const int mask_level = level_ + seed_weight_level_cost() - (boundary ? 1 : 0);
     return fhe_api::encode_ringt(ctx, seed_mask_values(subgrid, kernel_index, boundary), param_.q()[mask_level]);
 }
 
 CkksPlaintext InverseMultiplexedConv2DLayerDepthwise::generate_bias_pt_for_index(CkksContext& ctx,
-                                                                                      int out_channel_idx) const {
+                                                                                 int out_channel_idx) const {
     vector<double> bias_vec(n_real_num_slot, 0.0);
     for (int linear_idx = 0; linear_idx < cached_total_block_size; ++linear_idx) {
         bias_vec[linear_idx] = bias_.get(out_channel_idx);
@@ -255,26 +267,31 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
             for (int k = 0; k < n_k; k++) {
                 if (use_seed_weight_pack_) {
                     const int logical_kernel = k + base_idx;
-                    const auto original = interleaved_seed::inverse_kernel_position(
-                        kernel_shape_, ct_stride_, output_step, pad_, logical_kernel).kernel;
-                    const int canonical = canonical_seed_kernels_ ? original[0] * kernel_shape_[1] + original[1] : logical_kernel;
+                    const auto original = interleaved_seed::inverse_kernel_position(kernel_shape_, ct_stride_,
+                                                                                    output_step, pad_, logical_kernel)
+                                              .kernel;
+                    const int canonical =
+                        canonical_seed_kernels_ ? original[0] * kernel_shape_[1] + original[1] : logical_kernel;
                     const int seed_index = canonical / prod(seed_weight_subgrid_stride_);
                     const int subgrid = canonical % prod(seed_weight_subgrid_stride_);
                     CkksPlaintext generated;
-                    if (weight_pt.empty()) generated = generate_weight_pt_for_seed_indices(ctx_copy, ct_idx, seed_index);
+                    if (weight_pt.empty())
+                        generated = generate_weight_pt_for_seed_indices(ctx_copy, ct_idx, seed_index);
                     const auto& seed = weight_pt.empty() ? generated : weight_pt[ct_idx][seed_index];
-                    auto restored = interleaved_seed::restore_plaintext(ctx_copy, seed,
-                        seed_mask_values(subgrid, logical_kernel, false), seed_mask_values(subgrid, logical_kernel, true),
-                        block_shape, {1, 1}, seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
+                    auto restored = interleaved_seed::restore_plaintext(
+                        ctx_copy, seed, seed_mask_values(subgrid, logical_kernel, false),
+                        seed_mask_values(subgrid, logical_kernel, true), block_shape, {1, 1},
+                        seed_weight_subgrid_stride_, subgrid, level_, weight_scale);
                     const auto& mul_pt = restored;
                     auto term = ctx_copy.mult(rotated_x[ct_idx][k + base_idx], mul_pt);
-                    if (k == 0) s = move(term);
-                    else s = ctx_copy.add(s, term);
+                    if (k == 0)
+                        s = move(term);
+                    else
+                        s = ctx_copy.add(s, term);
                 } else if (weight_pt.empty()) {
                     auto w_pt_rt = generate_weight_pt_for_indices(ctx_copy, ct_idx, k + base_idx);
                     const auto& w_pt = w_pt_rt;
-                    lattisense::CkksCiphertext one_mult_res =
-                        ctx_copy.mult(rotated_x[ct_idx][k + base_idx], w_pt);
+                    lattisense::CkksCiphertext one_mult_res = ctx_copy.mult(rotated_x[ct_idx][k + base_idx], w_pt);
                     if (k == 0) {
                         s = move(one_mult_res);
                     } else {
@@ -283,8 +300,7 @@ vector<CkksCiphertext> InverseMultiplexedConv2DLayerDepthwise::run_core(CkksCont
                 } else {
                     lattisense::CkksPlaintext& w_pt_rt = weight_pt[ct_idx][k + base_idx];
                     const auto& w_pt = w_pt_rt;
-                    lattisense::CkksCiphertext one_mult_res =
-                        ctx_copy.mult(rotated_x[ct_idx][k + base_idx], w_pt);
+                    lattisense::CkksCiphertext one_mult_res = ctx_copy.mult(rotated_x[ct_idx][k + base_idx], w_pt);
                     if (k == 0) {
                         s = move(one_mult_res);
                     } else {
