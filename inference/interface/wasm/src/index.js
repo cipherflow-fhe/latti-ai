@@ -1,4 +1,5 @@
 import {BUILD_INFO} from './build-info.js';
+export {openBrowserModelTools} from './model.js';
 
 export async function openBrowserClient({clientDirectory,keyDirectory,profile,onProgress,onArtifact}) {
   if (!globalThis.isSecureContext) throw new Error('A secure browser context is required');
@@ -67,6 +68,8 @@ export async function openBrowserClient({clientDirectory,keyDirectory,profile,on
     restore: () => request('restore'),
     encrypt: options => request('encrypt',options),
     decrypt: options => request('decrypt',options),
+    decryptOutputs: options => request('decryptOutputs',options),
+    provisionRunner: options => request('provisionRunner',options),
     bindTask: clientDirectory => request('bindTask',{clientDirectory}),
     encryptBatch: options => request('encryptBatch',options),
     decryptBatch: options => request('decryptBatch',options),

@@ -1,5 +1,8 @@
 import './wasm_exec.js';
 import {BUILD_INFO} from './build-info.js';
+import {runnerOutputs} from './runner-output.js';
+import {csvChunks} from './csv.js';
+import {openParameterModel} from './parameter-model.js';
 import {stageCSV,numericToCSV} from './csv.js';
 import {writeZip,openZip,checkedZipName} from './zip.js';
 import {fileOf,fileSource,safeName,setErrorMessage,writeFile,copyFile,pump,jobDirectory,cleanupOrphanJobs,cleanupAfter,artifact,commit} from './io.js';
@@ -61,7 +64,7 @@ const core = (operation,...args) => {
   return result;
 };
 
-let state='initializing',keyReady=false,task,profile,keyDirectory,taskDirectory,initialParameters;
+let state='initializing',keyReady=false,task,profile,keyDirectory,taskDirectory,initialParameters,keyIdentity,inputContract;
 let active,queue=Promise.resolve(),closing=false,lastProgress=0;
 const cancelled=()=>Object.assign(new Error('Operation cancelled'),{code:'CANCELLED'});
 const check=()=>{if(active?.controller.signal.aborted) throw cancelled();};
@@ -82,7 +85,47 @@ const assertAbsent=async(directory,name)=>{
 const bindTask=async directory=>{
   const [config,parameters]=await Promise.all([read(directory,'task_config.json'),read(directory,'ckks_parameter.json')]);
   if(!config.trim()) throw new Error('Task configuration is required');
-  core('bind-task',config,parameters);task=JSON.parse(config);taskDirectory=directory;
+  const parsed=JSON.parse(config);
+  let ownerManifest;
+  try{ownerManifest=JSON.parse(await read(directory,'task_manifest.json'));}
+  catch(error){if(error.name!=='NotFoundError'||parsed.task_manifest_required)throw error;}
+  if(ownerManifest) {
+    const manifest=ownerManifest;
+    if(manifest.schema!=='latti-ai.browser-client-task.v1'||manifest.deployment_mode!==parsed.deployment_mode)throw new Error('Task manifest mode differs');
+    for(const name of ['task_config.json','ckks_parameter.json','task_signature.json','key_requirements.json'])
+      if(!manifest.files?.[name])throw new Error('Task manifest omits '+name);
+    for(const [name,entry]of Object.entries(manifest.files)) {
+      const file=await(await directory.getFileHandle(safeName(name))).getFile();
+      const bytes=await file.arrayBuffer(),sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+      if(file.size!==entry.bytes||sha256!==entry.sha256)throw new Error('Task file hash mismatch: '+name);
+    }
+  }
+  let contract;
+  try {contract=JSON.parse(await read(directory,'input_contract.json'));}
+  catch(error){if(error.name!=='NotFoundError')throw error;}
+  if(contract) {
+    if((parsed.deployment_mode||'client_encrypted_input')!==contract.deployment_mode||
+      JSON.stringify(parsed.task_output_param)!==JSON.stringify(contract.outputs))throw new Error('Task mode/output contract differs');
+    const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(parameters))),b=>b.toString(16).padStart(2,'0')).join('');
+    if(digest!==contract.ckks_sha256)throw new Error('Task CKKS contract hash differs');
+  }
+  if(ownerManifest) {
+    const signature=JSON.parse(await read(directory,'task_signature.json'));
+    const outputs=signature.online.filter(arg=>arg.phase==='out');
+    if(outputs.length!==Object.keys(parsed.task_output_param).length||new Set(outputs.map(arg=>arg.id)).size!==outputs.length)
+      throw new Error('Task output signature IDs differ');
+    for(const arg of outputs) {
+      const packing=parsed.task_output_param[arg.id];
+      if(!packing||arg.type!=='ct'||arg.level!==packing.level||!Array.isArray(arg.size)||arg.size.length!==1||!Number.isSafeInteger(arg.size[0])||arg.size[0]<=0)
+        throw new Error('Task output signature differs: '+arg.id);
+      if(packing.data_type!=='feature_mat') {
+        let count=Math.ceil(packing.channel/packing.pack_num);
+        if(packing.dim===2)count*=packing.shape.reduce((n,dim,i)=>n*Math.ceil(dim/parsed.block_shape[i]),1);
+        if(arg.size[0]!==count)throw new Error('Task output signature packing differs: '+arg.id);
+      }
+    }
+  }
+  core('bind-task',config,parameters);task=parsed;taskDirectory=directory;inputContract=contract;
   return {profileId:profile.profileId};
 };
 const inputNames=()=>{
@@ -107,30 +150,42 @@ const files=async(directory,pattern)=>{
 };
 const caseId=file=>{const name=safeName(file.name.replace(/\.csv$/i,''));checkedZipName(name);if(name.includes('__')) throw new Error('Case ID contains reserved separator');return name;};
 
+async function hashFile(file,directory,name) {
+  const work=await directory.getDirectoryHandle(name,{create:true}),snapshot=await fileOf(file);
+  const result=await pump(core,'sha256',['',String(snapshot.size)],work,{bytes:fileSource(snapshot)},check,progress);
+  return (await(await result.get('sha256').handle.getFile()).text()).trim();
+}
+
 async function setup() {
   const publicDir=await keyDirectory.getDirectoryHandle('public',{create:true});
   const privateDir=await keyDirectory.getDirectoryHandle('secret',{create:true});
   await assertAbsent(keyDirectory,'manifest.json');
   for(const [dir,name] of [[publicDir,'eval_context.bin'],[privateDir,'full_context.bin']]) await assertAbsent(dir,name);
-  const job=await jobDirectory(active.jobId),created=[];let failure;
+  const job=await jobDirectory(active.jobId),created=[];let failure,committed=false;
   keyReady=false;
   try {
+    const pending=await keyDirectory.getFileHandle('pending.json',{create:true});created.push([keyDirectory,'pending.json']);
+    await writeFile(pending,JSON.stringify({profileId:profile.profileId,jobId:active.jobId}));
     const outputs=await pump(core,'setup',[],job.directory,{},check,progress);
     const refs=[];
     for(const [id,dir,name,role] of [['eval',publicDir,'eval_context.bin','public-eval'],['full',privateDir,'full_context.bin','private-full']]) {
       check();const file=await dir.getFileHandle(name,{create:true});created.push([dir,name]);
       const bytes=await copyFile(outputs.get(id).handle,file,check);
       if(bytes!==outputs.get(id).bytes) throw new Error('Export size mismatch');
-      refs.push(await artifact(dir,name,role,file,profile.profileId));
+      const ref=await artifact(dir,name,role,file,profile.profileId);
+      ref.sha256=await hashFile(file,job.directory,'hash-'+id);refs.push(ref);
     }
     check();
     const manifest=await keyDirectory.getFileHandle('manifest.json',{create:true});created.push([keyDirectory,'manifest.json']);
-    await writeFile(manifest,JSON.stringify({state:'committed',runtimeVersion:RUNTIME_VERSION,protocolVersion:PROTOCOL_VERSION,profile,artifacts:refs.map(ref=>({artifactId:ref.artifactId,role:ref.role,path:(ref.role==='private-full'?'secret/':'public/')+ref.file.name,bytes:ref.bytes}))})+'\n');
+    keyIdentity=core('key-identity').data;
+    await writeFile(manifest,JSON.stringify({state:'committed',runtimeVersion:RUNTIME_VERSION,protocolVersion:PROTOCOL_VERSION,profile,keyIdentity,artifacts:refs.map(ref=>({artifactId:ref.artifactId,role:ref.role,path:(ref.role==='private-full'?'secret/':'public/')+ref.file.name,bytes:ref.bytes,sha256:ref.sha256}))})+'\n');
+    committed=true;
+    await keyDirectory.removeEntry('pending.json');
     keyReady=true;
-    return {evalContext:refs[0],fullContext:refs[1],manifest,profileId:profile.profileId};
+    return {evalContext:refs[0],fullContext:refs[1],manifest,profileId:profile.profileId,keyIdentity};
   } catch(error) {
     failure=error;
-    await cleanupAfter(error,created.map(([dir,name])=>async()=>{
+    await cleanupAfter(error,(committed?[]:created).map(([dir,name])=>async()=>{
       try {await dir.removeEntry(name);} catch(e) {throw setErrorMessage(e,e.message+'; residual key directory/'+name);}
     }));
     try {core('close');core('init-keys',initialParameters,profile.keyPlan.bootstrapping);}
@@ -140,9 +195,46 @@ async function setup() {
   } finally {await cleanupAfter(failure,[()=>job.cleanup()]);}
 }
 
+async function openRun(run,contract) {
+  const manifestFile=await run.manifest.getFile();
+  if(manifestFile.size>1024*1024)throw new Error('Run manifest exceeds metadata budget');
+  const manifest=JSON.parse(await manifestFile.text());
+  if(manifest.kind!=='run'||manifest.schema!=='latti-ai.browser-model-artifact.v1')throw new Error('A runPrefix artifact is required');
+  const get=async name=>{
+    if(typeof name!=='string'||!name||/[\\\0:]/.test(name)||name.split('/').some(p=>!p||p==='.'||p==='..'))throw new Error('Invalid run artifact path');
+    let directory=run.directory;const parts=name.split('/');
+    for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part);
+    const file=await(await directory.getFileHandle(parts.at(-1))).getFile(),expected=manifest.files[name];
+    if(!expected||file.size!==expected.bytes||file.size>128*1024*1024)throw new Error('Run artifact size differs');
+    const sha=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('');
+    if(sha!==expected.sha256)throw new Error('Run artifact hash mismatch');
+    return file;
+  };
+  const binding=JSON.parse(await(await get(manifest.entry)).text());
+  if(binding.split_manifest_sha256!==contract.manifest_sha256)throw new Error('Run is bound to a different split');
+  const samplePath=manifest.entry.slice(0,manifest.entry.lastIndexOf('/')+1)+binding.sample_manifest;
+  if(manifest.files[samplePath]?.sha256!==binding.sample_manifest_sha256)throw new Error('Run sample manifest binding differs');
+  const sample=JSON.parse(await(await get(samplePath)).text());
+  return {sample,samplePath,get};
+}
+
 async function transform(encrypting,options,work) {
   requireFeature(encrypting?options.inputName:options.outputName,encrypting);check();
   const source=await fileOf(encrypting?options.inputFile:options.ciphertextFile);
+  if(encrypting&&inputContract) {
+    const entry=inputContract.inputs.find(input=>input.feature_id===options.inputName);
+    if(!entry)throw new Error('Input feature is absent from split contract');
+    let expected=entry.sha256;
+    if(options.run) {
+      const {sample}=await openRun(options.run,inputContract);
+      const actual=sample.inputs.find(input=>input.name===entry.name);
+      if(!actual||JSON.stringify(actual.shape)!==JSON.stringify(entry.shape)||actual.dtype!==entry.dtype||actual.representation!==entry.representation)throw new Error('Run crossing interface differs');
+      expected=actual.sha256;
+    }
+    const job=await jobDirectory(active.jobId+'-binding');let failure;
+    try {if(await hashFile(source,job.directory,'input')!==expected)throw new Error('Crossing CSV content differs from bound sample');}
+    catch(error){failure=error;throw error;}finally{await cleanupAfter(failure,[()=>job.cleanup()]);}
+  }
   const name=safeName(source.name.replace(encrypting?/\.csv$/i:/\.ct\.bin$/i,'')+(encrypting?'.ct.bin':'.csv'));
   const numeric=await work.getFileHandle('numeric.tmp',{create:true});
   if(encrypting) {
@@ -172,6 +264,129 @@ async function single(encrypting,options) {
     const actions=[];
     if(!retained&&options.outputDirectory&&destination) actions.push(()=>options.outputDirectory.removeEntry(active.jobId,{recursive:true}));
     actions.push(()=>!retained||options.outputDirectory?job.cleanup():job.directory.removeEntry('work',{recursive:true}));
+    await cleanupAfter(failure,actions);
+  }
+}
+
+async function decryptOutputs(options) {
+  const manifest=JSON.parse(await(await options.task.manifest.getFile()).text());
+  if(manifest.schema!=='latti-ai.browser-model-artifact.v1'||manifest.kind!=='task')throw new Error('Compiled task artifact required');
+  const get=async name=>{
+    if(typeof name!=='string'||!name||/[\\\0:]/.test(name)||name.split('/').some(part=>!part||part==='.'||part==='..'))throw new Error('Invalid artifact path');
+    let directory=options.task.directory;const parts=name.split('/');
+    for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part);
+    const file=await(await directory.getFileHandle(parts.at(-1))).getFile(),metadata=manifest.files[name];
+    if(!metadata||file.size!==metadata.bytes)throw new Error('Missing output artifact binding');
+    const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('');
+    if(hash!==metadata.sha256)throw new Error('Output artifact hash mismatch');
+    return file;
+  };
+  const contract=JSON.parse(await(await get(manifest.entry+'/input_contract.json')).text());
+  const prefix=manifest.virtualRoot+'/';
+  if(!contract.manifest.startsWith(prefix))throw new Error('Split reference escapes artifact');
+  const splitPath=contract.manifest.slice(prefix.length);
+  const run=options.run?await openRun(options.run,contract):null;
+  const split=run?run.sample:JSON.parse(await(await get(splitPath)).text());
+  const outputs=await runnerOutputs(options.outputFile,Object.keys(contract.output_map));
+  if(JSON.stringify(task.task_output_param)!==JSON.stringify(contract.outputs)||
+    (task.deployment_mode||'client_encrypted_input')!==contract.deployment_mode)throw new Error('Bound output task differs from contract');
+  const job=await jobDirectory(active.jobId);let destination,retained=false,failure;
+  try {
+    destination=options.outputDirectory?await options.outputDirectory.getDirectoryHandle(active.jobId,{create:true}):await job.directory.getDirectoryHandle('output',{create:true});
+    const entries=[];
+    for(const [index,route]of split.output_routes.entries()) {
+      check();
+      const expected=route.shape.reduce((a,b)=>a*b,1),name=`output-${index}.csv`;
+      const file=await destination.getFileHandle(name,{create:true});
+      if(route.route==='suffix') {
+        const ids=Object.keys(contract.output_map).filter(id=>contract.output_map[id]===route.name);
+        if(ids.length!==1)throw new Error('Ambiguous output route');
+        const work=await job.directory.getDirectoryHandle('work-'+index,{create:true});
+        const converted=await transform(false,{outputName:ids[0],ciphertextFile:new File([outputs.get(ids[0])],ids[0]+'.ct.bin')},work);
+        await copyFile(converted.file,file,check);
+        await job.directory.removeEntry('work-'+index,{recursive:true});
+      } else {
+        const reference=route.plaintext;
+        if(!reference)throw new Error('Split lacks portable plaintext output routes; prepare it again');
+        const referencePath=run?run.samplePath:splitPath;
+        const source=await(run?run.get:get)(referencePath.slice(0,referencePath.lastIndexOf('/')+1)+reference.csv);
+        await copyFile(source,file,check);
+      }
+      let count=0;
+      for await(const values of csvChunks(await file.getFile())){check();count+=values.length;}
+      if(count!==expected)throw new Error('Output count differs from original shape');
+      entries.push({name:route.name,shape:route.shape,dtype:route.dtype,count,file:name,
+        numericDtype:route.route==='suffix'?'float64':route.dtype,route:route.route});
+    }
+    const outputManifest=await commit(destination,[],profile.profileId,{outputs:entries,
+      deploymentMode:contract.deployment_mode,sourceManifest:contract.manifest_sha256});
+    retained=true;return {directory:destination,manifest:outputManifest};
+  }catch(error){failure=error;throw error;}finally {
+    const actions=[];
+    if(!retained&&destination&&options.outputDirectory)actions.push(()=>options.outputDirectory.removeEntry(active.jobId,{recursive:true}));
+    if(!retained||options.outputDirectory)actions.push(()=>job.cleanup());
+    await cleanupAfter(failure,actions);
+  }
+}
+
+async function provisionRunner(options) {
+  const job=await jobDirectory(active.jobId);let producer,destination,retained=false,failure;
+  try {
+    producer=await openParameterModel(options.task,options.parameterDirectory,active.controller.signal,
+      event=>progress('parameters-'+event.phase,0));
+    check();
+    const {metadata}=producer,plan=JSON.parse(metadata.plan);
+    core('bind-task',metadata.config,metadata.parameters);task=JSON.parse(metadata.config);
+    destination=options.outputDirectory?await options.outputDirectory.getDirectoryHandle(active.jobId,{create:true}):await job.directory.getDirectoryHandle('runner',{create:true});
+    const work=await job.directory.getDirectoryHandle('work',{create:true});
+    const sources=new Proxy({}, {get(_,id) {
+      const match=typeof id==='string'&&/^parameter:(\d+):(\d+)$/.exec(id);
+      if(!match)return undefined;
+      const item=plan[Number(match[1])],index=Number(match[2]);
+      if(!item||!Number.isSafeInteger(index)||index<0||index>=item.count)throw new Error('Invalid parameter request');
+      return {size:BigInt(item.slots*8),async readAt(offset,length) {
+        check();
+        if(offset!==0n||length!==BigInt(item.slots*8))throw new Error('Parameter source must request one full slot vector');
+        const bytes=await producer.value(item.id,index);check();
+        if(!(bytes instanceof Uint8Array)||bytes.byteLength!==item.slots*8)throw new Error('Invalid parameter materialization length');
+        return bytes;
+      }};
+    }});
+    const outputs=await pump(core,'provision',[metadata.plan],work,sources,check,progress);
+    await producer.close();producer=undefined;
+    const encrypted=await destination.getDirectoryHandle('encrypted_model_parameters',{create:true});
+    const publicFiles=[];
+    for(const [name,bytes]of Object.entries(metadata.files)) {
+      const file=await destination.getFileHandle(safeName(name),{create:true});await writeFile(file,bytes);publicFiles.push([name,file]);
+    }
+    const graph=await destination.getFileHandle('nn_layers_ct_0.json',{create:true});
+    await writeFile(graph,metadata.publicGraph);publicFiles.push(['nn_layers_ct_0.json',graph]);
+    for(let index=0;index<plan.length;index++) {
+      const name=`parameter-${index}.bin`,file=await encrypted.getFileHandle(name,{create:true});
+      await copyFile(outputs.get('parameter-'+index).handle,file,check);publicFiles.push(['encrypted_model_parameters/'+name,file]);
+    }
+    const storeManifest=await encrypted.getFileHandle('manifest.json',{create:true});
+    await copyFile(outputs.get('parameter-manifest').handle,storeManifest,check);
+    publicFiles.push(['encrypted_model_parameters/manifest.json',storeManifest]);
+    const publicKeys=await keyDirectory.getDirectoryHandle('public'),evaluation=await destination.getFileHandle('eval_context.bin',{create:true});
+    await copyFile(await publicKeys.getFileHandle('eval_context.bin'),evaluation,check);publicFiles.push(['eval_context.bin',evaluation]);
+    const files={};let index=0;
+    for(const [name,file]of publicFiles) {
+      const snapshot=await file.getFile(),hashWork=await work.getDirectoryHandle('hash-'+index++,{create:true});
+      const hash=await pump(core,'sha256',['',String(snapshot.size)],hashWork,{bytes:fileSource(file)},check,progress);
+      files[name]={bytes:String(snapshot.size),sha256:await(await hash.get('sha256').handle.getFile()).text()};
+    }
+    const manifest=await destination.getFileHandle('manifest.json',{create:true});check();
+    await writeFile(manifest,JSON.stringify({schema:'latti-ai.browser-runner.v1',state:'committed',
+      deploymentMode:'server_provisioned_runner',parameterLoadingMode:'runtime_lazy',profileId:profile.profileId,keyIdentity,
+      runtimeMetrics:metadata.runtimeMetrics,files})+'\n');
+    retained=true;return {directory:destination,manifest};
+  }catch(error){failure=error;throw error;}finally {
+    const actions=[];
+    if(producer)actions.push(()=>producer.close());
+    if(!retained&&destination&&options.outputDirectory)actions.push(()=>options.outputDirectory.removeEntry(active.jobId,{recursive:true}));
+    if(!retained||options.outputDirectory)actions.push(()=>job.cleanup());
+    else actions.push(()=>job.directory.removeEntry('work',{recursive:true}));
     await cleanupAfter(failure,actions);
   }
 }
@@ -311,12 +526,30 @@ async function operate(type,options) {
     profile=core('profile').data;
     const parent=options.keyDirectory||taskDirectory;
     keyDirectory=await parent.getDirectoryHandle(profile.profileId,{create:true});
-    if(initial&&taskDirectory) await bindTask(taskDirectory);
+    let pending;
+    try {pending=JSON.parse(await read(keyDirectory,'pending.json',1024*1024));}
+    catch(error){if(error.name!=='NotFoundError')throw error;}
+    if(pending) {
+      if(pending.profileId!==profile.profileId)throw new Error('Interrupted setup profile differs');
+      let published=false;
+      try {published=JSON.parse(await read(keyDirectory,'manifest.json',1024*1024)).state==='committed';}
+      catch(error){if(error.name!=='NotFoundError'&&!(error instanceof SyntaxError))throw error;}
+      if(!published) {
+        for(const [sub,name]of [['public','eval_context.bin'],['secret','full_context.bin']]) {
+          try {await(await keyDirectory.getDirectoryHandle(sub)).removeEntry(name);}
+          catch(error){if(error.name!=='NotFoundError')throw error;}
+        }
+        try {await keyDirectory.removeEntry('manifest.json');}catch(error){if(error.name!=='NotFoundError')throw error;}
+      }
+      await keyDirectory.removeEntry('pending.json');
+    }
+    if(taskDirectory) await bindTask(taskDirectory);
     return {profileId:profile.profileId};
   }
   if(type==='bindTask') return bindTask(options.clientDirectory);
   if(type==='setup') return setup();
   if(type==='restore') {
+    keyReady=false;
     const manifest=JSON.parse(await read(keyDirectory,'manifest.json',1024*1024));
     if(manifest.state!=='committed'||manifest.profile?.profileId!==profile.profileId||JSON.stringify(manifest.profile)!==JSON.stringify(profile)) throw new Error('Key manifest profile mismatch');
     const full=manifest.artifacts.find(ref=>ref.role==='private-full');
@@ -325,19 +558,33 @@ async function operate(type,options) {
     if(String(file.size)!==full.bytes||file.size>64*1024*1024) throw new Error('Full context size exceeds profile bound');
     const job=await jobDirectory(active.jobId);
     let failure;
-    try {await pump(core,'restore',['',String(file.size)],job.directory,{full:fileSource(file)},check,progress);}
+    try {
+      if(full.sha256&&await hashFile(file,job.directory,'hash-full')!==full.sha256)throw new Error('Full key context hash mismatch');
+      await pump(core,'restore',['',String(file.size)],job.directory,{full:fileSource(file)},check,progress);
+      keyIdentity=core('key-identity').data;
+      if(manifest.keyIdentity&&manifest.keyIdentity!==keyIdentity)throw new Error('Restored key identity differs');
+      const publicRef=manifest.artifacts.find(ref=>ref.role==='public-eval');
+      const publicDirectory=await keyDirectory.getDirectoryHandle('public'),publicFile=await publicDirectory.getFileHandle('eval_context.bin');
+      if(String((await publicFile.getFile()).size)!==publicRef?.bytes)throw new Error('Public evaluation context length differs');
+      if(publicRef.sha256&&await hashFile(publicFile,job.directory,'hash-eval')!==publicRef.sha256)throw new Error('Public evaluation context hash mismatch');
+    }
     catch(error) {failure=error;throw error;} finally {await cleanupAfter(failure,[()=>job.cleanup()]);}
     keyReady=true;
-    return {profileId:profile.profileId};
+    return {profileId:profile.profileId,keyIdentity};
   }
   if(type==='close') {core('close');keyReady=false;task=undefined;return;}
+  if(type==='provisionRunner') {
+    if(!keyReady)throw new Error('Client keys must be setup or restored');
+    return provisionRunner(options);
+  }
   if(!keyReady||!task) throw new Error('Client keys and a bound task are required');
   if(type==='encrypt'||type==='decrypt') return single(type==='encrypt',options);
+  if(type==='decryptOutputs') return decryptOutputs(options);
   if(type==='encryptBatch'||type==='decryptBatch') return batch(type==='encryptBatch',options);
   throw new Error('Unknown command');
 }
 
-const commands=new Set(['open','bindTask','setup','restore','encrypt','decrypt','encryptBatch','decryptBatch','close']);
+const commands=new Set(['open','bindTask','setup','restore','encrypt','decrypt','decryptOutputs','provisionRunner','encryptBatch','decryptBatch','close']);
 onmessage=({data})=>{
   if(!data||data.protocolVersion!==PROTOCOL_VERSION||!Number.isSafeInteger(data.requestId)||data.requestId<=0||typeof data.jobId!=='string'||typeof data.type!=='string') {
     send('error',data?.requestId||0,data?.jobId||sessionJobId,{code:'PROTOCOL_ERROR',phase:'protocol',message:'Invalid protocol v2 envelope',retryable:false});return;

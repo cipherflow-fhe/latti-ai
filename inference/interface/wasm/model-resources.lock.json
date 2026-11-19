@@ -1,0 +1,325 @@
+{
+  "schema": "latti-ai.browser-model-resources.v1",
+  "pyodide": "0.27.7",
+  "python": "3.12.7",
+  "emscripten": "3.1.58",
+  "ort": "1.23.2",
+  "onnx": "1.19.0",
+  "pythonLock": {
+    "info": {
+      "abi_version": "2024_0",
+      "arch": "wasm32",
+      "platform": "emscripten_3_1_58",
+      "python": "3.12.7",
+      "version": "0.27.7"
+    },
+    "packages": {
+      "numpy": {
+        "depends": [],
+        "file_name": "numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+        "imports": [
+          "numpy"
+        ],
+        "install_dir": "site",
+        "name": "numpy",
+        "package_type": "package",
+        "sha256": "ebb61241d962b98b21597d7ce43b67668a6d5bab3acec4fbe958657320d7cd08",
+        "unvendored_tests": true,
+        "version": "2.0.2"
+      },
+      "scipy": {
+        "depends": [
+          "numpy",
+          "openblas"
+        ],
+        "file_name": "scipy-1.14.1-cp312-cp312-pyodide_2024_0_wasm32.whl",
+        "imports": [
+          "scipy"
+        ],
+        "install_dir": "site",
+        "name": "scipy",
+        "package_type": "package",
+        "sha256": "997c50a61564a8ce6a56ea98a42e7f4427e5eb98475a73233e83df6a184f415c",
+        "unvendored_tests": true,
+        "version": "1.14.1"
+      },
+      "openblas": {
+        "depends": [],
+        "file_name": "openblas-0.3.26.zip",
+        "imports": [],
+        "install_dir": "dynlib",
+        "name": "openblas",
+        "package_type": "shared_library",
+        "sha256": "787ea9a8a5cd160204388d03324b3b7ce5c9aea14b5680cec987f837e76c5198",
+        "unvendored_tests": false,
+        "version": "0.3.26"
+      },
+      "h5py": {
+        "depends": [
+          "numpy",
+          "pkgconfig"
+        ],
+        "file_name": "h5py-3.12.1-cp312-cp312-pyodide_2024_0_wasm32.whl",
+        "imports": [
+          "h5py"
+        ],
+        "install_dir": "site",
+        "name": "h5py",
+        "package_type": "package",
+        "sha256": "a56b66beb6c8708b128299e414fc9a1d646b1a432e04822059a7c3fcfaaf9e10",
+        "unvendored_tests": true,
+        "version": "3.12.1"
+      },
+      "pkgconfig": {
+        "depends": [],
+        "file_name": "pkgconfig-1.5.5-py3-none-any.whl",
+        "imports": [
+          "pkgconfig"
+        ],
+        "install_dir": "site",
+        "name": "pkgconfig",
+        "package_type": "package",
+        "sha256": "6865593962300e910d9d125972b590bf4bac693f54a7ce9c8602625ae42212f8",
+        "unvendored_tests": false,
+        "version": "1.5.5"
+      },
+      "protobuf": {
+        "depends": [],
+        "file_name": "protobuf-5.29.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+        "imports": [
+          "google"
+        ],
+        "install_dir": "site",
+        "name": "protobuf",
+        "package_type": "package",
+        "sha256": "1c061201f6366b1638af5ec0f5f6a382a73d9773c08749650cdf0b4d656815bc",
+        "unvendored_tests": false,
+        "version": "5.29.2"
+      },
+      "networkx": {
+        "depends": [],
+        "file_name": "networkx-3.4.2-py3-none-any.whl",
+        "imports": [
+          "networkx"
+        ],
+        "install_dir": "site",
+        "name": "networkx",
+        "package_type": "package",
+        "sha256": "fc86ae678fdbab25783d543290dfd2fea8f9cc5161cdb4e61ce2687de57665bb",
+        "unvendored_tests": true,
+        "version": "3.4.2"
+      },
+      "tqdm": {
+        "depends": [],
+        "file_name": "tqdm-4.66.2-py3-none-any.whl",
+        "imports": [
+          "tqdm"
+        ],
+        "install_dir": "site",
+        "name": "tqdm",
+        "package_type": "package",
+        "sha256": "bc00a49b27c4e119f1f79ed363b01d6a7d7c50c6360fb2a4e0760568a0642e6d",
+        "unvendored_tests": false,
+        "version": "4.66.2"
+      },
+      "typing-extensions": {
+        "depends": [],
+        "file_name": "typing_extensions-4.11.0-py3-none-any.whl",
+        "imports": [
+          "typing_extensions"
+        ],
+        "install_dir": "site",
+        "name": "typing-extensions",
+        "package_type": "package",
+        "sha256": "c3f00b6653202513b1f7813ad3c466510ceecc599a37d665a31dcfb5ac7049b9",
+        "unvendored_tests": false,
+        "version": "4.11.0"
+      },
+      "ml-dtypes": {
+        "name": "ml-dtypes",
+        "version": "0.5.1",
+        "file_name": "ml_dtypes-0.5.1-cp312-cp312-pyodide_2024_0_wasm32.whl",
+        "sha256": "24096f4c7dc8d4d32194930d930f783c18b1e78cda9d5f27d3a12079727433ca",
+        "imports": [
+          "ml_dtypes"
+        ],
+        "depends": [
+          "numpy"
+        ],
+        "install_dir": "site",
+        "package_type": "package",
+        "unvendored_tests": false
+      },
+      "onnx": {
+        "name": "onnx",
+        "version": "1.19.0",
+        "file_name": "onnx-1.19.0-cp312-cp312-pyodide_2024_0_wasm32.whl",
+        "sha256": "40179868334fdbb2e42f0fb08e3869fb39300dea58bbb09def7d5dd16dff3e11",
+        "imports": [
+          "onnx"
+        ],
+        "depends": [
+          "numpy",
+          "protobuf",
+          "typing-extensions",
+          "ml-dtypes"
+        ],
+        "install_dir": "site",
+        "package_type": "package",
+        "unvendored_tests": false
+      }
+    }
+  },
+  "assets": [
+    {
+      "path": "pyodide/numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+      "bytes": 3061133,
+      "sha256": "ebb61241d962b98b21597d7ce43b67668a6d5bab3acec4fbe958657320d7cd08",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/numpy-2.0.2-cp312-cp312-pyodide_2024_0_wasm32.whl"
+    },
+    {
+      "path": "pyodide/scipy-1.14.1-cp312-cp312-pyodide_2024_0_wasm32.whl",
+      "bytes": 13477451,
+      "sha256": "997c50a61564a8ce6a56ea98a42e7f4427e5eb98475a73233e83df6a184f415c",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/scipy-1.14.1-cp312-cp312-pyodide_2024_0_wasm32.whl"
+    },
+    {
+      "path": "pyodide/openblas-0.3.26.zip",
+      "bytes": 6117592,
+      "sha256": "787ea9a8a5cd160204388d03324b3b7ce5c9aea14b5680cec987f837e76c5198",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/openblas-0.3.26.zip"
+    },
+    {
+      "path": "pyodide/h5py-3.12.1-cp312-cp312-pyodide_2024_0_wasm32.whl",
+      "bytes": 1676589,
+      "sha256": "a56b66beb6c8708b128299e414fc9a1d646b1a432e04822059a7c3fcfaaf9e10",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/h5py-3.12.1-cp312-cp312-pyodide_2024_0_wasm32.whl"
+    },
+    {
+      "path": "pyodide/pkgconfig-1.5.5-py3-none-any.whl",
+      "bytes": 6732,
+      "sha256": "6865593962300e910d9d125972b590bf4bac693f54a7ce9c8602625ae42212f8",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/pkgconfig-1.5.5-py3-none-any.whl"
+    },
+    {
+      "path": "pyodide/protobuf-5.29.2-cp312-cp312-pyodide_2024_0_wasm32.whl",
+      "bytes": 254003,
+      "sha256": "1c061201f6366b1638af5ec0f5f6a382a73d9773c08749650cdf0b4d656815bc",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/protobuf-5.29.2-cp312-cp312-pyodide_2024_0_wasm32.whl"
+    },
+    {
+      "path": "pyodide/networkx-3.4.2-py3-none-any.whl",
+      "bytes": 1028953,
+      "sha256": "fc86ae678fdbab25783d543290dfd2fea8f9cc5161cdb4e61ce2687de57665bb",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/networkx-3.4.2-py3-none-any.whl"
+    },
+    {
+      "path": "pyodide/tqdm-4.66.2-py3-none-any.whl",
+      "bytes": 78296,
+      "sha256": "bc00a49b27c4e119f1f79ed363b01d6a7d7c50c6360fb2a4e0760568a0642e6d",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/tqdm-4.66.2-py3-none-any.whl"
+    },
+    {
+      "path": "pyodide/typing_extensions-4.11.0-py3-none-any.whl",
+      "bytes": 34698,
+      "sha256": "c3f00b6653202513b1f7813ad3c466510ceecc599a37d665a31dcfb5ac7049b9",
+      "package": true,
+      "url": "https://cdn.jsdelivr.net/pyodide/v0.27.7/full/typing_extensions-4.11.0-py3-none-any.whl"
+    },
+    {
+      "path": "pyodide/ml_dtypes-0.5.1-cp312-cp312-pyodide_2024_0_wasm32.whl",
+      "bytes": 123152,
+      "sha256": "24096f4c7dc8d4d32194930d930f783c18b1e78cda9d5f27d3a12079727433ca",
+      "package": true
+    },
+    {
+      "path": "pyodide/onnx-1.19.0-cp312-cp312-pyodide_2024_0_wasm32.whl",
+      "bytes": 16081909,
+      "sha256": "40179868334fdbb2e42f0fb08e3869fb39300dea58bbb09def7d5dd16dff3e11",
+      "package": true
+    },
+    {
+      "path": "pyodide/pyodide.mjs",
+      "bytes": 13931,
+      "sha256": "04c052c815abb0bf2981fa38c2dfa58e3120ee5288c956df2b2a15e301782c5f",
+      "npm": "pyodide/pyodide.mjs"
+    },
+    {
+      "path": "pyodide/pyodide.js",
+      "bytes": 14913,
+      "sha256": "b4cb23a53aba19c221659b9fb40a2f18281d685691dc06647fb0afd0681baf98",
+      "npm": "pyodide/pyodide.js"
+    },
+    {
+      "path": "pyodide/pyodide.asm.js",
+      "bytes": 1255688,
+      "sha256": "6b4c90de5b7172873f04f21884d0e9d2274e305fe32116558fe3e4fbe3618d51",
+      "npm": "pyodide/pyodide.asm.js"
+    },
+    {
+      "path": "pyodide/pyodide.asm.wasm",
+      "bytes": 10105545,
+      "sha256": "a50dd1843f805a0b7c45b61037ee0d7b26dfe85efe0e18ef95a34ad24e401f5f",
+      "npm": "pyodide/pyodide.asm.wasm"
+    },
+    {
+      "path": "pyodide/python_stdlib.zip",
+      "bytes": 2360737,
+      "sha256": "16611534726e5d8ac2bd8f926410b2dcb8d6f49aa24913463533b457a2115c16",
+      "npm": "pyodide/python_stdlib.zip"
+    },
+    {
+      "path": "ort/ort.wasm.min.mjs",
+      "bytes": 49856,
+      "sha256": "69751720f611e37d1ce2fa3c6ebaa80f949014752636c5f8887a63d40feadcc7",
+      "npm": "onnxruntime-web/dist/ort.wasm.min.mjs"
+    },
+    {
+      "path": "ort/ort-wasm-simd-threaded.mjs",
+      "bytes": 20321,
+      "sha256": "90a557d15c02bac4504d95b67f431d8594635ed2a0a62a7f2cd83d090ff91d3e",
+      "npm": "onnxruntime-web/dist/ort-wasm-simd-threaded.mjs"
+    },
+    {
+      "path": "ort/ort-wasm-simd-threaded.wasm",
+      "bytes": 11905541,
+      "sha256": "45eaee27761ad883742a8d4b8fce1538d60ce43b51adf1726fafccc59b8c1a15",
+      "npm": "onnxruntime-web/dist/ort-wasm-simd-threaded.wasm"
+    }
+  ],
+  "sources": {
+    "onnx": {
+      "version": "1.19.0",
+      "url": "https://files.pythonhosted.org/packages/5b/bf/b0a63ee9f3759dcd177b28c6f2cb22f2aecc6d9b3efecaabc298883caa5f/onnx-1.19.0.tar.gz",
+      "sha256": "aa3f70b60f54a29015e41639298ace06adf1dd6b023b9b30f1bca91bb0db9473"
+    },
+    "ml_dtypes": {
+      "version": "0.5.1",
+      "url": "https://files.pythonhosted.org/packages/32/49/6e67c334872d2c114df3020e579f3718c333198f8312290e09ec0216703a/ml_dtypes-0.5.1.tar.gz",
+      "sha256": "ac5b58559bb84a95848ed6984eb8013249f90b6bab62aa5acbad876e256002c9"
+    },
+    "protobuf": {
+      "version": "21.12",
+      "url": "https://github.com/protocolbuffers/protobuf/releases/download/v21.12/protobuf-all-21.12.tar.gz",
+      "sha256": "2c6a36c7b5a55accae063667ef3c55f2642e67476d96d355ff0acb13dbb47f09"
+    }
+  },
+  "buildTools": {
+    "pyodide-build": "0.30.7",
+    "pybind11": "2.13.6",
+    "setuptools": "84.2.1",
+    "host-protobuf": "5.29.2",
+    "protoc": "3.21.12",
+    "emsdkCommit": "708dcbcc9ee23bc7d2dad44fc90db377e38b771c",
+    "sourceDateEpoch": "1735689600",
+    "host-numpy": "2.0.2"
+  }
+}

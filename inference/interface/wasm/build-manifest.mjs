@@ -25,7 +25,8 @@ await collect();
 const manifest={...BUILD_INFO,repositories,toolchain:{go:execFileSync('go',['version'],{encoding:'utf8'}).trim(),node:process.version},defaultProfile:JSON.parse(await readFile(path.join(root,'src/default-profile.json'),'utf8')),files};
 await writeFile(path.join(root,'dist/manifest.json'),JSON.stringify(manifest,null,2)+'\n');
 const sums=[];
-for(const name of[...Object.keys(files).map(name=>'dist/'+name),'dist/manifest.json','README.md','package.json'].sort()) {
+for(const name of[...Object.keys(files).map(name=>'dist/'+name),'dist/manifest.json','README.md','package.json',
+  'build-model-wheels.py','model-resources.lock.json'].sort()) {
   const bytes=await readFile(path.join(root,name));sums.push(createHash('sha256').update(bytes).digest('hex')+'  '+name);
 }
 await writeFile(path.join(root,'SHA256SUMS'),sums.join('\n')+'\n');

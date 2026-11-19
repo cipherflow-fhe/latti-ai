@@ -21,9 +21,17 @@
     "test:browser": "node tests/browser.mjs",
     "test:pregeneration": "bash tests/pregeneration.sh",
     "test:workflow": "bash tests/workflow.sh",
+    "test:model-workflow": "bash tests/model-workflow.sh",
+    "test:model-failures": "node tests/model-failures.mjs",
+    "test:model-numerics": "node tests/model-numerics.mjs",
+    "test:python-workspace": "node tests/python-workspace.mjs",
     "pretest": "node build-info.mjs"
   },
   "devDependencies": {
     "playwright-core": "1.56.1"
+  },
+  "dependencies": {
+    "onnxruntime-web": "1.23.2",
+    "pyodide": "0.27.7"
   }
 }

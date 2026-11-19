@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {readFile, readdir, writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import path from 'node:path';
+import {modelSourceFiles,repositoryRoot} from './model-sources.mjs';
 
 const root = import.meta.dirname;
 const pkg = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
@@ -20,7 +21,11 @@ await include(path.join(root,'src'),['.js','.ts','.json','.py','.md','.html']);
 await include(path.join(root,'core'),['.go']);
 await include(path.join(root,'cmd'),['.go']);
 await include(path.join(root,'../../lattisense/fhe_ops_lib/lattigo'),['.go']);
-for (const file of ['package.json','go.mod','go.sum']) hash.update(await readFile(path.join(root,file)));
+for (const file of ['package.json','package-lock.json','go.mod','go.sum','model-resources.lock.json',
+  'build-model-resources.mjs','build-model-wheels.py','model-sources.mjs','build.sh','build-manifest.mjs']) hash.update(await readFile(path.join(root,file)));
+for(const file of await modelSourceFiles()) {
+  hash.update(file);hash.update('\0');hash.update(await readFile(path.join(repositoryRoot,file)));
+}
 const goroot=execFileSync('go',['env','GOROOT'],{encoding:'utf8'}).trim();
 hash.update(await readFile(path.join(goroot,'lib/wasm/wasm_exec.js')));
 const info={runtimeVersion:pkg.version,protocolVersion:2,build:hash.digest('hex')};
