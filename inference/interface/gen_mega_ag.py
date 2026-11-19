@@ -23,8 +23,10 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -32,7 +34,7 @@ from pathlib import Path
 repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
 sys.path.insert(0, str(repo_root / 'inference' / 'lattisense'))
-from inference.lattisense.frontend.custom_task import *  # noqa: E402
+from frontend import custom_task as frontend_state  # noqa: E402
 
 # from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
 from inference.model_generator.deploy_cmds import gen_custom_task  # noqa: E402
@@ -66,13 +68,44 @@ def main():
     )
     args = parser.parse_args()
 
-    task_dir = os.path.abspath(args.task_dir)
+    generate_low_level(
+        args.task_dir,
+        deployment_mode=args.deployment_mode,
+        output_dir=args.output_dir,
+        parameter_loading_mode=args.parameter_loading_mode,
+    )
+
+
+def generate_low_level(
+    task_dir,
+    *,
+    deployment_mode='client_encrypted_input',
+    output_dir=None,
+    parameter_loading_mode=None,
+    random_seed=None,
+):
+    """Generate a task with the shared frontend/linker and actual key nodes."""
+    previous_random = random.getstate()
+    try:
+        if random_seed is not None:
+            random.seed(random_seed)
+        return _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading_mode)
+    finally:
+        # Also reset failures that occur before process_custom_task's cleanup.
+        frontend_state.g_dag.clear()
+        frontend_state.g_evk_node_dict.clear()
+        frontend_state.g_param = None
+        frontend_state.reset_node_state()
+        random.setstate(previous_random)
+
+
+def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading_mode):
+    if deployment_mode not in ('client_encrypted_input', 'server_provisioned_runner'):
+        raise ValueError(f'Unsupported deployment mode: {deployment_mode!r}')
+    task_dir = os.path.abspath(task_dir)
     ergs_path = os.path.join(task_dir, 'server')
-    output_dir = args.output_dir
     if output_dir is None:
-        output_dir = (
-            os.path.join(task_dir, 'runner') if args.deployment_mode == 'server_provisioned_runner' else ergs_path
-        )
+        output_dir = os.path.join(task_dir, 'runner') if deployment_mode == 'server_provisioned_runner' else ergs_path
     output_dir = os.path.abspath(output_dir)
 
     # Read param_name from ckks_parameter.json to identify the FHE parameter set.
@@ -108,11 +141,13 @@ def main():
     server_config_path = os.path.join(task_dir, 'server', 'task_config.json')
     with open(server_config_path, 'r', encoding='utf-8') as f:
         server_config = json.load(f)
-    parameter_loading_mode = args.parameter_loading_mode or server_config.get('parameter_loading_mode', 'eager')
+    if server_config.get('deployment_mode', 'client_encrypted_input') != deployment_mode:
+        raise ValueError('Deployment mode differs from compiled task')
+    parameter_loading_mode = parameter_loading_mode or server_config.get('parameter_loading_mode', 'eager')
 
     for erg_name, erg_config in server_config['server_task'].items():
         if erg_config['enable_fpga']:
-            if args.deployment_mode == 'server_provisioned_runner':
+            if deployment_mode == 'server_provisioned_runner':
                 os.makedirs(output_dir, exist_ok=True)
                 for filename in ('ckks_parameter.json', 'nn_layers_ct_0.json'):
                     src = os.path.join(ergs_path, filename)
@@ -151,7 +186,7 @@ def main():
             else:
                 gen_custom_task(ergs_path, use_gpu=True, param_name=param_name, style=style, lazy=True)
 
-    if args.deployment_mode == 'client_encrypted_input':
+    if deployment_mode in ('client_encrypted_input', 'server_provisioned_runner'):
         # Export the actual graph's key requirements with the client task.
         # Browser binding can then reject missing keys before encryption.
         with open(os.path.join(output_dir, 'mega_ag.json'), encoding='utf-8') as f:
@@ -163,30 +198,77 @@ def main():
                 continue
             role = datum.get('key_role', 'residual')
             if kind == 'evk':
-                if name not in ('evk_ci_to_std', 'evk_std_to_ci', 'evk_n1_to_n2', 'evk_n2_to_n1',
-                                'evk_dense_to_sparse', 'evk_sparse_to_dense'):
+                if name not in (
+                    'evk_ci_to_std',
+                    'evk_std_to_ci',
+                    'evk_n1_to_n2',
+                    'evk_n2_to_n1',
+                    'evk_dense_to_sparse',
+                    'evk_sparse_to_dense',
+                ):
                     raise ValueError('Unknown evaluation-key role: ' + name)
                 kind = name
             element = datum.get('galois_element', 0)
             key = (role, kind, element)
-            requirement = {'role': role, 'kind': kind, 'levelQ': datum['level'],
-                           'levelP': datum.get('sp_level', -1),
-                           'baseTwoDecomposition': 0, 'compressed': False}
+            requirement = {
+                'role': role,
+                'kind': kind,
+                'levelQ': datum['level'],
+                'levelP': datum.get('sp_level', -1),
+                'baseTwoDecomposition': 0,
+                'compressed': False,
+            }
             if element:
                 requirement['galoisElement'] = str(element)
             if key in requirements:
                 requirement['levelQ'] = max(requirement['levelQ'], requirements[key]['levelQ'])
                 requirement['levelP'] = max(requirement['levelP'], requirements[key]['levelP'])
             requirements[key] = requirement
-        client_path = os.path.join(task_dir, 'client', 'task_config.json')
-        with open(client_path, encoding='utf-8') as f:
-            client_config = json.load(f)
-        client_config['evaluation_keys'] = [requirements[key] for key in sorted(requirements)]
-        with open(client_path, 'w', encoding='utf-8') as f:
-            json.dump(client_config, f, indent=4, ensure_ascii=False)
+        roles = ('client',) if deployment_mode == 'client_encrypted_input' else ('provisioner', 'runner')
+        evaluation_keys = [requirements[key] for key in sorted(requirements)]
+        for role in roles:
+            config_path = os.path.join(task_dir, role, 'task_config.json')
+            with open(config_path, encoding='utf-8') as f:
+                config = json.load(f)
+            config['evaluation_keys'] = evaluation_keys
+            config['task_manifest_required'] = True
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+                f.write('\n')
+        with open(os.path.join(output_dir, 'key_requirements.json'), 'w', encoding='utf-8') as f:
+            json.dump({'deployment_mode': deployment_mode, 'evaluation_keys': evaluation_keys}, f, indent=2)
             f.write('\n')
+        owner = 'client' if deployment_mode == 'client_encrypted_input' else 'provisioner'
+        for filename in ('task_signature.json', 'key_requirements.json'):
+            shutil.copy2(os.path.join(output_dir, filename), os.path.join(task_dir, owner, filename))
+        owner_directory = Path(task_dir) / owner
+        files = {}
+        for name in (
+            'task_config.json',
+            'ckks_parameter.json',
+            'task_signature.json',
+            'key_requirements.json',
+            'input_contract.json',
+        ):
+            path = owner_directory / name
+            if path.exists():
+                data = path.read_bytes()
+                files[name] = {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+        (owner_directory / 'task_manifest.json').write_text(
+            json.dumps(
+                {
+                    'schema': 'latti-ai.browser-client-task.v1',
+                    'deployment_mode': deployment_mode,
+                    'files': files,
+                },
+                indent=2,
+            )
+            + '\n'
+        )
 
     print(f'Done: mega_ag generated for {output_dir}.')
+
+    return Path(output_dir)
 
 
 if __name__ == '__main__':
