@@ -20,27 +20,39 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
     const double scale = param.default_scale() * 0.625;
     std::vector<Bytes> payloads;
     for (double value : {0.25, -0.5, 0.75}) {
-        payloads.push_back(ctx.encrypt(fhe_api::encode(ctx, std::vector<double>(param.max_slots(), value), level, scale)).serialize());
+        payloads.push_back(
+            ctx.encrypt(fhe_api::encode(ctx, std::vector<double>(param.max_slots(), value), level, scale)).serialize());
     }
-    const auto root = fs::temp_directory_path() / ("latti-store-test-" +
-        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto root =
+        fs::temp_directory_path() /
+        ("latti-store-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     fs::create_directories(root);
-    struct Cleanup { fs::path path; ~Cleanup() { fs::remove_all(path); } } cleanup{root};
+    struct Cleanup {
+        fs::path path;
+        ~Cleanup() {
+            fs::remove_all(path);
+        }
+    } cleanup{root};
     std::stringstream container;
     ss_write(container, uint64_t{3});
     json spans = json::array();
     for (const auto& payload : payloads) {
-        spans.push_back({{"offset", static_cast<uint64_t>(container.tellp()) + sizeof(size_t)},
-                         {"length", payload.size()}});
+        spans.push_back(
+            {{"offset", static_cast<uint64_t>(container.tellp()) + sizeof(size_t)}, {"length", payload.size()}});
         ss_write_vector(container, payload);
     }
     write_binary_file(root / "w.bin", ss_to_bytes(container));
-    json argument = {{"id", "w"}, {"file", "w.bin"}, {"level", level},
-                     {"scale", scale}, {"size", {3}}, {"layer_id", "linear"},
+    json argument = {{"id", "w"},
+                     {"file", "w.bin"},
+                     {"level", level},
+                     {"scale", scale},
+                     {"size", {3}},
+                     {"layer_id", "linear"},
                      {"layout", {{"kind", "pcm_row_chunk_v1"}}}};
     for (bool indexed : {false, true}) {
         INFO("indexed=" << indexed);
-        if (indexed) argument["elements"] = spans;
+        if (indexed)
+            argument["elements"] = spans;
         json manifest = {{"arguments", {{"w", argument}}}};
         std::ofstream(root / "manifest.json") << manifest;
         EncryptedParameterStore store(root, payloads[0].size());
@@ -56,17 +68,37 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
         REQUIRE(stats["cache_peak_bytes"].get<uint64_t>() <= payloads[0].size());
         // Eviction releases only the store's reference; in-flight graph branches
         // continue to own the same valid, unmodified ciphertext.
-        std::vector<double> decoded_1; ctx.decode(ctx.decrypt(*first), decoded_1);
+        std::vector<double> decoded_1;
+        ctx.decode(ctx.decrypt(*first), decoded_1);
         REQUIRE(decoded_1[0] == Approx(0.25).margin(1e-5));
         auto reloaded = store.load_element("w", 0);
         REQUIRE(reloaded != first);
         REQUIRE(reloaded->scale() == Approx(scale));
-        std::vector<double> decoded_2; ctx.decode(ctx.decrypt(*second), decoded_2);
+        std::vector<double> decoded_2;
+        ctx.decode(ctx.decrypt(*second), decoded_2);
         REQUIRE(decoded_2[0] == Approx(-0.5).margin(1e-5));
-        std::vector<double> decoded_3; ctx.decode(ctx.decrypt(*reloaded), decoded_3);
+        std::vector<double> decoded_3;
+        ctx.decode(ctx.decrypt(*reloaded), decoded_3);
         REQUIRE(decoded_3[0] == Approx(0.25).margin(1e-5));
         REQUIRE_THROWS_WITH(store.load_element("w", 3), Catch::Contains("out of range"));
         REQUIRE_THROWS_WITH(store.load_element("missing", 0), Catch::Contains("not found"));
+        if (indexed) {
+            for (const char* fault : {"missing", "duplicate", "offset", "length"}) {
+                auto bad = manifest;
+                auto& elements = bad["arguments"]["w"]["elements"];
+                if (std::string(fault) == "missing")
+                    elements.erase(elements.size() - 1);
+                if (std::string(fault) == "duplicate")
+                    elements[1] = elements[0];
+                if (std::string(fault) == "offset")
+                    elements[1]["offset"] = uint64_t{1} << 63;
+                if (std::string(fault) == "length")
+                    elements[1]["length"] = uint64_t{1} << 63;
+                std::ofstream(root / "manifest.json") << bad;
+                REQUIRE_THROWS(EncryptedParameterStore(root));
+            }
+            std::ofstream(root / "manifest.json") << manifest;
+        }
 
         EncryptedParameterStore uncached(root, 0);
         REQUIRE(uncached.load_element("w", 2) != uncached.load_element("w", 2));
@@ -77,7 +109,8 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
         EncryptedParameterStore eager(root);
         auto& all = eager.load_argument("w");
         REQUIRE(all.size() == 3);
-        std::vector<double> decoded_4; ctx.decode(ctx.decrypt(all[2]), decoded_4);
+        std::vector<double> decoded_4;
+        ctx.decode(ctx.decrypt(all[2]), decoded_4);
         REQUIRE(decoded_4[0] == Approx(0.75).margin(1e-5));
 
         manifest["arguments"]["w"]["scale"] = scale * 2;
@@ -97,24 +130,28 @@ TEST_CASE("lazy store evicts safely and supports containers without an index", "
 TEST_CASE("manifest contracts reject geometry, level, shape and scale mismatches", "[parameter_manifest]") {
     const json tiles = {{"tile_grid", {4, 4}}, {"group_size", 16}, {"weight", true}};
     const json graph = {{"layer", {{"fc", {{"dense_seed_tiles", tiles}}}}}};
-    json sig = {{"id", "densew_fc"}, {"size", {1, 3}}, {"level", 4}, {"type", "ct"},
-                {"scale", 1099511627776.0}, {"layout", tiles}};
+    json sig = {{"id", "densew_fc"}, {"size", {1, 3}},           {"level", 4},
+                {"type", "ct"},      {"scale", 1099511627776.0}, {"layout", tiles}};
     const json signature = {{"encrypted_parameters", {sig}}};
     json arg = sig;
     arg["layer_id"] = "fc";
     json manifest = {{"arguments", {{"densew_fc", arg}}}};
     REQUIRE_NOTHROW(validate_parameter_manifest(manifest, signature, graph));
     auto reordered = manifest;
-    reordered["arguments"]["densew_fc"]["layout"] = {
-        {"weight", true}, {"group_size", 16}, {"tile_grid", {4, 4}}};
+    reordered["arguments"]["densew_fc"]["layout"] = {{"weight", true}, {"group_size", 16}, {"tile_grid", {4, 4}}};
     REQUIRE_NOTHROW(validate_parameter_manifest(reordered, signature, graph));
     for (const char* field : {"size", "level", "type", "scale", "layout"}) {
         auto bad = manifest;
-        if (std::string(field) == "size") bad["arguments"]["densew_fc"][field] = {1, 4};
-        if (std::string(field) == "level") bad["arguments"]["densew_fc"][field] = 3;
-        if (std::string(field) == "type") bad["arguments"]["densew_fc"][field] = "pt";
-        if (std::string(field) == "scale") bad["arguments"]["densew_fc"][field] = 1.0;
-        if (std::string(field) == "layout") bad["arguments"]["densew_fc"][field]["group_size"] = 8;
+        if (std::string(field) == "size")
+            bad["arguments"]["densew_fc"][field] = {1, 4};
+        if (std::string(field) == "level")
+            bad["arguments"]["densew_fc"][field] = 3;
+        if (std::string(field) == "type")
+            bad["arguments"]["densew_fc"][field] = "pt";
+        if (std::string(field) == "scale")
+            bad["arguments"]["densew_fc"][field] = 1.0;
+        if (std::string(field) == "layout")
+            bad["arguments"]["densew_fc"][field]["group_size"] = 8;
         REQUIRE_THROWS(validate_parameter_manifest(bad, signature, graph));
     }
     auto bad_graph = graph;

@@ -170,6 +170,47 @@ try {
     return {values,serverValues,progress};
   },parameters);
   assert(result.progress.some(p=>p.phase==='encrypt'));
+  const keyRecovery=await page.evaluate(async parameters=>{
+    const {openBrowserClient}=await import('/dist/index.js');
+    const root=await navigator.storage.getDirectory(),keyDirectory=await root.getDirectoryHandle('cancel-recovery',{create:true});
+    let target='setup',ack,terminalCount=0;
+    const client=await openBrowserClient({keyDirectory,profile:{parameters,bootstrap:false},onProgress:p=>{
+      if(target&&p.chunkBytes>0){target=null;ack=client.cancel(p.requestId);}
+    }});
+    const expectCancel=async action=>{
+      let rejected=false;try{await action();terminalCount++;}catch(error){terminalCount++;rejected=error.code==='CANCELLED';}
+      if(!rejected||!(await ack).accepted)throw new Error('Key cancellation did not settle once');
+    };
+    await expectCancel(()=>client.setup());
+    const keys=await client.setup(),identity=keys.keyIdentity;
+    const committed=await(await keys.manifest.getFile()).text();
+    await expectCancel(()=>{const pending=client.restore();setTimeout(()=>{ack=client.cancel();},1);return pending;});
+    if(await(await keys.manifest.getFile()).text()!==committed)throw new Error('Restore cancellation changed committed keys');
+    if((await client.restore()).keyIdentity!==identity)throw new Error('Restore retry changed identity');
+    const metadata=JSON.parse(committed),secret=keys.fullContext.file,original=new Uint8Array(await(await secret.getFile()).arrayBuffer());
+    const write=async bytes=>{const writer=await secret.createWritable();await writer.write(bytes);await writer.close();};
+    const corrupt=original.slice();corrupt[corrupt.length-1]^=1;await write(corrupt);
+    let rejected=false;try{await client.restore();}catch(error){rejected=/hash mismatch/.test(error.message);}
+    if(!rejected)throw new Error('Corrupt private context accepted');
+    await write(original);await client.restore();
+    const binding=await root.getDirectoryHandle('profile-mismatch-task',{create:true});
+    const put=async(name,text)=>{const file=await binding.getFileHandle(name,{create:true}),writer=await file.createWritable();await writer.write(text);await writer.close();};
+    const feature={dim:0,channel:3,pack_num:8,skip:512,level:1,ckks_parameter_id:'p'};
+    const config={evaluation_keys:[],use_btp:false,pack_style:'ordinary',task_input_param:{input:feature},task_output_param:{output:feature}};
+    await put('task_config.json',JSON.stringify(config));
+    for(const [field,value]of [['ring_type',0],['poly_modulus_degree',8192],['log_default_scale',31]]) {
+      const changed=parameters.replace(new RegExp('"'+field+'"\\s*:\\s*\\d+'),'"'+field+'":'+value);
+      if(changed===parameters)throw new Error('Profile mutation did not apply');
+      await put('ckks_parameter.json',changed);let failed=false;
+      try{await client.bindTask(binding);}catch{failed=true;}if(!failed)throw new Error('Profile mismatch accepted: '+field);
+    }
+    await put('ckks_parameter.json',parameters);
+    config.evaluation_keys=[{role:'residual',kind:'glk',galoisElement:'3',levelQ:1,levelP:0,baseTwoDecomposition:0,compressed:false}];
+    await put('task_config.json',JSON.stringify(config));
+    let missingKey=false;try{await client.bindTask(binding);}catch(error){missingKey=/does not cover evaluation key/.test(error.message);}
+    if(!missingKey)throw new Error('Missing actual evaluation key accepted');
+    await client.close();return {terminalCount,identity,profileId:metadata.profile.profileId,status:'passed'};
+  },parameters);
   await page.evaluate(async parameters=>{
     const {openBrowserClient}=await import('/dist/index.js');
     const keyDirectory=await(await navigator.storage.getDirectory()).getDirectoryHandle('race-keys',{create:true});
@@ -185,6 +226,42 @@ try {
     const {openBrowserClient}=await import('/dist/index.js');
     try {await openBrowserClient({keyDirectory:await navigator.storage.getDirectory()});return false;} catch(error) {return error.message.includes('404');}
   });assert(startupFailure);await page.unroute('**/latti_client.wasm');
+  const workerSource=await readFile(path.join(runtime,'worker.js'),'utf8');
+  await page.route('**/worker.js',route=>route.fulfill({contentType:'text/javascript',body:workerSource.replace("  const now=performance.now();if(!final&&now-lastProgress<100) return;",`
+  if(phase==='setup'&&BigInt(bytes)>1000n)runtimeFailed(new Error('injected WASM runtime exit'));
+  const now=performance.now();if(!final&&now-lastProgress<100) return;`)}));
+  await page.evaluate(async parameters=>{
+    const {openBrowserClient}=await import('/dist/index.js');
+    const keyDirectory=await(await navigator.storage.getDirectory()).getDirectoryHandle('runtime-exit-keys',{create:true});
+    const client=await openBrowserClient({keyDirectory,profile:{parameters,bootstrap:false}});
+    let rejected=false;try{await client.setup();}catch(error){rejected=/injected WASM runtime exit/.test(error.message);}
+    if(!rejected)throw new Error('Runtime exit did not settle setup');await client.close();
+  },parameters);
+  await page.unroute('**/worker.js');
+  await page.evaluate(async parameters=>{
+    const {openBrowserClient}=await import('/dist/index.js');
+    const keyDirectory=await(await navigator.storage.getDirectory()).getDirectoryHandle('runtime-exit-keys');
+    const client=await openBrowserClient({keyDirectory,profile:{parameters,bootstrap:false}});
+    try{await client.setup();await client.restore();}finally{await client.close();}
+  },parameters);
+  await page.route('**/worker.js',route=>route.fulfill({contentType:'text/javascript',body:workerSource+`
+const originalSlice=File.prototype.slice;
+let restoreReadFailed=false;
+File.prototype.slice=function(...args){
+ if(this.name==='full_context.bin'&&!restoreReadFailed){restoreReadFailed=true;throw new DOMException('injected restore read','NotReadableError');}
+ return originalSlice.apply(this,args);
+};`}));
+  await page.evaluate(async parameters=>{
+    const {openBrowserClient}=await import('/dist/index.js');
+    const keyDirectory=await(await navigator.storage.getDirectory()).getDirectoryHandle('keys');
+    const client=await openBrowserClient({keyDirectory,profile:{parameters,bootstrap:false}});
+    try {
+      let rejected=false;try{await client.restore();}catch(error){rejected=/injected restore read/.test(error.message);}
+      if(!rejected)throw new Error('Restore I/O failure not reported');
+      await client.restore();
+    }finally{await client.close();}
+  },parameters);
+  await page.unroute('**/worker.js');
   const buildInfo=await readFile(path.join(runtime,'build-info.js'),'utf8');
   await page.route('**/build-info.js',route=>route.fulfill({contentType:'text/javascript',body:buildInfo.replace(/"build":"[^"]+"/,'"build":"mixed-package"')}));
   assert(await page.evaluate(async()=>{
@@ -231,5 +308,5 @@ FileSystemDirectoryHandle.prototype.removeEntry=function(name,...args){
     },{parameters,fault});
     await page.unroute('**/io.js');
   }
-  console.log(JSON.stringify({artifacts,taskChecks,result},null,2));
+  console.log(JSON.stringify({artifacts,taskChecks,keyRecovery,result},null,2));
 } finally {await browser.close();await new Promise(resolve=>server.close(resolve));}
