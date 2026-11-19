@@ -63,7 +63,9 @@ func (c *Client) matrixWalk(p FeatureParam, output bool, f feature, selected int
 		}
 		return f, mbs * perMB, nil
 	}
-	if width%p.Heads != 0 {
+	// Inputs span complete heads. Outputs may contain only a classifier's
+	// columns; native unpacking uses head_shape to retain the padded layout.
+	if !output && width%p.Heads != 0 {
 		return f, 0, errors.New("matrix width is not divisible by heads")
 	}
 	headDim := width / p.Heads

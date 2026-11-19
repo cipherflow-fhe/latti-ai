@@ -64,6 +64,12 @@ func call(_ js.Value, args []js.Value) (result any) {
 		}
 	case "info":
 		data = map[string]any{"runtimeVersion": runtimeVersion, "protocolVersion": 2, "build": buildID}
+	case "key-identity":
+		if client == nil {
+			err = errors.New("client not initialized")
+		} else {
+			data, err = client.KeyIdentity()
+		}
 	case "start":
 		if stream != nil {
 			return map[string]any{"error": "operation already active"}
@@ -74,6 +80,14 @@ func call(_ js.Value, args []js.Value) (result any) {
 		switch args[1].String() {
 		case "setup":
 			stream, err = client.StartSetup()
+		case "provision":
+			stream, err = client.StartProvision([]byte(args[2].String()))
+		case "sha256":
+			var size uint64
+			size, err = strconv.ParseUint(args[3].String(), 10, 64)
+			if err == nil {
+				stream = core.StartSHA256(size)
+			}
 		case "encrypt", "decrypt", "restore":
 			var size uint64
 			size, err = strconv.ParseUint(args[3].String(), 10, 64)

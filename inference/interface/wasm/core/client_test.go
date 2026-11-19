@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -120,4 +121,55 @@ func mustParams(t *testing.T, params ckks.Parameters) []byte {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// A classifier retains the original head/block layout while exposing fewer
+// columns. Compare decryption with the corresponding full-matrix values.
+func TestMatrixClassifierOutputUsesPaddedHeadLayout(t *testing.T) {
+	param := `{"dim":2,"data_type":"feature_mat","shape":[4,8],"head_shape":[4,4],"matmul_block_size":2,"n_heads":2,"level":1,"ckks_parameter_id":"p"}`
+	client, err := NewClient(configFor(t, param, "ordinary", ""), testParameters(t, "p", 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = client.GenerateKeys(); err != nil {
+		t.Fatal(err)
+	}
+	values := make([]float64, 32)
+	for i := range values {
+		values[i] = float64(i) / 64
+	}
+	raw, err := client.Encrypt("input", values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := client.Task.Outputs["output"]
+	output.Shape = []int{4, 3}
+	output.Transposed = new(bool)
+	for _, firstToken := range []bool{false, true} {
+		output.SelectFirstToken = firstToken
+		client.Task.Outputs["output"] = output
+		stream, err := client.StartDecrypt("output", uint64(len(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded := runFeatureStream(t, stream, raw)
+		count := 12
+		if firstToken {
+			count = 3
+		}
+		if len(decoded) != count*8 {
+			t.Fatalf("decoded %d bytes, want %d", len(decoded), count*8)
+		}
+		for i := 0; i < count; i++ {
+			got := math.Float64frombits(binary.LittleEndian.Uint64(decoded[i*8:]))
+			want := values[(i/3)*8+i%3]
+			if math.Abs(got-want) > 1e-5 {
+				t.Fatalf("value %d: %g != %g", i, got, want)
+			}
+		}
+	}
+	client.Task.Inputs["input"] = output
+	if _, err = client.Encrypt("input", values[:12]); err == nil {
+		t.Fatal("partial input head accepted")
+	}
 }

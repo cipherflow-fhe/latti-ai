@@ -28,6 +28,10 @@ type FeatureParam struct {
 	Transposed       *bool           `json:"is_transposed"`
 }
 type Task struct {
+	DeploymentMode string                  `json:"deployment_mode"`
+	InputMode      string                  `json:"input_mode"`
+	ParameterMode  string                  `json:"parameter_mode"`
+	Decryptor      string                  `json:"decryptor"`
 	EvaluationKeys []KeyRequirement        `json:"evaluation_keys"`
 	UseBTP         bool                    `json:"use_btp"`
 	PackStyle      string                  `json:"pack_style"`
@@ -82,6 +86,9 @@ func NewClient(task, params []byte) (*Client, error) {
 	}
 	c := new(Client)
 	if err := json.Unmarshal(task, &c.Task); err != nil {
+		return nil, err
+	}
+	if err := c.Task.validateMode(); err != nil {
 		return nil, err
 	}
 	if len(c.Task.Inputs) == 0 || len(c.Task.Outputs) == 0 {
@@ -140,6 +147,26 @@ func NewClient(task, params []byte) (*Client, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+func (task Task) validateMode() error {
+	switch task.DeploymentMode {
+	case "": // Existing client-encrypted task directories remain readable.
+		if task.InputMode != "" || task.ParameterMode != "" || task.Decryptor != "" {
+			return errors.New("deployment mode is required with mode metadata")
+		}
+	case "client_encrypted_input":
+		if task.InputMode != "client_ciphertext" || task.ParameterMode != "plaintext_lazy" || task.Decryptor != "client" {
+			return errors.New("inconsistent client_encrypted_input mode metadata")
+		}
+	case "server_provisioned_runner":
+		if task.InputMode != "plaintext" || task.ParameterMode != "encrypted_offline" || task.Decryptor != "provisioner" {
+			return errors.New("inconsistent server_provisioned_runner mode metadata")
+		}
+	default:
+		return errors.New("unknown deployment mode")
+	}
+	return nil
 }
 
 // BindTask validates a task without replacing the generated or restored keys.

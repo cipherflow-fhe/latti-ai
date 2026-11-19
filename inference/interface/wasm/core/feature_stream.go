@@ -91,6 +91,9 @@ func readFeatureHeader(r io.Reader, matrix bool, params ckks.Parameters) (f feat
 // StartEncrypt consumes staged little-endian float64 values, retaining one
 // plaintext/ciphertext and one bounded OPFS source block at a time.
 func (c *Client) StartEncrypt(name string, bytes uint64) (*OutputStream, error) {
+	if c.Task.DeploymentMode == "server_provisioned_runner" {
+		return nil, errors.New("parameter mode requires parameter encoding, not Feature encryption")
+	}
 	p, ok := c.Task.Inputs[name]
 	if !ok || c.encryptor == nil {
 		return nil, errors.New("bound input and client keys required")

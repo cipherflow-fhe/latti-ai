@@ -4,10 +4,22 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/cipherflow-fhe/lattigo/clientcontext"
 )
+
+func (c *Client) KeyIdentity() (string, error) {
+	if c.Keys.PK == nil {
+		return "", errors.New("setup or restore required for key identity")
+	}
+	hash := sha256.New()
+	if _, err := c.Keys.PK.WriteTo(hash); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
 
 // Profile reports exact moduli as decimal strings. Identity includes the
 // native parameters and the shared bootstrapping configuration/key plan.
