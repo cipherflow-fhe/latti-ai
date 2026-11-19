@@ -212,9 +212,10 @@ def execute(model, feeds, model_kind, requested=None):
     return standard_reference.execute(model, feeds, requested)
 
 
-def observe(model, feeds, names, model_kind):
+def observation_model(model, names, model_kind):
+    """Prepare named observations without selecting an inference runtime."""
     if model_kind in ('bert', 'vit'):
-        return execute(model, feeds, model_kind, names)
+        return model
     probe = standard_reference.expand_polynomials(copy.deepcopy(model))
     probe = onnx.shape_inference.infer_shapes(probe)
     values = {v.name: v for v in [*probe.graph.input, *probe.graph.value_info, *probe.graph.output]}
@@ -224,7 +225,11 @@ def observe(model, feeds, names, model_kind):
             if name not in values:
                 raise ValueError(f'No inferred ValueInfo for observed tensor {name}')
             probe.graph.output.append(values[name])
-    return standard_reference.execute(probe, feeds, names)
+    return probe
+
+
+def observe(model, feeds, names, model_kind):
+    return execute(observation_model(model, names, model_kind), feeds, model_kind, names)
 
 
 def compare_arrays(expected, actual, context):
@@ -320,9 +325,15 @@ def write_tensor(root, tensor_id, array):
     }
 
 
-def prepare(
+def prepare_steps(
     onnx_path, output_dir, entries, ratio_text='0.9', model_kind='standard', boundary_hints=None, base_dir=None
 ):
+    """Yield inference requests; publish only after all returned arrays validate.
+
+    Native callers drive this generator synchronously. The browser awaits ORT
+    Web for each request and sends its named NumPy arrays back into the same
+    extraction, security, and equivalence checks.
+    """
     started = time.perf_counter()
     onnx_path, output_dir = Path(onnx_path).resolve(), Path(output_dir).resolve()
     onnx.checker.check_model(str(onnx_path))
@@ -335,8 +346,9 @@ def prepare(
         raise ValueError(f'Refusing to overwrite published manifest: {manifest_path}')
     if any(output_dir.iterdir()):
         raise ValueError(f'Split output directory must be empty: {output_dir}')
-    # Specialize only the execution/extraction copy; original node identities stay unchanged.
-    prepared = copy.deepcopy(model)
+    # This private graph was loaded from a read-only source file. Specializing
+    # it in place avoids a second complete initializer copy; node IDs stay fixed.
+    prepared = model
     dynamic_inputs = [value for value in prepared.graph.input if value.name in feeds]
     del prepared.graph.input[:]
     prepared.graph.input.extend(dynamic_inputs)
@@ -348,17 +360,29 @@ def prepare(
         )
     original_outputs = [value.name for value in model.graph.output]
     names = list(dict.fromkeys(original_outputs + plan['prefix_outputs']))
-    reference = observe(prepared, feeds, names, model_kind)
+    reference = yield {
+        'stage': 'observe',
+        'model': observation_model(prepared, names, model_kind),
+        'feeds': feeds,
+        'outputs': names,
+        'model_kind': model_kind,
+    }
     original = {name: reference[name] for name in original_outputs}
     if model_kind in ('bert', 'vit'):
         # The established transformer reference reads CSV decimals as float64,
         # independently of the source ONNX input dtype used for split feeds.
-        original, _ = transformer_reference.evaluate(
-            onnx_path,
+        original_feeds = transformer_reference._load_inputs(
+            model,
             {name: entry['csv'] for name, entry in entries.items()},
             input_shapes={name: entry['shape'] for name, entry in entries.items()},
-            model_kind=model_kind,
         )
+        original = yield {
+            'stage': 'original-reference',
+            'model': model,
+            'feeds': original_feeds,
+            'outputs': original_outputs,
+            'model_kind': model_kind,
+        }
     np.savez(output_dir / 'original_full_onnx_outputs.npz', **original)
     observed = {name: reference[name] for name in plan['prefix_outputs']}
     # Custom ops often lack shape inference: supply measured interfaces, not guessed rank.
@@ -422,7 +446,13 @@ def prepare(
                 raise ValueError(f'Extracted {label} includes a node from the other partition')
             indices.append(index)
         actual_counts[label] = len(indices)
-    prefix_result = execute(prefix_model, {name: feeds[name] for name in plan['prefix_inputs']}, model_kind)
+    prefix_result = yield {
+        'stage': 'prefix',
+        'model': prefix_model,
+        'feeds': {name: feeds[name] for name in plan['prefix_inputs']},
+        'outputs': None,
+        'model_kind': model_kind,
+    }
     prefix_errors = compare_arrays(observed, prefix_result, 'prefix equivalence')
     suffix_feeds = {}
     inputs = []
@@ -450,7 +480,13 @@ def prepare(
             output_dir / entry['csv'], delimiter=',', dtype=entry['dtype'], ndmin=1
         ).reshape(entry['shape'])
         inputs.append(entry)
-    suffix_result = execute(suffix_model, suffix_feeds, model_kind)
+    suffix_result = yield {
+        'stage': 'suffix',
+        'model': suffix_model,
+        'feeds': suffix_feeds,
+        'outputs': None,
+        'model_kind': model_kind,
+    }
     merged = {
         route['name']: (
             suffix_result[route['name']]
@@ -463,9 +499,13 @@ def prepare(
     }
     suffix_errors = compare_arrays(original, merged, 'full split equivalence')
     np.savez(output_dir / 'prefix_outputs.npz', **prefix_result)
-    for route in plan['routes']:
+    output_files = []
+    for index, route in enumerate(plan['routes']):
         value = original[route['name']]
         route.update(shape=list(value.shape), dtype=str(value.dtype))
+        reference = write_tensor(output_dir, f'output_{index:03d}', value)
+        route['plaintext'] = reference
+        output_files.append({'path': reference['csv'], 'sha256': reference['sha256']})
     manifest = {
         'schema_version': 'onnx_split_v1',
         'source': {'path': str(onnx_path), 'sha256': sha256(onnx_path), 'files': model_files(onnx_path)},
@@ -501,7 +541,8 @@ def prepare(
         'output_routes': plan['routes'],
         'reference': 'original_full_onnx_outputs.npz',
         'prefix_outputs': 'prefix_outputs.npz',
-        'artifacts': [
+        'artifacts': output_files
+        + [
             {'path': name, 'sha256': sha256(output_dir / name)}
             for name in ('original_full_onnx_outputs.npz', 'prefix_outputs.npz')
         ],
@@ -514,6 +555,21 @@ def prepare(
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
     return manifest
+
+
+def prepare(*args, executor=None, **kwargs):
+    """Native entry point, with an injectable logical-array executor."""
+    executor = executor or execute
+    steps = prepare_steps(*args, **kwargs)
+    result = None
+    try:
+        while True:
+            request = steps.send(result)
+            result = executor(request['model'], request['feeds'], request['model_kind'], request['outputs'])
+    except StopIteration as finished:
+        return finished.value
+    finally:
+        steps.close()
 
 
 def main():

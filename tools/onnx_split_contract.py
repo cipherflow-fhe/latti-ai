@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 
 import numpy as np
 
@@ -18,17 +19,63 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def load_manifest(path, suffix_path=None, mat_pack_style=None):
+def resolve_reference(path, path_map=None):
+    """Map stable browser virtual roots without rewriting hashed JSON text."""
+    path = Path(path)
+    for virtual, physical in sorted((path_map or {}).items(), key=lambda item: len(str(item[0])), reverse=True):
+        try:
+            return Path(physical) / path.relative_to(virtual)
+        except ValueError:
+            continue
+    return path
+
+
+def validate_csv(path, dtype, expected_count):
+    """Validate finite numeric CSV with a bounded buffer, preserving dtype checks."""
+    dtype, count, partial, last_comma = np.dtype(dtype), 0, '', False
+    with Path(path).open(encoding='utf-8') as stream:
+        while True:
+            chunk = stream.read(64 * 1024)
+            if not chunk:
+                fields, partial = [(partial, '')], ''
+            else:
+                pieces = re.split('([,\r\n])', partial + chunk)
+                partial = pieces.pop()
+                fields = zip(pieces[::2], pieces[1::2])
+            if len(partial) > 1024:
+                raise ValueError('CSV numeric token exceeds buffer bound')
+            for field, delimiter in fields:
+                if not field.strip():
+                    if delimiter == ',' or last_comma:
+                        raise ValueError(f'Empty CSV value: {path}')
+                    continue
+                last_comma = delimiter == ','
+                try:
+                    value = dtype.type(field)
+                except (ValueError, OverflowError) as exc:
+                    raise ValueError(f'Invalid CSV value: {path}') from exc
+                if not np.isfinite(value):
+                    raise ValueError(f'Nonfinite boundary CSV: {path}')
+                count += 1
+                if count > expected_count:
+                    raise ValueError(f'Boundary CSV shape/count mismatch: {path}')
+            if not chunk:
+                break
+    if count != expected_count:
+        raise ValueError(f'Boundary CSV shape/count mismatch: {path}')
+
+
+def load_manifest(path, suffix_path=None, mat_pack_style=None, path_map=None):
     path = Path(path).resolve()
     manifest = json.loads(path.read_text())
     if manifest['schema_version'] != 'onnx_split_v1':
         raise ValueError('Unknown split manifest schema')
     for group in [manifest['source']['files'], *manifest['model_files'].values()]:
         for entry in group:
-            if file_hash(entry['path']) != entry['sha256']:
+            if file_hash(resolve_reference(entry['path'], path_map)) != entry['sha256']:
                 raise ValueError(f'Model/external data hash mismatch: {entry["path"]}')
     for entry in [*manifest['original_inputs'], *manifest.get('artifacts', [])]:
-        artifact = path.parent / entry.get('csv', entry.get('path', ''))
+        artifact = resolve_reference(path.parent / entry.get('csv', entry.get('path', '')), path_map)
         if file_hash(artifact) != entry['sha256']:
             raise ValueError(f'Input/reference artifact hash mismatch: {artifact}')
     suffix = (path.parent / manifest['models']['suffix']).resolve()
@@ -40,11 +87,9 @@ def load_manifest(path, suffix_path=None, mat_pack_style=None):
         csv = path.parent / entry['csv']
         if file_hash(csv) != entry['sha256']:
             raise ValueError(f'Boundary CSV hash mismatch: {csv}')
-        values = np.loadtxt(csv, delimiter=',', dtype=entry['dtype'], ndmin=1)
-        if values.size != entry['element_count'] or values.size != int(np.prod(entry['shape'])):
+        if entry['element_count'] != math.prod(entry['shape']):
             raise ValueError(f'Boundary CSV shape/count mismatch: {entry["name"]}')
-        if not np.isfinite(values).all():
-            raise ValueError(f'Nonfinite boundary CSV: {entry["name"]}')
+        validate_csv(csv, entry['dtype'], entry['element_count'])
         if np.dtype(entry['dtype']).kind != 'f':
             raise ValueError(f'Nonfloating boundary requires a supported control-tensor adapter: {entry["name"]}')
         representation = entry['representation']
@@ -140,19 +185,21 @@ def validate_signature_size(signature, packing, contract):
         raise ValueError(f'Graph signature count differs from packing: {signature["id"]}: {size} vs {count}')
 
 
-def validate_contract(task_dir):
+def validate_contract(task_dir, path_map=None):
     """Gate invocation before CSV encoding, using existing Client/Runner config."""
     task_dir = Path(task_dir)
     contract = json.loads((task_dir / 'input_contract.json').read_text())
-    manifest = Path(contract['manifest'])
+    manifest = resolve_reference(contract['manifest'], path_map)
     if file_hash(manifest) != contract['manifest_sha256']:
         raise ValueError('Split manifest changed after compilation')
-    load_manifest(manifest)
+    load_manifest(manifest, path_map=path_map)
     parameter_mode = contract['deployment_mode'] == 'server_provisioned_runner'
     roles = ('runner', 'provisioner') if parameter_mode else ('client', 'server')
     for role_name in roles:
         role = task_dir / role_name
         config = json.loads((role / 'task_config.json').read_text())
+        if config.get('deployment_mode', 'client_encrypted_input') != contract['deployment_mode']:
+            raise ValueError(f'Deployment mode differs from contract: {role_name}')
         if json.loads((role / 'input_contract.json').read_text()) != contract:
             raise ValueError(f'Role input contract differs: {role_name}')
         if file_hash(role / 'ckks_parameter.json') != contract['ckks_sha256']:

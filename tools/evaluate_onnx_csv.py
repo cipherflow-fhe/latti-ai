@@ -19,8 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def expand_polynomials(model):
-    from training.nn_tools.eval_fn_hat_for_aespa import get_hermite_coeffs_for_module
-    from training.nn_tools.export import _resolve_activation_cls
+    from training.nn_tools.eval_fn_hat_for_aespa import get_hermite_coeffs_for_activation
 
     names = {name for node in model.graph.node for name in (*node.input, *node.output)}
     prefix = '__plaintext_poly_'
@@ -63,7 +62,7 @@ def expand_polynomials(model):
         activation = attrs.get('activation', b'relu' if node.op_type != 'PolyActRNPoly' else b'gelu')
         if isinstance(activation, bytes):
             activation = activation.decode()
-        coeff = get_hermite_coeffs_for_module(_resolve_activation_cls(activation), int(attrs['degree']))
+        coeff = get_hermite_coeffs_for_activation(activation, int(attrs['degree']))
         x = node.input[0]
         if node.op_type.startswith('RangeNormPoly'):
             scale = op(
