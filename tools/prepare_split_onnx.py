@@ -326,7 +326,16 @@ def write_tensor(root, tensor_id, array):
 
 
 def prepare_steps(
-    onnx_path, output_dir, entries, ratio_text='0.9', model_kind='standard', boundary_hints=None, base_dir=None
+    onnx_path,
+    output_dir,
+    entries,
+    ratio_text='0.9',
+    model_kind='standard',
+    boundary_hints=None,
+    base_dir=None,
+    working_model=None,
+    checkpoints=None,
+    source_files=None,
 ):
     """Yield inference requests; publish only after all returned arrays validate.
 
@@ -336,15 +345,16 @@ def prepare_steps(
     """
     started = time.perf_counter()
     onnx_path, output_dir = Path(onnx_path).resolve(), Path(output_dir).resolve()
-    onnx.checker.check_model(str(onnx_path))
-    model = onnx.load(onnx_path)
+    graph_path = Path(working_model or onnx_path)
+    onnx.checker.check_model(str(graph_path))
+    model = onnx.load(graph_path, load_external_data=working_model is None)
     plan = split_graph(model, ratio_text)
     feeds, entries = load_inputs(model, entries, Path(base_dir or '.').resolve(), model_kind)
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = output_dir / 'split_manifest.json'
     if manifest_path.exists():
         raise ValueError(f'Refusing to overwrite published manifest: {manifest_path}')
-    if any(output_dir.iterdir()):
+    if checkpoints is None and any(output_dir.iterdir()):
         raise ValueError(f'Split output directory must be empty: {output_dir}')
     # This private graph was loaded from a read-only source file. Specializing
     # it in place avoids a second complete initializer copy; node IDs stay fixed.
@@ -366,6 +376,7 @@ def prepare_steps(
         'feeds': feeds,
         'outputs': names,
         'model_kind': model_kind,
+        'base_dir': str(graph_path.parent),
     }
     original = {name: reference[name] for name in original_outputs}
     if model_kind in ('bert', 'vit'):
@@ -382,6 +393,7 @@ def prepare_steps(
             'feeds': original_feeds,
             'outputs': original_outputs,
             'model_kind': model_kind,
+            'base_dir': str(graph_path.parent),
         }
     np.savez(output_dir / 'original_full_onnx_outputs.npz', **original)
     observed = {name: reference[name] for name in plan['prefix_outputs']}
@@ -400,37 +412,58 @@ def prepare_steps(
     metadata['latti.model_kind'] = model_kind
     helper.set_model_props(prepared, metadata)
     prefix_path, suffix_path = output_dir / 'prefix.onnx', output_dir / 'suffix.onnx'
-    with tempfile.TemporaryDirectory(dir=output_dir) as temp:
-        prepared_path = Path(temp) / 'prepared.onnx'
-        onnx.save_model(
-            prepared,
-            prepared_path,
-            save_as_external_data=True,
-            all_tensors_to_one_file=True,
-            location='prepared.data',
-            size_threshold=1024,
-        )
-        for path, inputs, outputs in [
-            (prefix_path, plan['prefix_inputs'], plan['prefix_outputs']),
-            (suffix_path, plan['suffix_inputs'], plan['suffix_outputs']),
-        ]:
-            if not inputs or not outputs:
-                raise ValueError('A split side has no execution interface')
-            onnx.utils.extract_model(
-                str(prepared_path), str(path), inputs, outputs, infer_shapes=model_kind == 'standard'
-            )
-            extracted = onnx.load(path)
-            helper.set_model_props(extracted, metadata)
+    if working_model is not None:
+        from onnx_external_weights import save_references
+
+        if checkpoints is None or not (Path(checkpoints) / 'extract.json').exists():
+            shape_model = onnx.shape_inference.infer_shapes(prepared) if model_kind == 'standard' else prepared
+            extractor = onnx.utils.Extractor(shape_model)
+            for path, names_in, names_out in [
+                (prefix_path, plan['prefix_inputs'], plan['prefix_outputs']),
+                (suffix_path, plan['suffix_inputs'], plan['suffix_outputs']),
+            ]:
+                if not names_in or not names_out:
+                    raise ValueError('A split side has no execution interface')
+                extracted = extractor.extract_model(names_in, names_out)
+                helper.set_model_props(extracted, metadata)
+                save_references(extracted, graph_path.parent, path)
+                onnx.checker.check_model(str(path))
+                del extracted
+        yield {'stage': 'extract', 'checkpoint': True}
+        prefix_model = onnx.load(prefix_path, load_external_data=False)
+        suffix_model = onnx.load(suffix_path, load_external_data=False)
+    else:
+        with tempfile.TemporaryDirectory(dir=output_dir) as temp:
+            prepared_path = Path(temp) / 'prepared.onnx'
             onnx.save_model(
-                extracted,
-                path,
+                prepared,
+                prepared_path,
                 save_as_external_data=True,
                 all_tensors_to_one_file=True,
-                location=path.name + '.data',
+                location='prepared.data',
                 size_threshold=1024,
             )
-            onnx.checker.check_model(str(path))
-    prefix_model, suffix_model = onnx.load(prefix_path), onnx.load(suffix_path)
+            for path, inputs, outputs in [
+                (prefix_path, plan['prefix_inputs'], plan['prefix_outputs']),
+                (suffix_path, plan['suffix_inputs'], plan['suffix_outputs']),
+            ]:
+                if not inputs or not outputs:
+                    raise ValueError('A split side has no execution interface')
+                onnx.utils.extract_model(
+                    str(prepared_path), str(path), inputs, outputs, infer_shapes=model_kind == 'standard'
+                )
+                extracted = onnx.load(path)
+                helper.set_model_props(extracted, metadata)
+                onnx.save_model(
+                    extracted,
+                    path,
+                    save_as_external_data=True,
+                    all_tensors_to_one_file=True,
+                    location=path.name + '.data',
+                    size_threshold=1024,
+                )
+                onnx.checker.check_model(str(path))
+        prefix_model, suffix_model = onnx.load(prefix_path), onnx.load(suffix_path)
     suffix_initializers = {value.name for value in suffix_model.graph.initializer}
     suffix_dynamic_inputs = [value.name for value in suffix_model.graph.input if value.name not in suffix_initializers]
     if suffix_dynamic_inputs != plan['crossing']:
@@ -448,6 +481,7 @@ def prepare_steps(
         actual_counts[label] = len(indices)
     prefix_result = yield {
         'stage': 'prefix',
+        'base_dir': str(prefix_path.parent),
         'model': prefix_model,
         'feeds': {name: feeds[name] for name in plan['prefix_inputs']},
         'outputs': None,
@@ -482,6 +516,7 @@ def prepare_steps(
         inputs.append(entry)
     suffix_result = yield {
         'stage': 'suffix',
+        'base_dir': str(suffix_path.parent),
         'model': suffix_model,
         'feeds': suffix_feeds,
         'outputs': None,
@@ -508,7 +543,11 @@ def prepare_steps(
         output_files.append({'path': reference['csv'], 'sha256': reference['sha256']})
     manifest = {
         'schema_version': 'onnx_split_v1',
-        'source': {'path': str(onnx_path), 'sha256': sha256(onnx_path), 'files': model_files(onnx_path)},
+        'source': {
+            'path': str(onnx_path),
+            'sha256': sha256(onnx_path),
+            'files': source_files if source_files is not None else model_files(onnx_path),
+        },
         'split': {
             'ratio_text': ratio_text,
             'count_policy': 'top_level_non_constant_v1',

@@ -124,15 +124,23 @@ class _Builder:
         return onnx.shape_inference.infer_shapes(model), self.feeds
 
 
-def lower_node(node, feeds, initializers, model_kind):
+def lower_node(node, feeds, initializers, model_kind, weight_loader=None):
     """Return a small standard ONNX graph and named float64 feeds."""
     builder = _Builder(feeds)
     builder.used.update(node.output)
     attrs = {attribute.name: helper.get_attribute_value(attribute) for attribute in node.attribute}
-    args = [
-        builder.constant(numpy_helper.to_array(initializers[name])) if name in initializers else name
-        for name in node.input
-    ]
+    args = []
+    for name in node.input:
+        if name not in initializers:
+            args.append(name)
+        elif weight_loader is None:
+            args.append(builder.constant(numpy_helper.to_array(initializers[name])))
+        else:
+            # Large weights travel as one tensor feed, not as repeated protobuf
+            # raw_data, external-data and session-initializer copies.
+            key = builder.name()
+            builder.feeds[key] = np.asarray(weight_loader(initializers[name]), dtype=np.float64)
+            args.append(key)
     bert = model_kind == 'bert'
     op = node.op_type
     if op == 'Constant':
