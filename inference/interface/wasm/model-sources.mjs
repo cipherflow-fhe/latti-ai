@@ -11,6 +11,7 @@ export async function modelSourceFiles() {
     'training/config/BERT_pcm_config.json',
     'training/config/ViT_pcm_config.json',
     'tools/prepare_split_onnx.py',
+    'tools/onnx_external_weights.py',
     'tools/onnx_split_contract.py',
     'tools/evaluate_onnx_csv.py',
     'tools/evaluate_transformer_onnx_csv.py',

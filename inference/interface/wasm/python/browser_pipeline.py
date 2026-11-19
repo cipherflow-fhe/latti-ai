@@ -19,6 +19,7 @@ from prepare_split_onnx import prepare_steps
 from prepare_split_onnx import load_inputs
 from prepare_split_onnx import observation_model
 from evaluate_onnx_csv import expand_polynomials
+from onnx_external_weights import externalize, model_metadata, tensor_array
 
 
 def relative_path(root, name):
@@ -38,7 +39,7 @@ def relative_path(root, name):
 def validate_sources(source_directory, model_path, inputs_manifest):
     """Check references before ONNX checker/load can follow external data."""
     model_path = relative_path(source_directory, model_path)
-    model = onnx.load(model_path, load_external_data=False)
+    model = model_metadata(model_path)
     if len(model.graph.node) > 256:
         raise ValueError('Model exceeds the 256-node browser profile')
     initializer_sizes = [
@@ -81,7 +82,7 @@ def write_ort_request(request, directory):
     """Persist the FFI boundary; tensors retain dtype, shape and C order."""
     directory = Path(directory)
     directory.mkdir()
-    model = expand_polynomials(copy.deepcopy(request['model']))
+    model = request['model'] if request.get('standardized') else expand_polynomials(copy.deepcopy(request['model']))
     capacity = copy.deepcopy(model)
     del capacity.graph.value_info[:]
     capacity = onnx.shape_inference.infer_shapes(capacity)
@@ -173,7 +174,7 @@ async def prepare_split(source_directory, model_path, inputs_manifest, output_di
 
 
 async def run_prefix(split_manifest, inputs_directory, inputs_manifest, output_directory, ort_run):
-    from onnx_split_contract import file_hash, load_manifest
+    from onnx_split_contract import load_manifest
 
     original = load_manifest(split_manifest)
     inputs = validate_inputs(inputs_directory, inputs_manifest)
@@ -187,25 +188,8 @@ async def run_prefix(split_manifest, inputs_directory, inputs_manifest, output_d
         base_dir=inputs_directory,
     )
     result = json.loads(await _drive_split(steps, Path(output_directory).parent, ort_run))
-    if result['split'] != original['split']:
-        raise ValueError('New sample changed the compiled node partition')
-    route_fields = ('name', 'route', 'shape', 'dtype')
-    if [[route[key] for key in route_fields] for route in result['output_routes']] != [
-        [route[key] for key in route_fields] for route in original['output_routes']
-    ]:
-        raise ValueError('New sample changed the compiled output routes')
-    fields = ('name', 'shape', 'dtype', 'axes', 'representation', 'producer', 'consumers')
-    for old, new in zip(original['inputs'], result['inputs'], strict=True):
-        if any(old.get(key) != new.get(key) for key in fields):
-            raise ValueError('New sample changed a crossing interface')
-    binding = {
-        'split_manifest': str(split_manifest),
-        'split_manifest_sha256': file_hash(split_manifest),
-        'sample_manifest': 'split_manifest.json',
-        'sample_manifest_sha256': file_hash(Path(output_directory) / 'split_manifest.json'),
-    }
-    (Path(output_directory) / 'run_manifest.json').write_text(json.dumps(binding, indent=2) + '\n')
-    return json.dumps(binding)
+    _bind_run(split_manifest, output_directory, result)
+    return (Path(output_directory) / 'run_manifest.json').read_text()
 
 
 async def _drive_split(steps, temporary_parent, ort_run):
@@ -249,11 +233,13 @@ async def run_transformer_request(request, directory, ort_run):
     remaining = Counter(name for node in model.graph.node for name in node.input)
     for index, node in enumerate(model.graph.node):
         feeds = {name: values[name] for name in node.input if name not in initializers}
-        lowered, feeds = lower_node(node, feeds, initializers, request['model_kind'])
+        loader = (lambda tensor: tensor_array(tensor, request['base_dir'])) if request.get('base_dir') else None
+        lowered, feeds = lower_node(node, feeds, initializers, request['model_kind'], weight_loader=loader)
         current = directory / str(index)
         metadata = write_ort_request(
             {
                 'model': lowered,
+                'standardized': True,
                 'feeds': feeds,
                 'outputs': list(node.output),
                 'stage': request['stage'] + '-node-' + str(index),
@@ -262,6 +248,7 @@ async def run_transformer_request(request, directory, ort_run):
         )
         values.update(read_ort_result(current, await ort_run(json.dumps(metadata))))
         shutil.rmtree(current)
+        del lowered, feeds, metadata
         for name in node.input:
             remaining[name] -= 1
             if remaining[name] == 0 and name not in requested:
@@ -272,7 +259,8 @@ async def run_transformer_request(request, directory, ort_run):
 async def diagnose_ort(source_directory, model_path, inputs_manifest, output_directory, ort_run):
     """Independent per-node observations for the acceptance oracle's kernel audit."""
     source, manifest = validate_sources(source_directory, model_path, inputs_manifest)
-    model = onnx.load(source)
+    working = externalize(source, Path(output_directory).parent / 'working/model.onnx')
+    model = onnx.load(working, load_external_data=False)
     model_kind = manifest.get('model_kind', 'standard')
     feeds, _ = load_inputs(model, manifest['inputs'], Path(source_directory), model_kind)
     for value in model.graph.input:
@@ -296,6 +284,7 @@ async def diagnose_ort(source_directory, model_path, inputs_manifest, output_dir
         'feeds': feeds,
         'outputs': names,
         'stage': 'diagnostic',
+        'base_dir': str(working.parent),
         'model_kind': model_kind,
     }
     output = Path(output_directory)
@@ -304,8 +293,7 @@ async def diagnose_ort(source_directory, model_path, inputs_manifest, output_dir
         if model_kind in ('bert', 'vit'):
             result = await run_transformer_request(request, Path(temporary) / 'ort', ort_run)
         else:
-            metadata = write_ort_request(request, Path(temporary) / 'ort')
-            result = read_ort_result(metadata['directory'], await ort_run(json.dumps(metadata)))
+            result = await run_standard_request(request, Path(temporary) / 'ort', ort_run)
     np.savez(output / 'observations.npz', **result)
     (output / 'nodes.json').write_text(
         json.dumps(
@@ -403,3 +391,249 @@ def generate_low_level(task_directory, deployment_mode):
             random_seed=0,
         )
     )
+
+
+def source_references(source_directory, model_path, inputs_manifest):
+    """Inspect references without retaining source weights in Python globals."""
+    source = relative_path(source_directory, model_path)
+    model = model_metadata(source)
+    references = []
+    for tensor in onnx.external_data_helper._get_all_tensors(model):
+        if tensor.data_location == onnx.TensorProto.EXTERNAL:
+            location = onnx.external_data_helper.ExternalDataInfo(tensor).location
+            external = relative_path(source.parent, location)
+            references.append(str(external.relative_to(source_directory)))
+    manifest = json.loads(Path(inputs_manifest).read_text())
+    for entry in manifest['inputs']:
+        relative_path(source_directory, entry['csv'])
+        references.append(entry['csv'])
+    return json.dumps(list(dict.fromkeys(references)))
+
+
+def begin_split(
+    state_directory,
+    source_directory,
+    model_path,
+    inputs_manifest,
+    output_directory,
+    ratio,
+):
+    """Persist private job state before the owner replaces this Worker."""
+    from onnx_split_contract import file_hash
+
+    source, manifest = validate_sources(source_directory, model_path, inputs_manifest)
+    state_directory = Path(state_directory)
+    if not isinstance(ratio, str):
+        raise ValueError('Split ratio must be a decimal string')
+    working_model = Path(output_directory) / 'weights.onnx'
+    if not working_model.exists():
+        externalize(source, working_model)
+    model = model_metadata(source)
+    paths = [source]
+    for tensor in onnx.external_data_helper._get_all_tensors(model):
+        if tensor.data_location == onnx.TensorProto.EXTERNAL:
+            name = onnx.external_data_helper.ExternalDataInfo(tensor).location
+            path = relative_path(source.parent, name)
+            if path not in paths:
+                paths.append(path)
+    state = dict(
+        source_directory=str(source_directory),
+        model_path=str(source),
+        inputs_manifest=str(inputs_manifest),
+        output_directory=str(output_directory),
+        ratio=ratio,
+        working_model=str(working_model),
+        source_files=[dict(path=str(path), sha256=file_hash(path)) for path in paths],
+        original_split=None,
+        model_kind=manifest.get('model_kind', 'standard'),
+    )
+    (state_directory / 'step-state.json').write_text(json.dumps(state))
+
+
+async def split_step(state_directory, ort_run):
+    """Replay metadata and persisted observations; execute exactly one missing phase."""
+    import shutil
+
+    state_directory = Path(state_directory)
+    state = json.loads((state_directory / 'step-state.json').read_text())
+    manifest = validate_inputs(state['source_directory'], state['inputs_manifest'])
+    checkpoint = state_directory / 'checkpoints'
+    checkpoint.mkdir(exist_ok=True)
+    steps = prepare_steps(
+        state['model_path'],
+        state['output_directory'],
+        manifest['inputs'],
+        state['ratio'],
+        model_kind=state['model_kind'],
+        boundary_hints=manifest.get('boundary_hints'),
+        base_dir=state['source_directory'],
+        working_model=state['working_model'],
+        checkpoints=checkpoint,
+        source_files=state['source_files'],
+    )
+    result = None
+    try:
+        while True:
+            try:
+                request = steps.send(result)
+            except StopIteration as completed:
+                if state['original_split']:
+                    _bind_run(state['original_split'], state['output_directory'], completed.value)
+                shutil.rmtree(checkpoint)
+                (state_directory / 'step-state.json').unlink()
+                return json.dumps({'complete': True})
+            stage = request['stage']
+            marker = checkpoint / (stage + '.json')
+            if marker.exists():
+                if request.get('checkpoint'):
+                    result = None
+                else:
+                    with np.load(checkpoint / (stage + '.npz'), allow_pickle=False) as archive:
+                        result = {name: archive[name] for name in archive.files}
+                continue
+            if not request.get('checkpoint'):
+                directory = checkpoint / 'ort'
+                result = await (
+                    run_transformer_request(request, directory, ort_run)
+                    if request['model_kind'] in ('bert', 'vit')
+                    else run_standard_request(request, directory, ort_run)
+                )
+                np.savez(checkpoint / (stage + '.npz'), **result)
+                shutil.rmtree(directory)
+            marker.write_text(json.dumps({'phase': stage}))
+            return json.dumps({'complete': False, 'phase': stage})
+    finally:
+        steps.close()
+
+
+def _bind_run(split_manifest, output_directory, result):
+    from onnx_split_contract import file_hash, load_manifest
+
+    original = load_manifest(split_manifest)
+    if result['split'] != original['split']:
+        raise ValueError('New sample changed the compiled node partition')
+    fields = ('name', 'route', 'shape', 'dtype')
+    if [[r[k] for k in fields] for r in result['output_routes']] != [
+        [r[k] for k in fields] for r in original['output_routes']
+    ]:
+        raise ValueError('New sample changed the compiled output routes')
+    fields = ('name', 'shape', 'dtype', 'axes', 'representation', 'producer', 'consumers')
+    for old, new in zip(original['inputs'], result['inputs'], strict=True):
+        if any(old.get(key) != new.get(key) for key in fields):
+            raise ValueError('New sample changed a crossing interface')
+    binding = dict(
+        split_manifest=str(split_manifest),
+        split_manifest_sha256=file_hash(split_manifest),
+        sample_manifest='split_manifest.json',
+        sample_manifest_sha256=file_hash(Path(output_directory) / 'split_manifest.json'),
+    )
+    (Path(output_directory) / 'run_manifest.json').write_text(json.dumps(binding, indent=2) + '\n')
+
+
+async def run_standard_request(request, directory, ort_run):
+    """Execute standard nodes with only their live inputs and required weights."""
+    from collections import Counter
+    import shutil
+    from onnx import helper, numpy_helper
+
+    directory = Path(directory)
+    directory.mkdir(parents=True)
+    model = expand_polynomials(copy.deepcopy(request['model']))
+    initializers = {tensor.name: tensor for tensor in model.graph.initializer}
+    requested = request['outputs'] or [value.name for value in model.graph.output]
+    values = dict(request['feeds'])
+    remaining = Counter(name for node in model.graph.node for name in node.input)
+    for index, node in enumerate(model.graph.node):
+        if node.op_type == 'Constant':
+            attrs = {attr.name: helper.get_attribute_value(attr) for attr in node.attribute}
+            if 'value' in attrs:
+                values[node.output[0]] = tensor_array(attrs['value'], request['base_dir'])
+                continue
+        feeds, embedded, array = {}, [], None
+        controls = {
+            'Reshape': (1,),
+            'Resize': (1, 2, 3),
+            'Expand': (1,),
+            'Tile': (1,),
+            'Slice': (1, 2, 3, 4),
+            'Pad': (1, 2, 3),
+            'Split': (1,),
+            'Squeeze': (1,),
+            'Unsqueeze': (1,),
+            'ReduceSum': (1,),
+            'ReduceMean': (1,),
+        }
+        control_names = {node.input[i] for i in controls.get(node.op_type, ()) if i < len(node.input)}
+        for name in dict.fromkeys(node.input):
+            if not name:
+                continue
+            if name in initializers:
+                array = tensor_array(initializers[name], request['base_dir'])
+                if array.nbytes <= 1024:
+                    embedded.append(numpy_helper.from_array(array, name))
+                else:
+                    feeds[name] = array
+            else:
+                array = values[name]
+                if array.nbytes <= 1024 and (array.dtype.kind in 'iub' or name in control_names):
+                    embedded.append(numpy_helper.from_array(array, name))
+                else:
+                    feeds[name] = array
+        inputs = [
+            helper.make_tensor_value_info(name, helper.np_dtype_to_tensor_dtype(value.dtype), list(value.shape))
+            for name, value in feeds.items()
+        ]
+        graph = helper.make_graph(
+            [node],
+            'on-demand-node',
+            inputs,
+            [helper.make_empty_tensor_value_info(name) for name in node.output],
+            embedded,
+        )
+        lowered = helper.make_model(graph, opset_imports=model.opset_import, ir_version=model.ir_version)
+        lowered = onnx.shape_inference.infer_shapes(lowered)
+        current = directory / str(index)
+        metadata = write_ort_request(
+            dict(
+                model=lowered,
+                feeds=feeds,
+                outputs=list(node.output),
+                standardized=True,
+                stage=request['stage'] + '-node-' + str(index),
+            ),
+            current,
+        )
+        values.update(read_ort_result(current, await ort_run(json.dumps(metadata))))
+        shutil.rmtree(current)
+        del feeds, embedded, inputs, graph, lowered, metadata, array
+        for name in node.input:
+            remaining[name] -= 1
+            if remaining[name] == 0 and name not in requested:
+                values.pop(name, None)
+    for name in requested:
+        if name not in values and name in initializers:
+            values[name] = tensor_array(initializers[name], request['base_dir'])
+    return {name: values[name] for name in requested}
+
+
+def begin_run(split_manifest, inputs_directory, inputs_manifest, output_directory, state_directory):
+    from onnx_split_contract import load_manifest
+
+    original = load_manifest(split_manifest)
+    validate_inputs(inputs_directory, inputs_manifest)
+    source = Path(original['source']['path'])
+    state_directory = Path(state_directory)
+    state_directory.mkdir(parents=True, exist_ok=True)
+    working = externalize(source, Path(output_directory) / 'weights.onnx')
+    state = dict(
+        source_directory=str(inputs_directory),
+        model_path=str(source),
+        inputs_manifest=str(inputs_manifest),
+        output_directory=str(output_directory),
+        ratio=original['split']['ratio_text'],
+        working_model=str(working),
+        source_files=original['source']['files'],
+        original_split=str(split_manifest),
+        model_kind=original.get('model_kind', 'standard'),
+    )
+    (state_directory / 'step-state.json').write_text(json.dumps(state))

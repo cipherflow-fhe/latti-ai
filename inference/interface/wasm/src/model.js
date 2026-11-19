@@ -10,15 +10,26 @@ export async function openBrowserModelTools({onProgress,timeoutMs=1800000}={}) {
   const start=()=>{
     if(worker)return;
     worker=new Worker(new URL('./model-worker.js',import.meta.url),{type:'module'});
-    worker.onmessage=({data})=>{
+    const currentWorker=worker;
+    worker.onmessage=async({data})=>{
+      if(worker!==currentWorker)return;
       if(!active||data.requestId!==active.requestId||data.jobId!==active.jobId)return;
       if(data.protocolVersion!==BUILD_INFO.protocolVersion)return;
       if(data.type==='progress'){try{onProgress?.(data);}catch{}return;}
-      if(data.type==='result')finish(null,data.result);
+      if(data.type==='checkpoint') {
+        if(active.finishing)return;
+        const operation=active;
+        worker.terminate();worker=undefined;
+        operation.stageMetrics.push(data.result.metrics);
+        try {
+          start();worker.postMessage({...operation.message,resume:true,stageMetrics:operation.stageMetrics});
+        }catch(error){finish(error);}
+      }
+      else if(data.type==='result')finish(null,data.result);
       else if(data.type==='error')finish(Object.assign(new Error(data.message),{code:data.code,phase:data.phase}));
     };
-    worker.onerror=()=>finish(new Error('Model Worker failed'));
-    worker.onmessageerror=()=>finish(new Error('Model Worker message failed'));
+    worker.onerror=()=>{if(worker===currentWorker)finish(new Error('Model Worker failed'));};
+    worker.onmessageerror=()=>{if(worker===currentWorker)finish(new Error('Model Worker message failed'));};
   };
   const cleanup=async operation=>{
     if(!operation.output)return;
@@ -51,11 +62,11 @@ export async function openBrowserModelTools({onProgress,timeoutMs=1800000}={}) {
       const output=await parent.getDirectoryHandle(jobId,{create:true});
       if(closed){await parent.removeEntry(jobId,{recursive:true});throw new Error('Model tools are closed');}
       return new Promise((resolve,reject)=>{
-        active={requestId,jobId,parent,output,resolve,reject};
+        const message={...options,type,requestId,jobId,outputDirectory:output,protocolVersion:BUILD_INFO.protocolVersion};
+        active={requestId,jobId,parent,output,resolve,reject,message,stageMetrics:[]};
         active.timer=setTimeout(()=>finish(Object.assign(new Error('Model operation timed out'),{code:'TIMEOUT'})),timeoutMs);
         try {
-          start();worker.postMessage({...options,type,requestId,jobId,outputDirectory:output,
-            protocolVersion:BUILD_INFO.protocolVersion});
+          start();worker.postMessage(message);
         }catch(error){finish(error);}
       });
     };

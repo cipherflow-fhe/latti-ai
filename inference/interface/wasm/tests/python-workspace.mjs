@@ -41,7 +41,16 @@ json.dumps({'status':'passed','checks':['seek','sparse','truncate','append','unl
 `;
 try {
  const worker=await readFile(new URL('../dist/model-worker.js',import.meta.url),'utf8');
- await harness.page.route('**/model-worker.js',route=>route.fulfill({contentType:'text/javascript',body:worker.replace("  if(message.type==='parameterValue')",`  if(message.type==='prepareSplit')return JSON.parse(await python.runPythonAsync(${JSON.stringify(code)}));\n  if(message.type==='parameterValue')`)}));
+ await harness.page.route('**/model-worker.js',route=>route.fulfill({contentType:'text/javascript',body:worker.replace("  if(message.type==='parameterValue')",`  if(message.type==='prepareSplit') {
+ if(!message.resume) {
+  const result=JSON.parse(await python.runPythonAsync(${JSON.stringify(code)}));
+  python.FS.writeFile('/latti/jobs/check/result.json',JSON.stringify(result));
+  return checkpoint('workspace-test');
+ }
+ await python.runPythonAsync("import h5py, onnx\\nwith h5py.File('/latti/jobs/check/weights.h5','r') as h: assert h['matrix'][3,0] == 768\\nassert Path('/latti/jobs/check/data').read_bytes() == b'new'\\nassert onnx.load('/latti/jobs/check/model.onnx').graph.name == 'test'");
+ const result=JSON.parse(python.FS.readFile('/latti/jobs/check/result.json',{encoding:'utf8'}));
+ result.checks.push('worker-restart','restored-h5','restored-onnx');return result;
+ }\n  if(message.type==='parameterValue')`)}));
  const result=await harness.page.evaluate(async()=>{
   const {openBrowserModelTools}=await import('/dist/index.js');const tools=await openBrowserModelTools();
   try {

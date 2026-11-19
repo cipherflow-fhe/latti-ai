@@ -11,8 +11,19 @@ const NativeMemory=WebAssembly.Memory;
 WebAssembly.Memory=new Proxy(NativeMemory,{construct(target,args){
   const memory=Reflect.construct(target,args);memories.push({runtime,memory});return memory;
 }});
-const runtimeMetrics=()=>({pyodideMemoryBytes:python?python._module.HEAPU8.buffer.byteLength:0,
+const currentMetrics=()=>({pyodideMemoryBytes:python?python._module.HEAPU8.buffer.byteLength:0,
   ortMemoryBytes:Math.max(0,...memories.filter(entry=>entry.runtime==='ort').map(entry=>entry.memory.buffer.byteLength)),largestTensorBytes});
+const runtimeMetrics=()=>{
+  const current=currentMetrics(),stages=operation.stageMetrics||[];
+  return {...Object.fromEntries(Object.keys(current).map(key=>[key,Math.max(current[key],...stages.map(s=>s[key]||0))])),
+    stages,workerStages:stages.length+1};
+};
+const checkpoint=async stage=>{
+  progress('checkpoint-'+stage);
+  const metrics={phase:stage,...currentMetrics()};
+  await workspace.checkpoint();
+  return {resume:true,metrics};
+};
 const digest=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
 const relative=name=>{
   if(typeof name!=='string'||!name||/[\\\0:]/.test(name)||name.split('/').some(part=>!part||part==='.'||part==='..'))
@@ -97,23 +108,8 @@ async function importSource(source,root) {
   await copySource(model);
   if((await fileOf(source.inputsManifest)).size>1024*1024)throw new Error('Input manifest exceeds metadata budget');
   await copyIn(source.inputsManifest,directory+'/inputs.json');
-  const references=JSON.parse(await withGlobals({source_root:directory,model_name:model},`
-import json, onnx
-from pathlib import Path
-model_path = pipeline.relative_path(source_root, model_name)
-model = onnx.load(model_path, load_external_data=False)
-references = []
-for tensor in onnx.external_data_helper._get_all_tensors(model):
-    if tensor.data_location == onnx.TensorProto.EXTERNAL:
-        location = onnx.external_data_helper.ExternalDataInfo(tensor).location
-        external = pipeline.relative_path(model_path.parent, location)
-        references.append(str(external.relative_to(source_root)))
-manifest = json.loads(Path(source_root, 'inputs.json').read_text())
-for entry in manifest['inputs']:
-    pipeline.relative_path(source_root, entry['csv'])
-    references.append(entry['csv'])
-json.dumps(list(dict.fromkeys(references)))
-`));
+  const references=JSON.parse(await withGlobals({source_root:directory,model_name:model,input_manifest:directory+'/inputs.json'},
+    'pipeline.source_references(source_root, model_name, input_manifest)'));
   for(const name of references)await copySource(name);
   return {directory,model:directory+'/'+model,manifest:directory+'/inputs.json',modelPath:model};
 }
@@ -145,28 +141,36 @@ async function ortRun(text) {
   const request=JSON.parse(text);progress('ort-'+request.stage);
   largestTensorBytes=Math.max(largestTensorBytes,request.maximumTensorBytes||0);
   runtime='ort';
-  let session;
+  let session,result;const feeds={};
   try {
-    const model=python.FS.readFile(request.model),feeds={};
+    let model=python.FS.readFile(request.model);
     const externalData=request.externalData.map(entry=>({path:entry.path,data:python.FS.readFile(entry.file)}));
-    session=await ort.InferenceSession.create(model,{executionProviders:['wasm'],externalData});
+    // Extended MatmulTransposeFusion emits a float-only FusedMatMul kernel in
+    // this ORT Web build. Keep standard float64 kernels for transformer feeds.
+    session=await ort.InferenceSession.create(model,{executionProviders:['wasm'],externalData,
+      ...(request.feeds.some(feed=>feed.dtype==='float64')?{graphOptimizationLevel:'basic'}:{})});
+    // Sessions own parsed models. Drop JS initialization buffers before feeds.
+    model=null;externalData.length=0;
     for(const entry of request.feeds) {
       const type=types[entry.dtype];if(!type)throw new Error(`Unsupported ORT input dtype: ${entry.dtype}`);
       const bytes=python.FS.readFile(entry.file);
       largestTensorBytes=Math.max(largestTensorBytes,bytes.byteLength);
       feeds[entry.name]=new ort.Tensor(type[0],new type[1](bytes.buffer,bytes.byteOffset,bytes.byteLength/type[1].BYTES_PER_ELEMENT),entry.shape);
     }
-    const result=await session.run(feeds,request.outputs||undefined),outputs=[];
+    result=await session.run(feeds,request.outputs||undefined);const outputs=[];
     for(const [index,[name,tensor]]of Object.entries(result).entries()) {
       const file=`output-${index}.bin`;
       largestTensorBytes=Math.max(largestTensorBytes,tensor.data.byteLength);
       python.FS.writeFile(request.directory+'/'+file,new Uint8Array(tensor.data.buffer,tensor.data.byteOffset,tensor.data.byteLength));
       outputs.push({name,file,shape:tensor.dims,dtype:tensor.type==='bool'?'bool':tensor.type});
-      tensor.dispose();
+      tensor.dispose();delete result[name];
     }
-    for(const tensor of Object.values(feeds))tensor.dispose();
     return JSON.stringify({outputs});
-  }finally{await session?.release();runtime='pyodide';}
+  }finally{
+    for(const tensor of Object.values(result||{}))tensor.dispose();
+    for(const tensor of Object.values(feeds))tensor.dispose();
+    await session?.release();runtime='pyodide';
+  }
 }
 async function exportArtifact(root,kind,entry,extra={}) {
   progress('persist');
@@ -232,11 +236,19 @@ json.dumps(graph)
     return exportArtifact(root,'diagnostic','diagnostic/observations.npz',{sourceModel:source.model.slice(root.length+1)});
   }
   if(message.type==='prepareSplit') {
-    progress('source');const source=await importSource(message.source,root);
-    await withGlobals({source_root:source.directory,model_name:source.modelPath,input_manifest:source.manifest,
-      split_output:root+'/split',ratio:message.ratio,ort_run:ortRun},
-    'await pipeline.prepare_split(source_root, model_name, input_manifest, split_output, ratio, ort_run)');
-    return exportArtifact(root,'split','split/split_manifest.json',{sourceModel:source.model.slice(root.length+1)});
+    if(!message.resume) {
+      progress('source');const source=await importSource(message.source,root);
+      progress('externalize');
+      await withGlobals({state_root:root,source_root:source.directory,model_name:source.modelPath,input_manifest:source.manifest,
+        split_output:root+'/split',ratio:message.ratio},
+        'pipeline.begin_split(state_root, source_root, model_name, input_manifest, split_output, ratio)');
+      return checkpoint('externalize');
+    }
+    progress('split-resume');
+    const step=JSON.parse(await withGlobals({state_root:root,ort_run:ortRun},'await pipeline.split_step(state_root, ort_run)'));
+    if(!step.complete)return checkpoint(step.phase);
+    const sourceModel=JSON.parse(python.FS.readFile(root+'/split/split_manifest.json',{encoding:'utf8'})).source.path.slice(root.length+1);
+    return exportArtifact(root,'split','split/split_manifest.json',{sourceModel});
   }
   if(message.type==='compileHighLevel') {
     progress('source');let source,splitManifest;
@@ -265,22 +277,30 @@ json.dumps(graph)
     return exportArtifact(root,'task',task.slice(root.length+1),{deploymentMode:message.deploymentMode});
   }
   if(message.type==='runPrefix') {
-    const manifest=await importArtifact(message.split,'split');root=manifest.virtualRoot;
-    const sample=root+'/samples/'+message.jobId,inputDirectory=sample+'/inputs';
-    if((await fileOf(message.inputsManifest)).size>1024*1024)throw new Error('Run input manifest exceeds metadata budget');
-    await copyIn(message.inputsManifest,inputDirectory+'/inputs.json');
-    const inputs=JSON.parse(python.FS.readFile(inputDirectory+'/inputs.json',{encoding:'utf8'}));
-    let sampleBytes=0;
-    for(const entry of inputs.inputs) {
-      const file=await(await fileAt(message.split.directory,entry.csv)).getFile();sampleBytes+=file.size;
-      if(sampleBytes>128*1024*1024)throw new Error('Sample files exceed the validated 128 MiB browser profile');
-      await copyIn(file,inputDirectory+'/'+relative(entry.csv));
+    let info;
+    if(!message.resume) {
+      const manifest=await importArtifact(message.split,'split');root=manifest.virtualRoot;
+      const sample=root+'/samples/'+message.jobId,inputDirectory=sample+'/inputs';
+      if((await fileOf(message.inputsManifest)).size>1024*1024)throw new Error('Run input manifest exceeds metadata budget');
+      await copyIn(message.inputsManifest,inputDirectory+'/inputs.json');
+      const inputs=JSON.parse(python.FS.readFile(inputDirectory+'/inputs.json',{encoding:'utf8'}));
+      let sampleBytes=0;
+      for(const entry of inputs.inputs) {
+        const file=await(await fileAt(message.split.directory,entry.csv)).getFile();sampleBytes+=file.size;
+        if(sampleBytes>128*1024*1024)throw new Error('Sample files exceed the validated 128 MiB browser profile');
+        await copyIn(file,inputDirectory+'/'+relative(entry.csv));
+      }
+      await withGlobals({split_manifest:root+'/'+manifest.entry,inputs_directory:inputDirectory,
+        inputs_manifest:inputDirectory+'/inputs.json',run_output:sample+'/run',state_root:sample},
+        'pipeline.begin_run(split_manifest, inputs_directory, inputs_manifest, run_output, state_root)');
+      info={root,sample,entry:manifest.entry};
+      python.FS.writeFile('/latti/jobs/'+message.jobId+'/run-state.json',JSON.stringify(info));
+      return checkpoint('externalize');
     }
-    await withGlobals({split_manifest:root+'/'+manifest.entry,inputs_directory:inputDirectory,
-      inputs_manifest:inputDirectory+'/inputs.json',run_output:sample+'/run',ort_run:ortRun},
-      'await pipeline.run_prefix(split_manifest, inputs_directory, inputs_manifest, run_output, ort_run)');
-    return exportArtifact(root,'run',sample.slice(root.length+1)+'/run/run_manifest.json',
-      {splitManifest:manifest.entry});
+    info=JSON.parse(python.FS.readFile('/latti/jobs/'+message.jobId+'/run-state.json',{encoding:'utf8'}));root=info.root;
+    const step=JSON.parse(await withGlobals({state_root:info.sample,ort_run:ortRun},'await pipeline.split_step(state_root, ort_run)'));
+    if(!step.complete)return checkpoint(step.phase);
+    return exportArtifact(root,'run',info.sample.slice(root.length+1)+'/run/run_manifest.json',{splitManifest:info.entry});
   }
   if(message.type==='generateLowLevel') {
     const manifest=await importArtifact(message.task,'task');
@@ -293,7 +313,7 @@ json.dumps(graph)
 }
 self.onmessage=async({data})=>{
   if(data.protocolVersion!==BUILD_INFO.protocolVersion)return;
-  try {const result=await execute(data);postMessage({type:'result',protocolVersion:BUILD_INFO.protocolVersion,requestId:data.requestId,jobId:data.jobId,result},result instanceof Uint8Array?[result.buffer]:[]);}
+  try {const result=await execute(data);postMessage({type:result?.resume?'checkpoint':'result',protocolVersion:BUILD_INFO.protocolVersion,requestId:data.requestId,jobId:data.jobId,result},result instanceof Uint8Array?[result.buffer]:[]);}
   catch(error){postMessage({type:'error',protocolVersion:BUILD_INFO.protocolVersion,requestId:data.requestId,jobId:data.jobId,
     message:error.message||String(error),code:'MODEL_FAILED',phase});}
 };

@@ -20,9 +20,11 @@ root.mkdir(parents=True, exist_ok=True)
 if not root.is_relative_to('/tmp'):
     raise ValueError('Numerical evidence must be under /tmp')
 (root / 'oracle/nn_tools').mkdir(parents=True, exist_ok=True)
+# Pin the original torch exporter; HEAD now includes its NumPy replacement.
+oracle_revision = '9317eca5f74c535654c2f422a9d26d87e14eb152'
 for name in ['eval_fn_hat_for_aespa', 'export', 'feature_mat_h5']:
     (root / 'oracle/nn_tools' / f'{name}.py').write_bytes(
-        subprocess.check_output(['git', 'show', 'HEAD:training/nn_tools/' + name + '.py'], cwd=repo)
+        subprocess.check_output(['git', 'show', oracle_revision + ':training/nn_tools/' + name + '.py'], cwd=repo)
     )
 
 
@@ -39,7 +41,14 @@ def oracle(name):
 old_numeric = oracle('eval_fn_hat_for_aespa')
 old_export = oracle('export')
 old_feature = oracle('feature_mat_h5')
-report = {'provenance': 'isolated original torch path oracle', 'atol': 1e-12, 'rtol': 1e-12, 'activation': {}, 'h5': {}}
+report = {
+    'provenance': 'isolated original torch path oracle',
+    'revision': oracle_revision,
+    'atol': 1e-12,
+    'rtol': 1e-12,
+    'activation': {},
+    'h5': {},
+}
 for name, cls in [('relu', torch.nn.ReLU), ('relu6', torch.nn.ReLU6), ('silu', torch.nn.SiLU), ('gelu', torch.nn.GELU)]:
     x = np.linspace(-20, 20, 4001, dtype=np.float64)
     y = cls()(torch.from_numpy(x)).numpy()

@@ -21,7 +21,10 @@ export async function cleanupPythonWorkspace(jobId) {
 
 export async function mountPythonWorkspace(FS,jobId) {
   const root=await(await(await navigator.storage.getDirectory()).getDirectoryHandle(CACHE,{create:true})).getDirectoryHandle(jobId,{create:true});
-  const handles=[],free=[];
+  let saved;
+  try{saved=JSON.parse(await(await(await root.getFileHandle('workspace.json')).getFile()).text());}
+  catch(error){if(error.name!=='NotFoundError')throw error;}
+  const handles=[],free=[];let restoring;
   try {
     for(let index=0;index<256;index++) {
       const file=await root.getFileHandle('file-'+index,{create:true}),handle=await file.createSyncAccessHandle();
@@ -37,7 +40,12 @@ export async function mountPythonWorkspace(FS,jobId) {
     if(FS.isFile(mode)&&!free.length)fail(33); // EMFILE: bounded workspace file count.
     const node=memfs.createNode(parent,name,mode,device);node.node_ops=nodeOps;
     if(FS.isFile(mode)) {
-      node.disk=free.pop();node.disk.truncate(0);node.openCount=0;node.stream_ops=streamOps;
+      if(restoring){
+        node.disk=handles[restoring.slot];
+        const index=free.indexOf(node.disk);if(index<0)throw new Error('Invalid workspace checkpoint slot');
+        free.splice(index,1);
+      }else{node.disk=free.pop();node.disk.truncate(0);}
+      node.openCount=0;node.stream_ops=streamOps;
     }
     return node;
   };
@@ -87,6 +95,27 @@ export async function mountPythonWorkspace(FS,jobId) {
     mmap(){fail(43);},
   };
   FS.mkdirTree('/latti/jobs');
-  FS.mount({mount:()=>create(null,'/',0o40777,0)}, {}, '/latti/jobs');
-  return {flush(){for(const handle of handles)handle.flush();}};
+  const mounted=FS.mount({mount:()=>create(null,'/',0o40777,0)}, {}, '/latti/jobs');
+  for(const entry of saved||[]) {
+    if(typeof entry.path!=='string'||entry.path.split('/').some(p=>!p||p==='.'||p==='..'))throw new Error('Invalid workspace checkpoint path');
+    if(FS.isFile(entry.mode)&&(!Number.isSafeInteger(entry.slot)||entry.slot<0||entry.slot>=handles.length))throw new Error('Invalid workspace checkpoint slot');
+    restoring=entry;try{FS.mknod('/latti/jobs/'+entry.path,entry.mode,0);}finally{restoring=undefined;}
+  }
+  const flush=()=>{for(const handle of handles)handle.flush();};
+  return {flush,async checkpoint(){
+    const entries=[];
+    const walk=(node,path='')=>{
+      for(const [name,child]of Object.entries(node.contents||{})) {
+        const relative=path?path+'/'+name:name;
+        if(child.disk&&child.openCount)throw new Error('Open Python file at stage checkpoint');
+        entries.push({path:relative,mode:child.mode,...(child.disk?{slot:handles.indexOf(child.disk)}:{})});
+        if(FS.isDir(child.mode))walk(child,relative);
+      }
+    };
+    walk(mounted);flush();
+    const file=await root.getFileHandle('workspace.json',{create:true}),writer=await file.createWritable();
+    try{await writer.write(JSON.stringify(entries));await writer.close();}
+    catch(error){await writer.abort().catch(()=>{});throw error;}
+    for(const handle of handles)handle.close();
+  }};
 }

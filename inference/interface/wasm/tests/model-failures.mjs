@@ -98,6 +98,23 @@ FileSystemFileHandle.prototype.createSyncAccessHandle=async function(...args){
   await assertEmpty(outputDirectory);await assertEmpty(await opfs.getDirectoryHandle('latti-python-workspaces'));return error.code;
  }));
  await harness.page.unroute('**/model-worker.js');
+ await check('cancel after persisted graph extraction',()=>harness.page.evaluate(async()=>{
+  let cancellation;const outputDirectory=await opfs.getDirectoryHandle('split-stage-cancel-output',{create:true});
+  const tools=await api.openBrowserModelTools({onProgress:p=>{if(p.phase==='checkpoint-extract')cancellation=tools.cancel(p.requestId);}});let error;
+  try{await tools.prepareSplit({source,ratio:'0.5',outputDirectory});}catch(value){error=value;}finally{await tools.close();}
+  if(error?.code!=='CANCELLED'||!(await cancellation)?.accepted)throw new Error('Stage cancellation failed: '+error?.message);
+  await assertEmpty(outputDirectory);return error.code;
+ }));
+ await harness.page.route('**/model-worker.js',route=>route.fulfill({contentType:'text/javascript',body:modelWorker+`
+const originalCheckpointWritable=FileSystemFileHandle.prototype.createWritable;
+FileSystemFileHandle.prototype.createWritable=function(...args){if(this.name==='workspace.json')throw new DOMException('injected checkpoint quota','QuotaExceededError');return originalCheckpointWritable.apply(this,args);};`}));
+ await check('checkpoint quota cleans persisted state',()=>harness.page.evaluate(async()=>{
+  const outputDirectory=await opfs.getDirectoryHandle('checkpoint-fault-output',{create:true}),tools=await api.openBrowserModelTools();let error;
+  try{await tools.prepareSplit({source,ratio:'0.5',outputDirectory});}catch(value){error=value;}finally{await tools.close();}
+  if(!/injected checkpoint quota/.test(error?.message))throw new Error('Checkpoint error missing: '+error?.message);
+  await assertEmpty(outputDirectory);return error.message;
+ }));
+ await harness.page.unroute('**/model-worker.js');
  await check('provision cancellation and retry',()=>harness.page.evaluate(async()=>{
   const directory=await opfs.getDirectoryHandle('parameter-task',{create:true}),manifest=await(await fetch('/fixtures/parameter-task/artifact-manifest.json')).json();
   for(const name of Object.keys(manifest.files))await write(directory,name,await(await fetch('/fixtures/parameter-task/'+name)).arrayBuffer());
