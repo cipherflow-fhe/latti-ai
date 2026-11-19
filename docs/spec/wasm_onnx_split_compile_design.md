@@ -1,6 +1,6 @@
 # Chromium WASM ONNX 切分、编译与两种加密模式设计规范
 
-日期为 2026-11-19，状态为已实施并通过六任务、两模式共十二单元验收。新增接口、文件和测试入口均为实施要求。依据见 [浏览器客户端](taa_v6_browser_client_design.md)、[ONNX split](onnx_split_plaintext_prefix_fhe_suffix_design.md)、[流式密钥](taa_v6_streaming_context_design.md) 和 [参数 Runner 流程](../zh/server_provisioned_runner.md)。
+日期为 2026-11-19，状态为四项降峰已实施，并通过新一轮六任务、两模式十二单元验收。新增接口、文件和测试入口均为实施要求。依据见 [浏览器客户端](taa_v6_browser_client_design.md)、[ONNX split](onnx_split_plaintext_prefix_fhe_suffix_design.md)、[流式密钥](taa_v6_streaming_context_design.md) 和 [参数 Runner 流程](../zh/server_provisioned_runner.md)。
 
 ## 1. 目标与边界
 
@@ -112,6 +112,15 @@ Provisioner 按实际 signature、layer、kind、layout/generator 编码 conv/de
 - linear memory/ORT arena 不一定随 GC、引用释放缩小，必要时关闭模型 Worker。FHE 密钥基线计入重叠峰值，关闭前持久化并验证 restore。
 - 不可分 tensor/key/ciphertext 超预算时分配前拒绝，必测范围的完成条件见第 7 节。key/bundle 总文件允许超过 4 GiB，磁盘另作配额预算。
 
+本轮四项降峰要求：
+
+1. 保持原始输入只读，以有界 protobuf 字段扫描将 initializer 流式外置到 OPFS。工作图使用 `load_external_data=False`，执行节点时只按 offset/length 读取其权重；原模型、CSV 和 external data 的 hash 仍绑定原始来源。
+2. 子图提取复用 ONNX `Extractor` 的依赖闭包，仅处理图结构与共享权重引用，不再反复加载、复制、序列化全量权重。权重文件置于 split 目录，prefix/suffix 的 checker 与 portable contract 校验仍执行。
+3. source 外置、原图观测、Transformer 原始 float64 CSV reference、子图提取、prefix 验证、suffix 验证分别将结果持久化到私有 OPFS 检查点后重建模型 Worker。外部请求只有最终唯一终态；各阶段容量、Worker 次数必须记录，取消、quota/I/O、重试及提交保护必须覆盖阶段边界。
+4. 标准算子与 Transformer 均按节点交接实时权重及激活，及时回收无后续使用的值；大权重以 feed 交给 ORT，避免 TensorProto、序列化与 externalData 的重复权重副本。float64 使用标准内核，不能因融合算子缺 double 内核而降为 float32。FFI 结果、feeds、session 在失败和成功路径均释放。
+
+本轮统一按 BERT→ViT→retina→ImageNet→YOLOv5→CIFAR10 执行十二单元，并在末尾重复 CIFAR10 检查状态隔离。报告与上一版同口径 RSS、单独 WASM 容量及阶段峰值对比；切点、样本、完整输出和原有阈值保持不变。
+
 模型同步运算可终止 Worker 取消，FHE 复用协作取消，所有请求产生唯一终态。OOM、runtime exit、有限超时、quota、I/O 错误均失败，保留阶段与最后指标，清理临时引用/目录并保护已提交文件。生产端无法精确读取进程峰值，依靠预检、运行时检查和开发验收共同约束。
 
 ## 7. 验收
@@ -170,7 +179,7 @@ BERT/ViT 的 `CustomMultiHeadAttention`、`CustomLayerNorm`、`Linear`、`Custom
 
 - 在真实 Chromium 验证 ONNX wheel 的 import、checker/shape inference/extract、external data 和 H5 读写。
 - 在无 torch Python 环境及实际 Pyodide 跑完整 ONNX→CT→H5，检查模块列表无间接 torch。小 fixture 覆盖普通与 FeatureMat 激活/系数分支，对照原 torch 路径的激活、Hermite、dataset 名称/shape/dtype/值，记录固定配置、容差和最大误差，回归原训练 API。
-- CIFAR10→retina→BERT→YOLOv5→ViT→ImageNet→CIFAR10 验证状态隔离与 CNN/FeatureMat 配置切换，重复准备使用新目录并对照规范化内容。
+- BERT→ViT→retina→ImageNet→YOLOv5→CIFAR10→CIFAR10 验证状态隔离与 CNN/FeatureMat 配置切换，重复准备使用新目录并对照规范化内容。
 - cycle、原始输入直通、Identity/Reshape/Transpose 旁路、歧义 shape/axes、不支持控制流、缺输入均失败。
 - 模型/CSV/contract/hash 篡改、模式 contract 互换、缺 key、ring/scale/profile 不匹配在加密前失败。
 - 参数缺元素、重复 flat index、非法布局/offset 越界，output bundle 截断、重复/未知 ID、非法长度/尾随数据均拒绝。
@@ -179,7 +188,7 @@ BERT/ViT 的 `CustomMultiHeadAttention`、`CustomLayerNorm`、`Linear`、`Custom
 
 ### 7.4 入口与证据
 
-新增脚本和 npm `test:model-workflow`，默认串行跑十二单元，支持单元诊断及 Chromium、native Python、backend/设备、build/证据目录配置。依赖 wheel 构建步骤、有限可配置超时和当前阶段输出写入 README。
+新增脚本和 npm `test:model-workflow`，开发及交付默认跑 retina 的 split 参数加密模式；完整验收按下列命令显式选择六任务、两模式，串行跑十二单元。支持单元诊断及 Chromium、native Python、backend/设备、build/证据目录配置。依赖 wheel 构建步骤、有限可配置超时和当前阶段输出写入 README。
 
 ```bash
 cd inference/interface/wasm
@@ -207,3 +216,36 @@ LATTI_MODEL_ACCEPTANCE_ROOT=/tmp/latti-browser-model-acceptance \
 顺序为依赖/ONNX wheel 与包清单→训练解耦和模型准备/两级编译→既有 Go/WASM 输入模式闭环→签名驱动的逐密文 Provisioner/参数模式→内存与失败回归、包交付及第 7 节证据。
 
 完成要求六个任务在默认 split ratio="0.9" 下通过同一公开 API 实现本规范的全部 split 客户端能力，模式产物可供 native 执行并正确回传解密，模型名和验收值不进入算法分支。依赖构建、类型/API、脚本、README、包内容和报告齐全，资源达标且第 7 节六任务 × 两模式十二单元及全部回归验收通过。只修改规范、只运行 native oracle、只通过原四单元或任一新增任务被门禁拒绝，均不算完成。
+
+
+## 9. 四项降峰本轮验收结果（2026-11-19）
+
+主证据位于 `/tmp/latti-browser-model-acceptance/on-demand-final-v2/`，按 BERT→ViT→retina→ImageNet→YOLOv5→CIFAR10 顺序完成十二单元，末尾 CIFAR10 重复检查通过。214 个主流程请求没有重复终态；23 组真实 Worker 失败回归通过，48 请求没有重复终态，临时池为空。新构建实际执行原图、prefix、suffix，不使用历史模型结果替代。
+
+| 模型 | 输入模式 max_abs_error | 参数模式 max_abs_error |
+| --- | ---: | ---: |
+| bert | 7.91941356266e-05 | 3.98940919082e-05 |
+| vit | 0.013026928108 | 0.00307504975793 |
+| retina | 1.69650047788e-07 | 2.62993390088e-06 |
+| imagenet | 3.8466350194e-06 | 9.69193244149e-05 |
+| yolov5 | 1.30679415866e-05 | 3.22220920586e-05 |
+| cifar10 | 3.18750796424e-06 | 4.85827441921e-06 |
+
+全部原始输出严格 `<0.1`，YOLOv5 三输出共 129024 元素、ViT 全部 1970 元素、ImageNet 1000 元素均完整比较。CT/H5/MegaAG/signature/key requirements 与独立 oracle 对照通过；参数 bundle 的实际参数集合、flat count、布局、level/scale 和全部 slots 校验通过。
+
+整轮 renderer/Worker 合计 RSS 峰值从 3968622592 bytes 降为 **2328748032 bytes**（下降约 **41.3%**）；余量 1966219264 bytes（约 1.83 GiB），最高阶段转为 `bert-parameter/provision`。采样周期 250 ms，15961 次采样，最大间隔 252 ms，无进程读取错误。分项容量不与 RSS 重复相加，native RSS 独立报告。
+
+| 模型 | 原 split RSS（GiB） | 本轮 split RSS（GiB） | 本轮 Pyodide 最大容量（MiB） | 原/本轮 split 耗时（秒） |
+| --- | ---: | ---: | ---: | ---: |
+| bert | 3.696 | 1.244 | 103.5 | 60.89 / 69.68 |
+| vit | 1.092 | 0.920 | 71.9 | 13.72 / 50.00 |
+| retina | 1.640 | 1.221 | 214.8 | 18.37 / 81.50 |
+| imagenet | 1.130 | 1.041 | 149.1 | 11.88 / 55.80 |
+| yolov5 | 1.022 | 1.030 | 179.0 | 12.61 / 64.31 |
+| cifar10 | 0.873 | 0.945 | 103.5 | 8.56 / 46.82 |
+
+BERT split RSS 下降约 66.3%，Pyodide 最大容量由 3076128768 bytes 降至 108527616 bytes（约 103.5 MiB）。Transformer 使用 7 个阶段 Worker，标准图使用 6 个。逐阶段指标随 artifact manifest 保存。YOLOv5/CIFAR10 的 RSS 未下降；统一生命周期带来初始化开销，较小模型的 split 耗时明显增加，不能将本次结果描述为所有模型都更快或所有阶段都降峰。
+
+四项实现对应 `tools/onnx_external_weights.py`、共享 `prepare_steps` 的权重引用路径、模型 API 的私有检查点/Worker 续接、按节点的权重 feed 与生命周期释放。小型 shape/control 常量保留或物化为有界常量，使 Reshape 等节点可在分配前推断 shape；float64 采用 ORT 标准内核，未降低精度。
+
+详细资源与前后对比见 `resource-audit.json`、`memory-comparison.json`；失败回归在相邻的 `on-demand-final-v2-failures/`。交付包和完成审计生成于相邻 `/tmp` 目录。完整原始 ONNX 参数加密的既有内存问题仍为非阻塞项。

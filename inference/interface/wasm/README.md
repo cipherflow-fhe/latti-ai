@@ -38,77 +38,132 @@
 
 完整参数与返回类型见 `dist/index.d.ts`。模型产物返回 `{directory, manifest}` 文件句柄；可选 `outputDirectory` 指定输出父目录，操作会创建独立子目录。
 
-## ONNX 切分与编译示例
+## retina ONNX split 参数加密主流程
 
-源目录包含模型、external data（如有）、CSV 和 `inputs.json`。路径使用安全相对路径，manifest 必须完整绑定全部输入的名称、shape 和语义轴，例如：
+默认交付校验使用 retina 原始完整 `model/epoch041.onnx`，三个输入为 `input_0=img.csv`、`input_1=non_inv.csv`、`input_2=inv.csv`，shape 分别为 `[1,5,512,512]`、`[1,2]`、`[1,3]`。`inputs.json` 已绑定名称、shape 和语义轴，`compile-config.json` 使用锁定的 storage-aware 配置。
 
-```json
-{"inputs":[{"name":"input","csv":"sample.csv","shape":[1,3,32,32],"axes":["N","C","H","W"],"dtype":"float32"}]}
+### 模型提供方：切分、编译和参数加密
+
+1. `prepareSplit({source, ratio: '0.9'})` 切分完整 ONNX，使用适配样本验证原图及 prefix/suffix 的明文等价性。
+2. `compileHighLevel({split, deploymentMode: 'server_provisioned_runner', compileConfig})`、`generateLowLevel({task})` 编译 suffix，生成任务图、签名及密钥需求。
+3. 从任务的 `entry/provisioner` 打开客户端，首次 `setup()` 生成并保存模型方密钥；以后使用 `restore()`。
+4. `provisionRunner({task, parameterDirectory: provisionerDirectory})` 加密 suffix 参数，生成公开 Runner 包。将 **prefix ONNX 及其所需权重、输入输出约定、公开 Runner 包**交给数据方。独立 prefix 需转成标准 ONNX，并仅重新打包它引用的权重；不能直接传整个 split 工作目录（含 suffix 明文权重）。
+
+### 数据提供方：本地 prefix 推理和 Runner 推理
+
+1. 用自己的 CSV 和收到的 prefix 做明文推理，无需完整原模型或模型方私钥。交付包提供 `runRetinaPrefix({prefixDirectory, csvDirectory, runtimeURL})`，返回边界 CSV 所在的 `directory` 和输出信息。
+2. 将边界 CSV 按 `input_contract.json` 的 `feature_id` 送入收到的 Runner：retina 两项分别为 `_flatten_Flatten_output_0`（512 个值）和 `_mlp_factor_mix_fc2_Gemm_output_0`（32 个值）。这是**参数加密模式，Runner 输入为明文**，不调用输入加密接口。
+3. 由数据方设备上的 native Runner 或其接入的原生服务执行 FHE suffix，得到 `output.ct`，回传模型提供方。WASM 网页自身不执行 native Runner；原始 CSV 留在数据方。
+
+已有 native 环境可按下式接线（本交付演示会跳过此步）：
+
+```sh
+evaluate_browser_task --mode server_provisioned_runner --task-dir /path/to/runner \
+  --input _flatten_Flatten_output_0=/path/to/prefix-output/_flatten_Flatten_output_0.csv \
+  --input _mlp_factor_mix_fc2_Gemm_output_0=/path/to/prefix-output/_mlp_factor_mix_fc2_Gemm_output_0.csv \
+  --output output.ct
 ```
 
-在按钮点击事件中选择目录后调用：
+### 模型提供方：结果解密
+
+用自己保管的密钥 `restore()`，调用 `decryptOutputs({task, outputFile})` 解密收到的结果密文。开发验收比较原始完整 ONNX 的全部输出，最大绝对误差须严格 `<0.1`。生产私钥/fullContext 始终留在模型方，不随 Runner 发给数据方。
+
+以下为已选择好源目录、密钥目录的生产接口接线；完整可运行的固定样本校验见下节：
 
 ```js
-import {openBrowserModelTools, openBrowserClient} from '/dist/index.js';
+import {openBrowserModelTools, openBrowserClient} from '/runtime/index.js';
 
-const sourceDirectory = await showDirectoryPicker();
 const models = await openBrowserModelTools({onProgress: console.log});
+let client;
 try {
-  const source = {
-    directory: sourceDirectory,
-    modelPath: 'model.onnx',
+  const split = await models.prepareSplit({source: {
+    directory: sourceDirectory, modelPath: 'model/epoch041.onnx',
     inputsManifest: await sourceDirectory.getFileHandle('inputs.json'),
-  };
-  const split = await models.prepareSplit({source, ratio: '0.9'});
-  let task = await models.compileHighLevel({
-    split, deploymentMode: 'client_encrypted_input',
+  }, ratio: '0.9'});
+  let task = await models.compileHighLevel({split,
+    deploymentMode: 'server_provisioned_runner',
+    compileConfig: await sourceDirectory.getFileHandle('compile-config.json'),
   });
   task = await models.generateLowLevel({task});
-  // 保存 task，供后续按钮执行密钥与加解密流程。
+  const manifest = JSON.parse(await (await task.manifest.getFile()).text());
+  let role = task.directory;
+  for (const part of (manifest.entry + '/provisioner').split('/'))
+    role = await role.getDirectoryHandle(part);
+  client = await openBrowserClient({clientDirectory: role, keyDirectory});
+  await client.setup(); // 首次生成；已有密钥时直接 restore()
+  await client.close();
+  client = await openBrowserClient({clientDirectory: role, keyDirectory});
+  await client.restore();
+  const bundle = await client.provisionRunner({task, parameterDirectory: role});
+  // 模型方发送独立 prefix 和 bundle；数据方用自己的 CSV 跑 prefix，调用 native Runner。
+  // 模型方收到数据方回传的 resultFile 后解密：
+  // const results = await client.decryptOutputs({task, outputFile: resultFile});
 } finally {
+  await client?.close();
   await models.close();
 }
 ```
 
-后续从任务 manifest 的 `entry/client` 目录打开客户端，调用 `setup()` 或 `restore()`，再按 `input_contract.json` 中的 `feature_id` 和 CSV 加密**全部**边界输入。原生 Server 执行后，将返回文件交给 `decryptOutputs()`。
-
-参数模式改用 `deploymentMode: 'server_provisioned_runner'`，传入适用的 `compileConfig`，使用 `entry/provisioner` 角色目录打开客户端。密钥准备后调用 `provisionRunner()`，将公开 Runner 包与具名明文边界输入交给原生 Runner。
-
-**仅公开 eval context 和密文可上传；`fullContext` 含私钥，不得上传。** 密钥保存在 `keyDirectory` 下的 profile 子目录，`setup()` 拒绝覆盖已有密钥，恢复与任务绑定会校验 hash、参数和密钥能力。含 uint64 的 CKKS 参数 JSON 应保留原始文本，避免经 JavaScript 数值转换丢失精度。
-
-新样本先调用 `runPrefix()`，CSV 放在 `split.directory` 下并由新 manifest 引用；加密和 `decryptOutputs()` 都传同一 `run`。直接覆盖已编译 CSV 会因内容绑定不匹配而失败。
+**生产私钥/fullContext 不得上传。** profile-ID 子目录保存密钥，`setup()` 不覆盖已有密钥，`restore()` 校验 hash 与身份。含 uint64 的 CKKS 参数 JSON 保留原始文本，避免 JavaScript 数值转换丢失精度。`runPrefix({split})` 适用于持有完整 split 的本地工作流；双方分离时，数据方使用独立 prefix，项目负责关联样本、任务与回传结果。
 
 ## 支持范围与验收
 
-已通过 cifar10、retina、BERT、YOLOv5、ViT、ImageNet 六任务在 `ratio='0.9'` 下的输入/参数两模式，共十二单元验收。全部输出最大绝对误差严格小于 `0.1`，连续客户端 RSS 峰值小于 4 GiB。未切分完整 ONNX 的参数加密内存问题单独记录，不属于本次强制验收。
+已通过 cifar10、retina、BERT、YOLOv5、ViT、ImageNet 六任务在 `ratio='0.9'` 下的输入/参数两模式，共十二单元验收。全部输出最大绝对误差严格小于 `0.1`，连续客户端 RSS 峰值小于 4 GiB。本轮整流程峰值约 2.17 GiB；BERT split 约 1.24 GiB，较上一版下降约 66%。阶段重建会增加初始化耗时，小模型的处理时间可能变长。未切分完整 ONNX 的参数加密内存问题单独记录，不属于本次强制验收。
 
 CNN 使用 multiplexed 布局，支持已适配的 dense、非 big Conv2D（含 depthwise）与多项式参数；BERT/ViT 使用 FeatureMat、`par_block_col_major` PCM 和各自配置。当前不支持 big convolution 和 1D 参数布局，其他模型需符合现有编译器算子与结构限制。
 
-资源预检上限：256 节点；initializer 合计 384 MiB、单个 32 MiB；源文件合计 512 MiB；单输入 `2^22` 元素；单 ORT tensor 32 MiB；产物单文件 512 MiB、合计 2 GiB；参数索引 16384 个密文。模型临时文件落 OPFS，操作结束清理临时池；已提交产物由调用方管理。默认模型操作超时 30 分钟。
+资源预检上限：256 节点；initializer 合计 384 MiB、单个 32 MiB；源文件合计 512 MiB；单输入 `2^22` 元素；单 ORT tensor 32 MiB；产物单文件 512 MiB、合计 2 GiB；参数索引 16384 个密文。模型权重流式外置到 OPFS，执行节点时只读所需权重；子图提取只处理结构与权重引用。原图、提取及 prefix/suffix 验证之间持久化结果并重建 Worker，阶段指标写入产物 manifest。模型临时文件落 OPFS，操作结束清理临时池；已提交产物由调用方管理。默认模型操作超时 30 分钟。
 
 ## 开发与交付校验
 
-以下命令在源码仓库中供开发者使用，终端用户无需执行：
+默认交付文件为 **`retina-split-delivery.zip`**，解压后的内容：
+
+| 路径 | 内容 |
+| --- | --- |
+| `WASM-0.2.0.zip` | 可嵌入网页的完整 WASM/JS/ONNX 依赖包，保持独立 ZIP。 |
+| `retina/` | 原始完整 ONNX、三个原始 CSV、输入 manifest 和编译配置。 |
+| `handoff/prefix/` | 可单独交给数据方的标准 prefix ONNX、必要权重和输入输出约定。 |
+| `fixture/output.ct` | 已通过验收的 native Runner 真实结果密文。 |
+| `fixture/test-keys/` | 仅用于固定测试样本的匹配密钥（含测试私钥）。 |
+| `index.html`、`retina-check.mjs` | 默认 retina 参数模式的按钮界面与可复用 JS 主流程。 |
+| `serve.py`、`delivery-manifest.json`、`SHA256SUMS` | 本地静态服务、结果来源/身份绑定与完整性校验。 |
+
+**固定结果密文必须使用配套测试密钥。** 演示在同一网页模拟双方：模型方重新执行 split、两级编译和参数加密，数据方仅用独立 prefix 与固定 CSV 实际推理，再由模型方解密。仅 Server/Runner 的 FHE 执行使用预生成密文回放。它验证新参数包生成与解密接口，不声称本次新参数包已经被原生执行；新生成的生产密钥不能解密旧结果。更换 CSV 后必须重新执行 native Runner，旧结果不再适用。外层 ZIP 汇集双方测试材料，供集成开发校验；生产向数据方发送的只是 prefix 与公开 Runner，不能发送整个交付 ZIP。测试密钥已随包分享，绝不能用于真实业务数据。约 4.7 GB 的公开 eval context 是 `restore()` 完整性检查所需文件，因此交付 ZIP 使用 ZIP64，解压和运行需预留二十余 GB 磁盘空间。
+
+同事无需源码、Node.js、ONNX 或 native Runner。解压交付 ZIP 后：
+
+```sh
+cd retina-split-delivery
+sha256sum -c SHA256SUMS  # 可选，Windows 可用对应 SHA-256 工具
+python3 serve.py        # 仅本地演示静态服务；已有网页项目可用自己的服务
+```
+
+在桌面 Chromium 打开 `http://localhost:8000/`，点击“选择交付根目录”选择该解压目录，再点击“开始校验”。完成后下载报告，结果应为 `passed`、全部输出误差 `<0.1`。`serve.py` 自动解压并校验 WASM 资源，只服务页面与运行时，测试密钥/模型通过本地目录授权读取。若环境没有 Python，可手动将 WASM ZIP 中的 `dist/` 放到网站 `/runtime/`，同源部署页面和 JS；Python 不是浏览器运行依赖。
+
+接入已有网页可直接调用：
+
+```js
+import {verifyRetinaDelivery} from './retina-check.mjs';
+// 在按钮事件中选择解压交付根目录。
+const directory = await showDirectoryPicker();
+const {report, bundle, results} = await verifyRetinaDelivery(directory, {
+  runtimeURL: new URL('/runtime/index.js', location.href).href,
+  onProgress: console.log,
+});
+```
+
+源码开发的默认验收也仅运行 **retina / ONNX split / 参数加密**：
 
 ```sh
 npm ci
 npm run build
 npm test
-CHROME_PATH=/path/to/chromium npm run test:browser
-npm run package -- /tmp/latti-packages
-```
-
-六任务验收需先构建原生 `evaluate_browser_task`，另备 Python oracle 环境：
-
-```sh
-LATTI_MODEL_ACCEPTANCE_ROOT=/tmp/latti-model-acceptance \
+LATTI_MODEL_ACCEPTANCE_ROOT=/tmp/retina-acceptance \
 LATTI_MODEL_NATIVE_RUNNER=/path/to/evaluate_browser_task \
 LATTI_MODEL_NATIVE_PYTHON=/path/to/native-venv/bin/python \
 CHROME_PATH=/path/to/chromium npm run test:model-workflow
 ```
 
-默认串行运行六任务、两种模式；可用 `--models`、`--modes` 选择子集。失败、数值和临时工作区回归分别使用 `test:model-failures`、`test:model-numerics`、`test:python-workspace`。详细验收规则见源码中的 `docs/spec/wasm_onnx_split_compile_design.md`。
+该源码验收执行真实 native Runner；交付回放校验则使用 `LATTI_RETINA_DELIVERY_DIRECTORY=/解压目录 CHROME_PATH=/path/to/chromium npm run test:retina-delivery`，不调用 native。需要完整回归时显式指定 `test:model-workflow -- --models bert,vit,retina,imagenet,yolov5,cifar10 --modes input,parameter`。其他回归入口为 `test:browser`、`test:model-failures`、`test:model-numerics`、`test:python-workspace`。
 
-运行时固定使用 Pyodide 0.27.7、ORT Web 1.23.2、Lattigo v6。依赖版本/hash 见 `model-resources.lock.json`，源码和资源清单见 `dist/manifest.json`。构建时可设置 `LATTI_MODEL_RESOURCE_CACHE` 复用缓存；wheel 重建入口为 `build-model-wheels.py`（Python 3.12、pyodide-build 0.30.7、Emscripten 3.1.58、protoc 3.21.12）。
-
-交付包为 `WASM-0.2.0.zip` 和同内容的 `latti-client-wasm-0.2.0.zip`。解压后执行 `sha256sum -c SHA256SUMS` 校验完整性。模型、样本与任务配置由业务项目另行提供。
+运行时使用 Pyodide 0.27.7、ORT Web 1.23.2、Lattigo v6；资源/hash 见 `model-resources.lock.json`、`dist/manifest.json`。开发者用 `npm run package -- /tmp/wasm-package` 生成独立 WASM 包，再用 `package_retina_split_delivery.py --wasm ... --acceptance ... --test-keys ... --output /tmp/retina-delivery` 生成外层交付 ZIP；测试密钥必须来自同次验收。详细全量规则见源码 `docs/spec/wasm_onnx_split_compile_design.md`。
