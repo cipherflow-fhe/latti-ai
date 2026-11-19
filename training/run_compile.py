@@ -23,8 +23,10 @@ Supports both ONNX model files (.onnx) and pre-converted JSON files (pt.json)
 """
 
 import argparse
+import copy
 import json
 import logging
+import random
 import shutil
 import sys
 from pathlib import Path
@@ -36,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent / 'model_compiler'))
 sys.path.insert(0, str(Path(__file__).parent))
 
 from model_compiler.pipeline import run_pipeline
+from model_compiler.pipeline import config as compiler_config
 from model_export.onnx_to_json import onnx_to_json
 from nn_tools import export_h5_from_onnx
 
@@ -284,21 +287,82 @@ Examples:
 
     args = parser.parse_args()
 
+    try:
+        _compile(args)
+        return 0
+    except KeyboardInterrupt:
+        print('\n[Compile] Interrupted by user')
+        return 130
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        return 1
+
+
+def compile_model(
+    input_path,
+    output_dir,
+    *,
+    deployment_mode='client_encrypted_input',
+    config_path='',
+    split_manifest=None,
+    style='multiplexed',
+    graph_type='btp',
+    num_experiments=128,
+    num_workers=16,
+    temperature=1.0,
+    set_btp_scale=None,
+    runner_output_dir=None,
+    random_seed=None,
+):
+    """Shared ONNX/JSON compilation entry; failures propagate to the caller."""
+    if deployment_mode not in DEPLOYMENT_MODES:
+        raise ValueError(f'Unsupported deployment_mode: {deployment_mode!r}')
+    import numpy as np
+
+    previous_config = copy.deepcopy(vars(compiler_config))
+    previous_random, previous_numpy = random.getstate(), np.random.get_state()
+    try:
+        if random_seed is not None:
+            random.seed(random_seed)
+            np.random.seed(random_seed)
+        return _compile(
+            argparse.Namespace(
+                input=input_path,
+                output=output_dir,
+                deployment_mode=deployment_mode,
+                config=config_path,
+                split_manifest=split_manifest,
+                style=style,
+                graph_type=graph_type,
+                num_experiments=num_experiments,
+                num_workers=num_workers,
+                temperature=temperature,
+                set_btp_scale=set_btp_scale,
+                runner_output_dir=runner_output_dir,
+            )
+        )
+    finally:
+        vars(compiler_config).clear()
+        vars(compiler_config).update(previous_config)
+        random.setstate(previous_random)
+        np.random.set_state(previous_numpy)
+
+
+def _compile(args):
     input_path = Path(args.input)
     if not input_path.exists():
-        print(f'[Error] Input file not found: {input_path}')
-        sys.exit(1)
+        raise FileNotFoundError(input_path)
 
     if not input_path.is_file():
-        print(f'[Error] Input path is not a file: {input_path}')
-        sys.exit(1)
+        raise ValueError(f'Input path is not a file: {input_path}')
 
     is_onnx = input_path.suffix.lower() == '.onnx'
     is_json = input_path.suffix.lower() == '.json'
 
     if not (is_onnx or is_json):
-        print(f'[Error] Input file must be .onnx or .json, got: {input_path.suffix}')
-        sys.exit(1)
+        raise ValueError(f'Input file must be .onnx or .json, got: {input_path.suffix}')
 
     if args.output:
         output_dir = Path(args.output)
@@ -345,7 +409,7 @@ Examples:
             import traceback
 
             traceback.print_exc()
-            sys.exit(1)
+            raise
 
         input_path = pt_json_path
     else:
@@ -360,107 +424,100 @@ Examples:
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
-    try:
-        run_pipeline(
-            num_experiments=args.num_experiments,
-            input_file_path=pt_json_path,
-            output_dir=output_dir,
-            temperature=args.temperature,
-            num_workers=args.num_workers,
-            style=args.style,
-            graph_type=args.graph_type,
-            n_heads=compile_config.get('n_heads'),
-            head_dim=compile_config.get('head_dim'),
-            matmul_block_size=compile_config.get('matmul_block_size'),
-            mat_pack_style=mat_pack_style,
-            model_type=model_type,
-            set_btp_scale=set_btp_scale,
-            bert_softmax_values_btp_scale=compile_config.get('bert_softmax_values_btp_scale'),
-            bert_softmax_denominator_btp_scale=compile_config.get('bert_softmax_denominator_btp_scale'),
-            bert_softmax_scaled_denominator_btp_scale=compile_config.get('bert_softmax_scaled_denominator_btp_scale'),
-            bert_softmax_inverse_btp_scale=compile_config.get('bert_softmax_inverse_btp_scale'),
-            bert_layernorm_inverse_btp_scale=compile_config.get('bert_layernorm_inverse_btp_scale'),
-            bert_softmax_initial_denominator_scale=compile_config.get('bert_softmax_initial_denominator_scale'),
-            bert_softmax_wide_initial_denominator_scale=compile_config.get(
-                'bert_softmax_wide_initial_denominator_scale'
-            ),
-            bert_softmax_first_refinement_denominator_scale=compile_config.get(
-                'bert_softmax_first_refinement_denominator_scale'
-            ),
-            bert_softmax_later_refinement_denominator_scale=compile_config.get(
-                'bert_softmax_later_refinement_denominator_scale'
-            ),
-            encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
-            encrypted_parameter_storage_normalization_bytes=compile_config.get(
-                'encrypted_parameter_storage_normalization_bytes', 1 << 30
-            ),
-            deployment_mode=args.deployment_mode,
-            seed_weight_subgrid_stride=compile_config.get('seed_weight_subgrid_stride', [1, 1]),
-            split_suffix=args.split_manifest is not None,
-            # enable_score_cache=False
+    run_pipeline(
+        num_experiments=args.num_experiments,
+        input_file_path=pt_json_path,
+        output_dir=output_dir,
+        temperature=args.temperature,
+        num_workers=args.num_workers,
+        style=args.style,
+        graph_type=args.graph_type,
+        n_heads=compile_config.get('n_heads'),
+        head_dim=compile_config.get('head_dim'),
+        matmul_block_size=compile_config.get('matmul_block_size'),
+        mat_pack_style=mat_pack_style,
+        model_type=model_type,
+        set_btp_scale=set_btp_scale,
+        bert_softmax_values_btp_scale=compile_config.get('bert_softmax_values_btp_scale'),
+        bert_softmax_denominator_btp_scale=compile_config.get('bert_softmax_denominator_btp_scale'),
+        bert_softmax_scaled_denominator_btp_scale=compile_config.get('bert_softmax_scaled_denominator_btp_scale'),
+        bert_softmax_inverse_btp_scale=compile_config.get('bert_softmax_inverse_btp_scale'),
+        bert_layernorm_inverse_btp_scale=compile_config.get('bert_layernorm_inverse_btp_scale'),
+        bert_softmax_initial_denominator_scale=compile_config.get('bert_softmax_initial_denominator_scale'),
+        bert_softmax_wide_initial_denominator_scale=compile_config.get('bert_softmax_wide_initial_denominator_scale'),
+        bert_softmax_first_refinement_denominator_scale=compile_config.get(
+            'bert_softmax_first_refinement_denominator_scale'
+        ),
+        bert_softmax_later_refinement_denominator_scale=compile_config.get(
+            'bert_softmax_later_refinement_denominator_scale'
+        ),
+        encrypted_parameter_storage_weight=compile_config.get('encrypted_parameter_storage_weight', 0.0),
+        encrypted_parameter_storage_normalization_bytes=compile_config.get(
+            'encrypted_parameter_storage_normalization_bytes', 1 << 30
+        ),
+        deployment_mode=args.deployment_mode,
+        seed_weight_subgrid_stride=compile_config.get('seed_weight_subgrid_stride', [1, 1]),
+        split_suffix=args.split_manifest is not None,
+        # enable_score_cache=False
+    )
+
+    print(f'\n[Compile] Success! Output: {output_dir}')
+
+    task_dir = output_dir / 'task'
+    if args.deployment_mode == 'client_encrypted_input':
+        for role in ('client', 'server'):
+            path = task_dir / role / 'task_config.json'
+            config = read_json_file(path)
+            config.update(deployment_metadata(args.deployment_mode), deployment_role=role)
+            write_json_file(path, config)
+    if task_dir.exists():
+        print(
+            '[Compile] Structure: task/server/nn_layers_ct_0.json, '
+            'task/{server,client}/{task_config,ckks_parameter}.json'
         )
 
-        print(f'\n[Compile] Success! Output: {output_dir}')
+    if onnx_path is not None and task_dir.exists():
+        if feature_mat:
+            write_matrix_output_selections(onnx_path, task_dir)
+        json_path = task_dir / 'server' / 'nn_layers_ct_0.json'
+        h5_path = task_dir / 'server' / 'model_parameters.h5'
+        if json_path.exists():
+            print(f'\n[H5 Export] ONNX: {onnx_path}')
+            print(f'[H5 Export] JSON: {json_path}')
+            print(f'[H5 Export] H5:   {h5_path}')
+            try:
+                export_h5_from_onnx(
+                    onnx_path=str(onnx_path),
+                    json_path=str(json_path),
+                    h5_path=str(h5_path),
+                    feature_mat=feature_mat,
+                    model_type=model_type,
+                )
+                print(f'[H5 Export] Done: {h5_path}')
+            except Exception as e:
+                print(f'\n[H5 Export] Failed: {e}')
+                import traceback
 
-        task_dir = output_dir / 'task'
-        if task_dir.exists():
-            print(
-                '[Compile] Structure: task/server/nn_layers_ct_0.json, '
-                'task/{server,client}/{task_config,ckks_parameter}.json'
-            )
+                traceback.print_exc()
+                raise
+        else:
+            raise FileNotFoundError(f'H5 export requires compiled CT graph: {json_path}')
 
-        if onnx_path is not None and task_dir.exists():
-            if feature_mat:
-                write_matrix_output_selections(onnx_path, task_dir)
-            json_path = task_dir / 'server' / 'nn_layers_ct_0.json'
-            h5_path = task_dir / 'server' / 'model_parameters.h5'
-            if json_path.exists():
-                print(f'\n[H5 Export] ONNX: {onnx_path}')
-                print(f'[H5 Export] JSON: {json_path}')
-                print(f'[H5 Export] H5:   {h5_path}')
-                try:
-                    export_h5_from_onnx(
-                        onnx_path=str(onnx_path),
-                        json_path=str(json_path),
-                        h5_path=str(h5_path),
-                        feature_mat=feature_mat,
-                        model_type=model_type,
-                    )
-                    print(f'[H5 Export] Done: {h5_path}')
-                except Exception as e:
-                    print(f'\n[H5 Export] Failed: {e}')
-                    import traceback
+    if args.deployment_mode == 'server_provisioned_runner' and task_dir.exists():
+        runner_output_dir = Path(args.runner_output_dir) if args.runner_output_dir else None
+        write_server_provisioned_runner_layout(task_dir, runner_output_dir)
+        runner_dir = runner_output_dir if runner_output_dir is not None else task_dir / 'runner'
+        print(f'\n[Deployment] server_provisioned_runner layout written:')
+        print(f'[Deployment] Provisioner: {task_dir / "provisioner"}')
+        print(f'[Deployment] Runner:      {runner_dir}')
+        print('[Deployment] Runner bundle config excludes secret_key.bin and model_parameters.h5.')
 
-                    traceback.print_exc()
-            else:
-                print(f'\n[H5 Export] Skipped: {json_path} not found')
+    if args.split_manifest:
+        from tools.onnx_split_contract import write_contract
 
-        if args.deployment_mode == 'server_provisioned_runner' and task_dir.exists():
-            runner_output_dir = Path(args.runner_output_dir) if args.runner_output_dir else None
-            write_server_provisioned_runner_layout(task_dir, runner_output_dir)
-            runner_dir = runner_output_dir if runner_output_dir is not None else task_dir / 'runner'
-            print(f'\n[Deployment] server_provisioned_runner layout written:')
-            print(f'[Deployment] Provisioner: {task_dir / "provisioner"}')
-            print(f'[Deployment] Runner:      {runner_dir}')
-            print('[Deployment] Runner bundle config excludes secret_key.bin and model_parameters.h5.')
+        write_contract(args.split_manifest, task_dir)
 
-        if args.split_manifest:
-            from tools.onnx_split_contract import write_contract
-
-            write_contract(args.split_manifest, task_dir)
-
-        return 0
-
-    except KeyboardInterrupt:
-        print('\n[Compile] Interrupted by user')
-        return 130
-
-    except Exception as e:
-        print(f'\n[Compile] Failed: {e}')
-        import traceback
-
-        traceback.print_exc()
-        return 1
+    return output_dir / 'task'
 
 
 if __name__ == '__main__':

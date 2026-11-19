@@ -15,12 +15,9 @@
 # SPDX-License-Identifier: Apache-2.0
 import numpy as np
 from scipy.integrate import quad
-from scipy.special import factorial
-import matplotlib.pyplot as plt
+from scipy.special import erf, expit, factorial
 import warnings
 import os
-import torch
-import torch.nn as nn
 
 
 # =====================
@@ -126,6 +123,8 @@ def compute_coefficients(func, max_n=5, tol=1e-8, limit=20, **func_kwargs):
 # =====================
 def plot_activation(func, func_name, coeffs, x_range=(-4, 4), save_dir='activation_plots', **func_kwargs):
     """Plot activation function and its Hermite approximation."""
+    import matplotlib.pyplot as plt
+
     os.makedirs(save_dir, exist_ok=True)
     x = np.linspace(x_range[0], x_range[1], 500)
     # Pass extra arguments when calling the function
@@ -163,6 +162,34 @@ def plot_activation(func, func_name, coeffs, x_range=(-4, 4), save_dir='activati
     return rel_error
 
 
+def activation_function(name, *, approximate='none'):
+    """Float64 ONNX activation semantics, independent of the training runtime."""
+    name = name.lower()
+    if name == 'relu':
+        return lambda x: np.maximum(0.0, x)
+    if name == 'relu6':
+        return lambda x: np.clip(x, 0.0, 6.0)
+    if name == 'silu':
+        return lambda x: x * expit(x)
+    if name == 'gelu':
+        if approximate == 'none':
+            return lambda x: 0.5 * x * (1.0 + erf(x / np.sqrt(2.0)))
+        if approximate == 'tanh':
+            return lambda x: 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x**3)))
+        raise ValueError(f'Unknown GELU approximation: {approximate!r}')
+    raise ValueError(f'Unknown activation: {name!r}')
+
+
+def get_hermite_coeffs(func, degree=4, **kwargs):
+    """Integrate a numerical activation using the training Hermite normalization."""
+    raw_coeffs = compute_coefficients(func, max_n=degree, **kwargs)
+    return tuple(c / np.sqrt(factorial(n)) for n, c in enumerate(raw_coeffs))
+
+
+def get_hermite_coeffs_for_activation(name, degree=4, *, approximate='none', **kwargs):
+    return get_hermite_coeffs(activation_function(name, approximate=approximate), degree, **kwargs)
+
+
 def get_hermite_coeffs_for_module(module_cls, degree=4, **kwargs):
     """Compute Hermite expansion coefficients for any nn.Module activation.
 
@@ -179,6 +206,8 @@ def get_hermite_coeffs_for_module(module_cls, degree=4, **kwargs):
         Tuple of (degree+1) floats: (a_0, a_1, ..., a_degree),
         ready to use as hermite_coeffs in PolyAct.
     """
+    import torch
+
     module = module_cls()
     module.eval()
 
@@ -188,8 +217,7 @@ def get_hermite_coeffs_for_module(module_cls, degree=4, **kwargs):
             result = module(torch.as_tensor(x_arr, dtype=torch.float64))
         return result.numpy()
 
-    raw_coeffs = compute_coefficients(numpy_func, max_n=degree, **kwargs)
-    return tuple(c / np.sqrt(factorial(n)) for n, c in enumerate(raw_coeffs))
+    return get_hermite_coeffs(numpy_func, degree, **kwargs)
 
 
 # =====================

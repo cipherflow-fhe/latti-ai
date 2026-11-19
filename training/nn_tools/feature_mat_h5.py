@@ -87,8 +87,10 @@ def export_feature_mat_h5_from_onnx(
     Returns:
         The output H5 path.
     """
-    onnx_model = onnx.load(onnx_path)
-    onnx_weights = {init.name: numpy_helper.to_array(init).astype('float64') for init in onnx_model.graph.initializer}
+    from .onnx_h5 import InitializerValues, H5Values
+
+    onnx_model = onnx.load(onnx_path, load_external_data=False)
+    onnx_weights = InitializerValues(onnx_model, onnx_path)
     attention_sources, polyact_sources, pcmpoly_sources = _index_onnx_sources(onnx_model)
 
     with open(json_path, 'r', encoding='utf-8') as f:
@@ -102,71 +104,69 @@ def export_feature_mat_h5_from_onnx(
     features: dict[str, dict[str, Any]] = graph['feature']
     layers: dict[str, dict[str, Any]] = graph['layer']
     standalone_gamma_paths = _standalone_pcmgamma_paths(layers)
-    out: dict[str, np.ndarray] = {}
-
-    for layer_key, layer in layers.items():
-        ltype = layer.get('type')
-        if ltype == 'parcpmm':
-            _export_parcpmm(layer_key, layer, features, onnx_weights, out)
-        elif ltype == 'pdmpcmm':
-            _export_pdmpcmm(layer_key, layer, features, onnx_weights, out, model_type=model_type)
-        elif ltype == 'pcmgamma':
-            _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
-        elif ltype == 'pdmgamma':
-            _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
-        elif ltype in ('pcmgeneralpoly', 'pdmupperpoly'):
-            _export_pdmupperpoly(layer_key, layer, features, out)
-        elif ltype == 'pcmpoly':
-            _export_pcmpoly(
-                layer_key,
-                layer,
-                features,
-                onnx_weights,
-                attention_sources,
-                polyact_sources,
-                pcmpoly_sources,
-                standalone_gamma_paths,
-                out,
-                model_type=model_type,
-            )
-        elif ltype == 'pdmpoly':
-            _export_pdmpoly(
-                layer_key,
-                layer,
-                features,
-                onnx_weights,
-                attention_sources,
-                polyact_sources,
-                pcmpoly_sources,
-                standalone_gamma_paths,
-                out,
-                model_type=model_type,
-            )
-        elif ltype == 'pcmaffine':
-            _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
-        elif ltype == 'pdmaffine':
-            _export_pdmaffine(layer_key, layer, features, onnx_weights, out)
-        elif ltype in ('add_pt', 'pcm_add_pt'):
-            _export_add_pt(layer_key, layer, features, onnx_weights, out)
-        elif ltype == 'pdm_add_pt':
-            _export_pdm_add_pt(layer_key, layer, features, onnx_weights, out)
-
     h5_dir = os.path.dirname(h5_path)
     if h5_dir:
         os.makedirs(h5_dir, exist_ok=True)
 
-    provenance = _audit_pcm_parameter_sources(layers, out)
     with h5py.File(h5_path, 'w') as f:
-        for name, data in out.items():
-            f.create_dataset(name, data=np.asarray(data, dtype='float64').reshape(-1))
+        out = H5Values(f)
+
+        for layer_key, layer in layers.items():
+            ltype = layer.get('type')
+            if ltype == 'parcpmm':
+                _export_parcpmm(layer_key, layer, features, onnx_weights, out)
+            elif ltype == 'pdmpcmm':
+                _export_pdmpcmm(layer_key, layer, features, onnx_weights, out, model_type=model_type)
+            elif ltype == 'pcmgamma':
+                _export_pcmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
+            elif ltype == 'pdmgamma':
+                _export_pdmgamma(layer_key, layer, features, onnx_weights, attention_sources, polyact_sources, out)
+            elif ltype in ('pcmgeneralpoly', 'pdmupperpoly'):
+                _export_pdmupperpoly(layer_key, layer, features, out)
+            elif ltype == 'pcmpoly':
+                _export_pcmpoly(
+                    layer_key,
+                    layer,
+                    features,
+                    onnx_weights,
+                    attention_sources,
+                    polyact_sources,
+                    pcmpoly_sources,
+                    standalone_gamma_paths,
+                    out,
+                    model_type=model_type,
+                )
+            elif ltype == 'pdmpoly':
+                _export_pdmpoly(
+                    layer_key,
+                    layer,
+                    features,
+                    onnx_weights,
+                    attention_sources,
+                    polyact_sources,
+                    pcmpoly_sources,
+                    standalone_gamma_paths,
+                    out,
+                    model_type=model_type,
+                )
+            elif ltype == 'pcmaffine':
+                _export_pcmaffine(layer_key, layer, features, onnx_weights, out)
+            elif ltype == 'pdmaffine':
+                _export_pdmaffine(layer_key, layer, features, onnx_weights, out)
+            elif ltype in ('add_pt', 'pcm_add_pt'):
+                _export_add_pt(layer_key, layer, features, onnx_weights, out)
+            elif ltype == 'pdm_add_pt':
+                _export_pdm_add_pt(layer_key, layer, features, onnx_weights, out)
+
+        provenance = _audit_pcm_parameter_sources(layers, out)
+        tensor_count, total_params = len(out), out.total_values
     if provenance:
         with open(h5_path + '.parameter_sources.json', 'w', encoding='utf-8') as f:
             json.dump(provenance, f, indent=2, allow_nan=False)
             f.write('\n')
 
     if verbose:
-        total_params = sum(data.size for data in out.values())
-        log.info('FeatureMat ONNX→H5: %s  (%d tensors, %s params)', h5_path, len(out), f'{total_params:,}')
+        log.info('FeatureMat ONNX→H5: %s  (%d tensors, %s params)', h5_path, tensor_count, f'{total_params:,}')
 
     return h5_path
 
@@ -179,10 +179,15 @@ def _audit_pcm_parameter_sources(layers, values):
             if not (layer.get('type', '').startswith('pcm') or layer.get('type') == 'parcpmm'):
                 continue
             item = dict(layer_id=layer_id, parameter=key, **source)
-            path = (layer.get('coeffs_path') if key.startswith(('coeff_pt', 'stockmeyer_coeff_pt')) else
-                    layer.get('gamma_path') if key == 'gamma_pt' else
-                    layer.get('bias_path') if key == 'bias_pt' or
-                    (layer.get('type') == 'pcmaffine' and key == 'pt:pt_idx=1') else None) or layer.get('weight_path')
+            path = (
+                layer.get('coeffs_path')
+                if key.startswith(('coeff_pt', 'stockmeyer_coeff_pt'))
+                else layer.get('gamma_path')
+                if key == 'gamma_pt'
+                else layer.get('bias_path')
+                if key == 'bias_pt' or (layer.get('type') == 'pcmaffine' and key == 'pt:pt_idx=1')
+                else None
+            ) or layer.get('weight_path')
             data = values.get(path)
             if source['visibility'] == 'public':
                 attrs = dict(op_class='ParBlockColMajorParameterAudit', type=key)
@@ -781,9 +786,9 @@ def _coeff_matrix(
 
 
 def _polyactrnpoly_coeff_matrix(source: PolyActRNPolySource, n_cols: int) -> np.ndarray:
-    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_module
+    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_activation
 
-    hermite_coeffs = get_hermite_coeffs_for_module(_resolve_activation_cls(source.activation_name), source.degree)
+    hermite_coeffs = get_hermite_coeffs_for_activation(source.activation_name, source.degree)
     return _standard_poly_coeff_matrix(np.ones(n_cols, dtype='float64'), 1.0, 0.0, hermite_coeffs)
 
 
@@ -810,20 +815,6 @@ def _standard_poly_coeff_matrix(
             if he_coeff != 0:
                 coeffs[power] += float(a_n) * float(he_coeff) * np.power(scale, 1 - power)
     return coeffs
-
-
-def _resolve_activation_cls(name: str):
-    import torch.nn as nn
-
-    activations = {
-        'relu': nn.ReLU,
-        'silu': nn.SiLU,
-        'gelu': nn.GELU,
-    }
-    activation_cls = activations.get(name.lower())
-    if activation_cls is None:
-        raise ValueError(f'Unknown activation "{name}". Add it to _resolve_activation_cls.')
-    return activation_cls
 
 
 def _coeff_index(path: str) -> int | None:
