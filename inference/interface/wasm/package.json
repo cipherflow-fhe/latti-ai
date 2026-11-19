@@ -22,6 +22,7 @@
     "test:pregeneration": "bash tests/pregeneration.sh",
     "test:workflow": "bash tests/workflow.sh",
     "test:model-workflow": "bash tests/model-workflow.sh",
+    "test:retina-delivery": "node tests/retina-delivery.mjs",
     "test:model-failures": "node tests/model-failures.mjs",
     "test:model-numerics": "node tests/model-numerics.mjs",
     "test:python-workspace": "node tests/python-workspace.mjs",

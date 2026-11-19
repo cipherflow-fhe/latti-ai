@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>retina ONNX split 参数加密交付校验</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:900px;margin:40px auto;padding:0 20px;color:#172333}button{font:inherit;padding:8px 16px;margin:8px 8px 8px 0;cursor:pointer}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f2f5f8;padding:16px}small{color:#526072}
+</style>
+<h1>retina 参数加密交付校验</h1>
+<p>本页模拟双方流程：模型方切分、编译 suffix 并加密参数 → 数据方用收到的独立 prefix 和本地 CSV 推理 → 模型方解密回传结果。native Runner 步骤使用固定密文回放。</p>
+<p><strong>配套密钥仅用于公开测试样本，不得用于真实业务数据。</strong>本页面通过本地文件授权读取测试密钥，不会上传文件。</p>
+<button id="select">选择交付根目录</button><button id="run" disabled>开始校验</button><button id="download" disabled>下载报告</button>
+<p id="status" role="status">等待选择目录</p><pre id="log"></pre>
+<small>首次加载及密钥校验需要时间；参数包会写入此网站的浏览器 OPFS，可能使用十余 GB 磁盘空间。</small>
+<script type="module">
+import {verifyRetinaDelivery} from './retina-check.mjs';
+let directory,report;const $=id=>document.getElementById(id);let last=0;
+$('select').onclick=async()=>{try{directory=await showDirectoryPicker({mode:'read'});$('status').textContent='已选择：'+directory.name;$('run').disabled=false;}catch(error){$('status').textContent=error.message;}};
+$('run').onclick=async()=>{
+ $('run').disabled=true;$('select').disabled=true;$('download').disabled=true;$('log').textContent='';
+ try{
+  globalThis.retinaCheckResult=await verifyRetinaDelivery(directory,{onProgress:event=>{
+   if(event.type==='stage'){$('log').textContent+=event.name+'\n';$('status').textContent=event.name;}
+   else if(performance.now()-last>500){last=performance.now();$('status').textContent=event.phase+' · '+Math.round((event.elapsedMs||0)/1000)+' 秒';}
+  }});
+  report=retinaCheckResult.report;$('status').textContent='校验通过，最大绝对误差：'+report.maxAbsError;
+  $('log').textContent+='\n'+JSON.stringify(report,null,2);$('download').disabled=false;
+ }catch(error){report={status:'failed',message:error.message};$('status').textContent='校验失败：'+error.message;$('log').textContent+='\n'+error.message;$('download').disabled=false;}
+ finally{$('run').disabled=false;$('select').disabled=false;}
+};
+$('download').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='retina-delivery-check.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+</script>
+</html>

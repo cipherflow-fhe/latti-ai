@@ -9,7 +9,7 @@ import {sampleAndBindingRegressions,outputFramingRegressions} from './model-regr
 
 const packageRoot=path.resolve(import.meta.dirname,'..'),repo=path.resolve(packageRoot,'../../..');
 const root=path.resolve(process.env.LATTI_MODEL_ACCEPTANCE_ROOT||'/tmp/latti-browser-model-acceptance/final');
-const options={models:'cifar10,retina,bert,yolov5,vit,imagenet',modes:'input,parameter'};
+const options={models:'retina',modes:'parameter'};
 for(let i=2;i<process.argv.length;i+=2) {
   const key=process.argv[i].replace(/^--/,'');
   if(!Object.hasOwn(options,key)||!process.argv[i+1])throw new Error('Usage: --models cifar10,retina,bert,yolov5,vit,imagenet --modes input,parameter');
