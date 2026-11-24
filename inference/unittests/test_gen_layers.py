@@ -63,6 +63,8 @@ from inference.model_generator.layers.par_upper_diagonal_polyact import (  # noq
     ParUpperDiagonalPolyActRNPoly,
 )
 from inference.model_generator.layers.par_upper_diagonal_poly import ParUpperDiagonalPoly  # noqa: E402
+from inference.model_generator.layers.poly_relu2d import PolyRelu2D  # noqa: E402
+from inference.model_generator.layers.poly2d import Poly2D  # noqa: E402
 from inference.model_generator.layers.par_upper_diagonal_poly_mult_ct import ParUpperDiagonalPolyMultCt  # noqa: E402
 from inference.model_generator.layers.par_upper_diagonal_softmax import (  # noqa: E402
     ParUpperDiagonalAddPt,
@@ -855,6 +857,685 @@ class TestLayerExport(unittest.TestCase):
             / f'level_{level}',
             processor=Processor.CPU,
         )
+
+    def test_poly_relu_stockmeyer_feature2d(self):
+        N = 16384
+        set_param('PN14QP438')
+        n_in_channel = 32
+        input_shape = (32, 32)
+        skip = (1, 1)
+        n_in_channel_per_ct = int(np.floor(N / 2 / (input_shape[0] * input_shape[1])))
+        n_pack_in_channel = int(np.ceil(n_in_channel / n_in_channel_per_ct))
+        order0 = 7
+        order1 = 7
+        level_cost0 = Poly2D.compute_stockmeyer_level_cost(order0)
+        level_cost1 = Poly2D.compute_stockmeyer_level_cost(order1)
+        level = level_cost0 + level_cost1 + 1  # +1 for sign(x)*x multiplication
+
+        input_ct = [CkksCiphertextNode(f'input{k}', level) for k in range(n_pack_in_channel)]
+        weight_pt0 = [
+            [CkksPlaintextRingtNode(f'poly0w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order0 + 1)
+        ]
+        poly_layer0 = Poly2D(input_shape, order0, skip, n_in_channel_per_ct)
+        output_ct0 = poly_layer0.call_stockmeyer_feature2d(input_ct, weight_pt0)
+
+        weight_pt1 = [
+            [CkksPlaintextRingtNode(f'poly1w_{i}_{j}') for j in range(n_pack_in_channel)] for i in range(order1 + 1)
+        ]
+        poly_layer1 = Poly2D(input_shape, order1, skip, n_in_channel_per_ct)
+        output_ct1 = poly_layer1.call_stockmeyer_feature2d(output_ct0, weight_pt1)
+
+        output_ct = list()
+        for idx in range(len(output_ct1)):
+            tmp = input_ct[idx]
+            if tmp.level > output_ct1[idx].level:
+                tmp = drop_level(tmp, tmp.level - output_ct1[idx].level)
+            tmp0 = rescale(relin(mult(output_ct1[idx], tmp)))
+            tmp1 = input_ct[idx]
+            if tmp1.level > tmp0.level:
+                tmp1 = drop_level(tmp1, tmp1.level - tmp0.level)
+            output_ct.append(add(tmp0, tmp1))
+
+        input_args = list()
+        input_args.append(Argument('input_node', input_ct))
+        for i in range(order0 + 1):
+            input_args.append(Argument(f'poly0_weight_pt{i}', weight_pt0[i]))
+        for i in range(order1 + 1):
+            input_args.append(Argument(f'poly1_weight_pt{i}', weight_pt1[i]))
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=base_path
+            / f'CKKS_poly_relu_stockmeyer_{n_in_channel}_channel_order_{order0}_{order1}'
+            / f'level_{level}',
+            fpga_acc=False,
+        )
+
+    def test_poly_maxpool_binary_stockmeyer_feature2d(self):
+        from inference.model_generator.layers.poly_maxpool2d_layer import (
+            binary_max_stockmeyer,
+        )
+
+        N = 32768
+        set_param('PN15QP880')
+
+        n_channel = 32
+        input_shape = (32, 32)
+        skip = (1, 1)
+        order = 7
+
+        n_channel_per_ct = (N // 2) // (input_shape[0] * input_shape[1])
+        n_ct = math.ceil(n_channel / n_channel_per_ct)
+
+        # One binary Max: 3 + 3 + 1 + 1 = 8 levels
+        level = 8
+
+        input_ct = [
+            CkksCiphertextNode(f'input{k}', level)
+            for k in range(n_ct)
+        ]
+
+        # Compare each slot with its right neighbor
+        right_ct = [
+            rotate_cols(ct, [1])[0]
+            for ct in input_ct
+        ]
+
+        weight_pt0 = [
+            [
+                CkksPlaintextRingtNode(f'poly0w_{i}_{j}')
+                for j in range(n_ct)
+            ]
+            for i in range(order + 1)
+        ]
+
+        weight_pt1 = [
+            [
+                CkksPlaintextRingtNode(f'poly1w_{i}_{j}')
+                for j in range(n_ct)
+            ]
+            for i in range(order + 1)
+        ]
+
+        half_pt = [
+            CkksPlaintextRingtNode(f'half_pt_{j}')
+            for j in range(n_ct)
+        ]
+
+        output_ct = binary_max_stockmeyer(
+            input_ct,
+            right_ct,
+            weight_pt0,
+            weight_pt1,
+            half_pt,
+            input_shape,
+            skip,
+            n_channel_per_ct,
+        )
+
+        assert all(ct.level == 0 for ct in output_ct)
+
+        input_args = [Argument('input_node', input_ct)]
+
+        for i in range(order + 1):
+            input_args.append(
+                Argument(f'poly0_weight_pt{i}', weight_pt0[i])
+            )
+
+        for i in range(order + 1):
+            input_args.append(
+                Argument(f'poly1_weight_pt{i}', weight_pt1[i])
+            )
+
+        input_args.append(Argument('half_weight_pt', half_pt))
+
+        process_custom_task(
+            input_args=input_args,
+            output_args=[Argument('output_ct', output_ct)],
+            output_instruction_path=base_path
+            / 'CKKS_poly_maxpool_binary_stockmeyer'
+            / f'level_{level}',
+            fpga_acc=False,
+        )
+
+    # def test_poly_maxpool2x2_core_stockmeyer_feature2d(self):
+    #     from inference.model_generator.layers.poly_maxpool2d_layer import (
+    #         binary_max_stockmeyer,
+    #     )
+
+    #     # ==================================================
+    #     # 1. CKKS parameters
+    #     # ==================================================
+    #     N = 32768
+    #     set_param('PN15QP880')
+
+    #     n_channel = 32
+    #     input_shape = (32, 32)
+    #     skip = (1, 1)
+    #     order = 7
+
+    #     n_channel_per_ct = (
+    #         (N // 2) // (input_shape[0] * input_shape[1])
+    #     )
+    #     n_ct = math.ceil(n_channel / n_channel_per_ct)
+
+    #     # Each binary Max:
+    #     #   poly0: 3 levels
+    #     #   poly1: 3 levels
+    #     #   diff * sign: 1 level
+    #     #   multiply by 0.5: 1 level
+    #     # Total: 8 levels per round
+    #     #
+    #     # Two rounds: 17 -> 9 -> 1
+    #     level = 17
+
+    #     # ==================================================
+    #     # 2. Input ciphertext nodes
+    #     # ==================================================
+    #     input_ct = [
+    #         CkksCiphertextNode(f'input{k}', level)
+    #         for k in range(n_ct)
+    #     ]
+
+    #     # ==================================================
+    #     # 3. Create polynomial plaintext weight nodes
+    #     # ==================================================
+    #     def make_poly_weights(prefix):
+    #         return [
+    #             [
+    #                 CkksPlaintextRingtNode(
+    #                     f'{prefix}_{i}_{j}'
+    #                 )
+    #                 for j in range(n_ct)
+    #             ]
+    #             for i in range(order + 1)
+    #         ]
+
+    #     # Round 1 weights: input level 17
+    #     weight_pt0_r1 = make_poly_weights('poly0_r1')
+    #     weight_pt1_r1 = make_poly_weights('poly1_r1')
+
+    #     # Round 2 weights: input level 9
+    #     weight_pt0_r2 = make_poly_weights('poly0_r2')
+    #     weight_pt1_r2 = make_poly_weights('poly1_r2')
+
+    #     # Separate 0.5 plaintext nodes for each round
+    #     half_pt_r1 = [
+    #         CkksPlaintextRingtNode(f'half_r1_{j}')
+    #         for j in range(n_ct)
+    #     ]
+
+    #     half_pt_r2 = [
+    #         CkksPlaintextRingtNode(f'half_r2_{j}')
+    #         for j in range(n_ct)
+    #     ]
+
+    #     # ==================================================
+    #     # 4. Round 1: Horizontal binary Max
+    #     # ==================================================
+    #     right_step = skip[1]
+
+    #     right_ct = [
+    #         rotate_cols(ct, [right_step])[0]
+    #         for ct in input_ct
+    #     ]
+
+    #     horiz_max_ct = binary_max_stockmeyer(
+    #         input_ct,
+    #         right_ct,
+    #         weight_pt0_r1,
+    #         weight_pt1_r1,
+    #         half_pt_r1,
+    #         input_shape,
+    #         skip,
+    #         n_channel_per_ct,
+    #     )
+
+    #     # Expected: level 17 -> 9
+    #     assert all(ct.level == 9 for ct in horiz_max_ct)
+
+    #     # ==================================================
+    #     # 5. Round 2: Vertical binary Max
+    #     # ==================================================
+    #     down_step = (
+    #         input_shape[1] * skip[0] * skip[1]
+    #     )
+
+    #     down_ct = [
+    #         rotate_cols(ct, [down_step])[0]
+    #         for ct in horiz_max_ct
+    #     ]
+
+    #     output_ct = binary_max_stockmeyer(
+    #         horiz_max_ct,
+    #         down_ct,
+    #         weight_pt0_r2,
+    #         weight_pt1_r2,
+    #         half_pt_r2,
+    #         input_shape,
+    #         skip,
+    #         n_channel_per_ct,
+    #     )
+
+    #     # Expected: level 9 -> 1
+    #     assert all(ct.level == 1 for ct in output_ct)
+
+    #     # ==================================================
+    #     # 6. Register graph input arguments
+    #     # ==================================================
+    #     input_args = [
+    #         Argument('input_node', input_ct)
+    #     ]
+
+    #     # Register polynomial coefficients separately
+    #     # for each round
+    #     for prefix, weights in [
+    #         ('poly0_r1', weight_pt0_r1),
+    #         ('poly1_r1', weight_pt1_r1),
+    #         ('poly0_r2', weight_pt0_r2),
+    #         ('poly1_r2', weight_pt1_r2),
+    #     ]:
+    #         for i in range(order + 1):
+    #             input_args.append(
+    #                 Argument(
+    #                     f'{prefix}_weight_pt{i}',
+    #                     weights[i],
+    #                 )
+    #             )
+
+    #     # Register separate 0.5 plaintext weights
+    #     input_args.append(
+    #         Argument('half_weight_pt_r1', half_pt_r1)
+    #     )
+    #     input_args.append(
+    #         Argument('half_weight_pt_r2', half_pt_r2)
+    #     )
+
+    #     # ==================================================
+    #     # 7. Generate FHE computation graph
+    #     # ==================================================
+    #     process_custom_task(
+    #         input_args=input_args,
+    #         output_args=[
+    #             Argument('output_ct', output_ct)
+    #         ],
+    #         output_instruction_path=(
+    #             base_path
+    #             / 'CKKS_poly_maxpool2x2_core_stockmeyer'
+    #             / f'level_{level}'
+    #         ),
+    #         fpga_acc=False,
+    #     )
+
+
+    def test_poly_maxpool2x2_core_stockmeyer_feature2d(self):
+        from inference.model_generator.layers.poly_maxpool2d_layer import (
+            binary_max_stockmeyer,
+            repack_maxpool2x2_multiplexed,
+        )
+
+        # 1. CKKS parameters
+        N = 32768
+        set_param('PN15QP880')
+
+        n_channel = 32
+        input_shape = (32, 32)
+        skip = (1, 1)
+        order = 7
+        level = 17
+
+        n_channel_per_ct = (
+            (N // 2) // (input_shape[0] * input_shape[1])
+        )
+        n_ct = math.ceil(n_channel / n_channel_per_ct)
+
+        # 2. Input ciphertexts
+        input_ct = [
+            CkksCiphertextNode(f'input{k}', level)
+            for k in range(n_ct)
+        ]
+
+        # 3. Polynomial weights
+        def make_poly_weights(prefix):
+            return [
+                [
+                    CkksPlaintextRingtNode(f'{prefix}_{i}_{j}')
+                    for j in range(n_ct)
+                ]
+                for i in range(order + 1)
+            ]
+
+        weight_pt0_r1 = make_poly_weights('poly0_r1')
+        weight_pt1_r1 = make_poly_weights('poly1_r1')
+        weight_pt0_r2 = make_poly_weights('poly0_r2')
+        weight_pt1_r2 = make_poly_weights('poly1_r2')
+
+        half_pt_r1 = [
+            CkksPlaintextRingtNode(f'half_r1_{j}')
+            for j in range(n_ct)
+        ]
+        half_pt_r2 = [
+            CkksPlaintextRingtNode(f'half_r2_{j}')
+            for j in range(n_ct)
+        ]
+
+        # 4. Round 1: Horizontal Max (17 -> 9)
+        right_step = skip[1]
+
+        right_ct = [
+            rotate_cols(ct, [right_step])[0]
+            for ct in input_ct
+        ]
+
+        horiz_max_ct = binary_max_stockmeyer(
+            input_ct,
+            right_ct,
+            weight_pt0_r1,
+            weight_pt1_r1,
+            half_pt_r1,
+            input_shape,
+            skip,
+            n_channel_per_ct,
+        )
+
+        assert all(ct.level == 9 for ct in horiz_max_ct)
+
+        # 5. Round 2: Vertical Max (9 -> 1)
+        down_step = input_shape[1] * skip[0] * skip[1]
+
+        down_ct = [
+            rotate_cols(ct, [down_step])[0]
+            for ct in horiz_max_ct
+        ]
+
+        core_output_ct = binary_max_stockmeyer(
+            horiz_max_ct,
+            down_ct,
+            weight_pt0_r2,
+            weight_pt1_r2,
+            half_pt_r2,
+            input_shape,
+            skip,
+            n_channel_per_ct,
+        )
+
+        assert all(ct.level == 1 for ct in core_output_ct)
+
+        # 6. MaxPooling selection mask nodes
+        stride = (2, 2)
+        out_channels_per_ct = (
+            n_channel_per_ct * stride[0] * stride[1]
+        )
+        n_select_pt = min(n_channel, out_channels_per_ct)
+
+        select_tensor_pt = [
+            CkksPlaintextRingtNode(f'maxpool_select_{i}')
+            for i in range(n_select_pt)
+        ]
+
+        # 7. Repack MaxPooling output (1 -> 0)
+        output_ct = repack_maxpool2x2_multiplexed(
+            core_output_ct,
+            select_tensor_pt,
+            n_channel,
+            n_channel_per_ct,
+            input_shape,
+            skip,
+        )
+
+        expected_n_out_ct = math.ceil(
+            n_channel / out_channels_per_ct
+        )
+
+        assert len(output_ct) == expected_n_out_ct
+        assert all(ct.level == 0 for ct in output_ct)
+
+        # 8. Register input arguments
+        input_args = [
+            Argument('input_node', input_ct)
+        ]
+
+        for prefix, weights in [
+            ('poly0_r1', weight_pt0_r1),
+            ('poly1_r1', weight_pt1_r1),
+            ('poly0_r2', weight_pt0_r2),
+            ('poly1_r2', weight_pt1_r2),
+        ]:
+            for i in range(order + 1):
+                input_args.append(
+                    Argument(
+                        f'{prefix}_weight_pt{i}',
+                        weights[i],
+                    )
+                )
+
+        input_args.append(
+            Argument('half_weight_pt_r1', half_pt_r1)
+        )
+        input_args.append(
+            Argument('half_weight_pt_r2', half_pt_r2)
+        )
+        input_args.append(
+            Argument('maxpool_select_pt', select_tensor_pt)
+        )
+
+        # 9. Generate FHE computation graph
+        process_custom_task(
+            input_args=input_args,
+            output_args=[
+                Argument('output_ct', output_ct)
+            ],
+            output_instruction_path=(
+                base_path
+                / 'CKKS_poly_maxpool2x2_repack_stockmeyer'
+                / f'level_{level}'
+            ),
+            fpga_acc=False,
+        )
+
+
+    def test_poly_maxpool2x2_range_norm_stockmeyer_feature2d(self):
+        from inference.model_generator.layers.poly_maxpool2d_layer import (
+            poly_maxpool2x2_range_norm_stockmeyer,
+        )
+        from inference.model_generator.layers.range_norm_maxpool import (
+            PolyMaxPoolConfig,
+            scaling_plan,
+        )
+        from inference.model_generator.layers.poly_base import PolyBase
+        from training.model_compiler.components import (
+            PN13QP218,
+            PN14QP438,
+            PN15QP880,
+            PN16QP1761,
+        )
+
+        # 1. Default configuration and calibration
+        config = PolyMaxPoolConfig()
+        running_max = 10.0
+        plan = scaling_plan(running_max, config)
+
+        order = plan["degree_p0"]
+        assert order == plan["degree_p1"] == 7
+
+        # 2. Compute required Level
+        poly_cost = PolyBase.compute_stockmeyer_level_cost(order)
+        binary_cost = 2 * poly_cost + 2
+
+        total_cost = (
+            1                     # Input normalization
+            + 2 * binary_cost     # Two binary Max rounds
+            + 1                   # Repacking
+            + 1                   # Output restoration
+        )
+
+        # 3. Choose CKKS parameters based on Level
+        params = (
+            PN13QP218,
+            PN14QP438,
+            PN15QP880,
+            PN16QP1761,
+        )
+
+        selected = next(
+            (p for p in params if p.max_level >= total_cost),
+            None,
+        )
+
+        if selected is None:
+            raise RuntimeError(
+                f"No CKKS parameter supports {total_cost} levels"
+            )
+
+        set_param(selected.name)
+        N = selected.poly_modulus_degree
+        level = total_cost
+
+        # 4. Feature layout
+        n_channel = 32
+        input_shape = (32, 32)
+        skip = (1, 1)
+        stride = (2, 2)
+
+        n_channel_per_ct = (
+            (N // 2) // (input_shape[0] * input_shape[1])
+        )
+        n_ct = math.ceil(n_channel / n_channel_per_ct)
+
+        out_channels_per_ct = (
+            n_channel_per_ct * stride[0] * stride[1]
+        )
+        n_out_ct = math.ceil(
+            n_channel / out_channels_per_ct
+        )
+        n_select_pt = min(n_channel, out_channels_per_ct)
+
+        # 5. Input and normalization plaintext nodes
+        input_ct = [
+            CkksCiphertextNode(f"input{k}", level)
+            for k in range(n_ct)
+        ]
+
+        input_norm_pt = [
+            CkksPlaintextRingtNode(f"input_norm_{j}")
+            for j in range(n_ct)
+        ]
+
+        output_restore_pt = [
+            CkksPlaintextRingtNode(f"output_restore_{j}")
+            for j in range(n_out_ct)
+        ]
+
+        # 6. Polynomial coefficients
+        def make_poly_weights(prefix):
+            return [
+                [
+                    CkksPlaintextRingtNode(f"{prefix}_{i}_{j}")
+                    for j in range(n_ct)
+                ]
+                for i in range(order + 1)
+            ]
+
+        weight_pt0_r1 = make_poly_weights("poly0_r1")
+        weight_pt1_r1 = make_poly_weights("poly1_r1")
+        weight_pt0_r2 = make_poly_weights("poly0_r2")
+        weight_pt1_r2 = make_poly_weights("poly1_r2")
+
+        half_pt_r1 = [
+            CkksPlaintextRingtNode(f"half_r1_{j}")
+            for j in range(n_ct)
+        ]
+
+        half_pt_r2 = [
+            CkksPlaintextRingtNode(f"half_r2_{j}")
+            for j in range(n_ct)
+        ]
+
+        select_tensor_pt = [
+            CkksPlaintextRingtNode(f"maxpool_select_{i}")
+            for i in range(n_select_pt)
+        ]
+
+        # 7. Generate normalized MaxPooling graph
+        output_ct, returned_plan = (
+            poly_maxpool2x2_range_norm_stockmeyer(
+                x=input_ct,
+                input_norm_pt=input_norm_pt,
+                output_restore_pt=output_restore_pt,
+                weight_pt0_r1=weight_pt0_r1,
+                weight_pt1_r1=weight_pt1_r1,
+                weight_pt0_r2=weight_pt0_r2,
+                weight_pt1_r2=weight_pt1_r2,
+                half_pt_r1=half_pt_r1,
+                half_pt_r2=half_pt_r2,
+                select_tensor_pt=select_tensor_pt,
+                n_channel=n_channel,
+                n_channel_per_ct=n_channel_per_ct,
+                input_shape=input_shape,
+                skip=skip,
+                running_max=running_max,
+                config=config,
+            )
+        )
+
+        assert returned_plan == plan
+        assert len(output_ct) == n_out_ct
+        assert all(
+            ct.level == level - total_cost
+            for ct in output_ct
+        )
+
+        # 8. Register graph arguments
+        input_args = [
+            Argument("input_node", input_ct),
+            Argument("input_norm_pt", input_norm_pt),
+        ]
+
+        for prefix, weights in [
+            ("poly0_r1", weight_pt0_r1),
+            ("poly1_r1", weight_pt1_r1),
+            ("poly0_r2", weight_pt0_r2),
+            ("poly1_r2", weight_pt1_r2),
+        ]:
+            for i in range(order + 1):
+                input_args.append(
+                    Argument(
+                        f"{prefix}_weight_pt{i}",
+                        weights[i],
+                    )
+                )
+
+        input_args.extend([
+            Argument("half_weight_pt_r1", half_pt_r1),
+            Argument("half_weight_pt_r2", half_pt_r2),
+            Argument("maxpool_select_pt", select_tensor_pt),
+            Argument("output_restore_pt", output_restore_pt),
+        ])
+
+        print(
+            f"CKKS={selected.name}, N={N}, "
+            f"input_level={level}, "
+            f"output_level={output_ct[0].level}, "
+            f"input_multiplier={plan['inv_scale']}, "
+            f"output_multiplier={plan['scale']}, "
+            f"B1={plan['B_r1']}, B2={plan['B_r2']}"
+        )
+
+        # 9. Save FHE DAG
+        process_custom_task(
+            input_args=input_args,
+            output_args=[
+                Argument("output_ct", output_ct)
+            ],
+            output_instruction_path=(
+                base_path
+                / "CKKS_poly_maxpool2x2_range_norm_stockmeyer"
+                / f"level_{level}"
+            ),
+            fpga_acc=False,
+        )
+
+
 
     def test_poly_bsgs_feature0d(self):
         N = 16384

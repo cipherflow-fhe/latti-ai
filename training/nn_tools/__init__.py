@@ -20,10 +20,12 @@ suitable for encrypted inference, and export models to ONNX / H5 formats.
 """
 
 from .activations import RangeNorm2d, PolyAct, PolyActRNPoly, RangeNormPoly2d, FHELayerNorm
-from .modules import DepthwiseAvgPool2d
+from .modules import DepthwiseAvgPool2d, PolyMaxPool2d
 from .replace import (
     replace_activation,
     replace_activation_with_poly,
+    configure_maxpool,
+    replace_maxpool_with_poly,
     replace_maxpool_with_avgpool,
     replace_layernorm_with_fhe,
     replace_general_avgpool_with_depthwise_conv,
@@ -47,9 +49,12 @@ __all__ = [
     'FHELayerNorm',
     # Modules
     'DepthwiseAvgPool2d',
+    'PolyMaxPool2d',
     # Replace
     'replace_activation',
     'replace_activation_with_poly',
+    'configure_maxpool',
+    'replace_maxpool_with_poly',
     'replace_maxpool_with_avgpool',
     'replace_layernorm_with_fhe',
     'replace_general_avgpool_with_depthwise_conv',

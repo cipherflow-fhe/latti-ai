@@ -69,3 +69,6 @@ cifar10/
 lfw/
 resnet/
 resnet_new/
+
+# Local MaxPool exploratory archive
+docs/zh/archive/maxpool/

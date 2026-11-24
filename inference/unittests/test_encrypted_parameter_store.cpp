@@ -6,12 +6,42 @@
 #include <chrono>
 #include <fstream>
 #include "fhe_api.h"
+#include "fhe_layers/maxpool_plaintext.h"
 #include "interface/encrypted_parameter_store.h"
 #include "interface/runner_bundle_io.h"
 #include "util/serial.h"
 
 namespace fs = std::filesystem;
 using namespace fhe_ops_lib;
+
+TEST_CASE("public MaxPool recipes multiply native v6 ciphertexts", "[maxpool_public]") {
+    const auto param = CkksParameter::create_parameter(13, RingType::ConjugateInvariant);
+    auto ctx = CkksContext::create_random_context(param);
+    const int level = 1;
+    const auto input = ctx.encrypt(fhe_api::encode(ctx, std::vector<double>(param.max_slots(), 0.5),
+                                                  level, param.default_scale()));
+    for (bool full_rns : {false, true}) {
+        for (const auto& kind : {"constant", "mask", "prefix"}) {
+            json desc = {{"level", level}, {"value", 0.25}, {"kind", kind},
+                         {"encoding", full_rns ? "full_rns" : "ringt"},
+                         {"indices", {1, 3}}, {"length", 2}};
+            if (full_rns) desc["scale"] = param.default_scale();
+            auto pt = encode_maxpool_plaintext(ctx, desc);
+            REQUIRE(pt.level() == (full_rns ? level : 0));
+            auto product = ctx.mult(input, pt);
+            std::vector<double> decoded;
+            ctx.decode(ctx.decrypt(product), decoded);
+            for (size_t i = 0; i < decoded.size(); ++i) {
+                const bool selected = std::string(kind) == "constant" ||
+                    (std::string(kind) == "mask" && (i == 1 || i == 3)) ||
+                    (std::string(kind) == "prefix" && i < 2);
+                REQUIRE(decoded[i] == Approx(selected ? 0.125 : 0.).margin(1e-5));
+            }
+        }
+    }
+    REQUIRE_THROWS(encode_maxpool_plaintext(ctx, json{{"level", level}, {"value", 1.},
+                   {"kind", "mask"}, {"indices", {param.max_slots()}}}));
+}
 
 TEST_CASE("lazy store evicts safely and supports containers without an index", "[parameter_store]") {
     const auto param = CkksParameter::create_parameter(14, RingType::ConjugateInvariant);

@@ -22,8 +22,10 @@ from enum import Enum
 import networkx as nx
 
 from components import *
+from maxpool_plan import build_maxpool_plan, build_maxpool_stage_plan
 from inference.model_generator.parameter_sources import public_source, secret_source
 from inference.model_generator.layers.poly_relu_base import PolyReluBase
+from inference.model_generator.layers.poly_base import PolyBase
 from inference.model_generator.layers.mat_poly_base import MatPolyBase
 
 
@@ -290,6 +292,9 @@ def add_layer(
         ckks_scale,
         shape,
     )
+    if hasattr(feature_node_in, 'maxpool_state'):
+        # Level/scale adapters preserve the full group-major live set.
+        feature_node_out.maxpool_state = copy.deepcopy(feature_node_in.maxpool_state)
     feature_node_out.sp_info = feature_node_in.sp_info.copy()
     feature_node_out.data_type = feature_node_in.data_type
 
@@ -688,18 +693,40 @@ def infer_shapes_skips_and_pack_num(graph: LayerAbstractGraph):
         if succ.dim != 0:
             graph.dag.nodes[succ]['skip'] = [1] * succ.dim
 
+        if compute_node.layer_type.startswith('maxpool2d_'):
+            # Tap normalization already writes dense output planes; generic
+            # pass-through inference would overwrite them with input shape.
+            succ.shape = list(compute_node.maxpool_output_shape)
+            populate_pack_num(graph.dag, compute_node, config.fhe_param.n_slots)
+            continue
+
         if process_special_info(graph, compute_node, preds, succ):
             populate_pack_num(graph.dag, compute_node, config.fhe_param.n_slots)
             continue
         if succ.dim > 0:
             if isinstance(compute_node, SpatialComputeNode):
-                for i in range(compute_node.dim):
-                    succ.shape[i] = (
-                        preds[0].shape[i]
-                        // compute_node.stride[i]
-                        * compute_node.upsample_factor_in[i]
-                        * compute_node.upsample_factor[i]
+                maxpool_output_shape = None
+                if compute_node.layer_type == 'maxpool2d':
+                    plan = build_maxpool_plan(
+                        {
+                            'kernel_shape': compute_node.kernel_shape,
+                            'stride': compute_node.stride,
+                            'padding': compute_node.padding,
+                        },
+                        preds[0].shape,
                     )
+                    maxpool_output_shape = plan['output_shape']
+
+                for i in range(compute_node.dim):
+                    if maxpool_output_shape is not None:
+                        succ.shape[i] = maxpool_output_shape[i]
+                    else:
+                        succ.shape[i] = (
+                            preds[0].shape[i]
+                            // compute_node.stride[i]
+                            * compute_node.upsample_factor_in[i]
+                            * compute_node.upsample_factor[i]
+                        )
                     graph.dag.nodes[succ]['skip'][i] = (
                         graph.dag.nodes[preds[0]]['skip'][i]
                         * compute_node.stride[i]
@@ -873,6 +900,113 @@ def replace_avgpool1d_with_depthwise_conv(graph: LayerAbstractGraph):
         graph.dag.remove_node(node)
 
 
+def expand_maxpool_for_btp(graph: LayerAbstractGraph):
+    """Lower Retina MaxPool to explicit layout and arithmetic nodes.
+
+    Like GELU/Softmax, each sign polynomial is one compute node, and binary
+    arithmetic has ordered feature edges so DP sees every live dependency.
+    """
+    for pool in list(graph.dag.nodes):
+        if not isinstance(pool, ComputeNode) or pool.layer_type != 'maxpool2d':
+            continue
+        preds = list(graph.dag.predecessors(pool))
+        succs = list(graph.dag.successors(pool))
+        if len(preds) != 1 or len(succs) != 1:
+            raise ValueError(f'MaxPool node {pool.layer_id} must have one input and output')
+        if list(pool.kernel_shape) != [3, 3] or list(pool.stride) != [2, 2] or list(pool.padding) != [1, 1]:
+            continue
+
+        input_feature = preds[0]
+        output_feature = succs[0]
+        from training.nn_tools.fixed_maxpool_profiles import get_maxpool_profile
+        from inference.model_generator.layers.poly_base import PolyBase
+        from inference.model_generator.layers.poly_maxpool_taps import build_interleaved_maxpool_tap_masks
+        alpha = getattr(pool, 'alpha', 7)
+        degrees = get_maxpool_profile(alpha)['degrees']
+        polynomial_costs = [PolyBase.compute_stockmeyer_level_cost(d) for d in degrees]
+        if max(polynomial_costs) > config.fhe_param.max_level:
+            raise ValueError('MaxPool polynomial exceeds CKKS level budget')
+        for name in ('upper_bound', 'B'):
+            value = getattr(pool, name, 1.0)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'MaxPool {name} must be positive and finite')
+        plan = build_maxpool_plan(pool.__dict__, input_feature.shape)
+        channels = input_feature.channel
+        slots = config.fhe_param.n_slots
+        specs = build_interleaved_maxpool_tap_masks(plan, plan['output_shape'], channels, slots, 1.)
+        graph.dag.remove_node(pool)
+
+        def append(name, op, inputs, cost=0, *, packed=False, final=False, **parameters):
+            layer_id = f'{pool.layer_id}_{name}'
+            node = ComputeNode(layer_id, f'maxpool2d_{op}', channels, channels)
+            for attr in ('kernel_shape', 'stride', 'padding'):
+                setattr(node, attr, list(getattr(pool, attr)))
+            node.maxpool_primitive = dict(op=op, **parameters)
+            node.maxpool_stage = name
+            node.maxpool_output_shape = list(plan['output_shape'])
+            node.is_adaptive_avgpool = False
+            node.level_cost = cost
+            node.running_max = getattr(pool, 'running_max', None)
+            node.alpha = alpha
+            node.upper_bound = getattr(pool, 'upper_bound', 1.)
+            node.B = getattr(pool, 'B', 1.)
+            feature = output_feature if final else _new_feature_like(input_feature, f'{layer_id}_out', list(plan['output_shape']))
+            if not final:
+                feature.maxpool_state = {'pool_id': pool.layer_id, 'groups': 1,
+                                        'channels': math.ceil(channels / (slots // math.prod(plan['output_shape']))) if packed else channels,
+                                        'order': 'group_channel'}
+                graph.dag.add_node(feature, **_feature_attrs_like(graph, input_feature, feature))
+            graph.dag.add_node(node, **_compute_attrs(cost, layer_id))
+            for index, source in enumerate(inputs):
+                graph.dag.add_edge(source, node, input_index=index)
+            graph.dag.add_edge(node, feature)
+            return feature
+
+        # Layout access is explicit: select an interleaved source, rotate,
+        # multiply by a padding/normalization mask, then add valid branches.
+        taps = []
+        for t, branches in enumerate(specs):
+            tap = None
+            for b, spec in enumerate(branches):
+                prefix = f'tap_{t}_branch_{b}'
+                branch = append(prefix + '_source', 'source', [input_feature],
+                                source_block=spec['source_block'])
+                if spec['rotation_step']:
+                    branch = append(prefix + '_rotate', 'rotate', [branch],
+                                    steps=[spec['rotation_step']])
+                branch = append(prefix + '_mask', 'mask', [branch], 1, tap=t, branch=b)
+                tap = branch if tap is None else append(prefix + '_add', 'add', [tap, branch])
+            taps.append(tap)
+
+        def reduce_pair(left, right, r, pair):
+            prefix = f'round_{r + 1}_pair_{pair}'
+            total = append(prefix + '_sum', 'add', [left, right])
+            difference = append(prefix + '_difference', 'sub', [left, right])
+            sign = difference
+            for index, cost in enumerate(polynomial_costs):
+                sign = append(prefix + f'_poly_{index}', 'poly', [sign], cost,
+                              round=r, polynomial=index)
+            product = append(prefix + '_product', 'mult', [difference, sign], 1)
+            return append(prefix + '_result', 'add', [total, product])
+
+        # Sum/difference survive on separate feature edges, including through
+        # ordinary drop-level/Bootstrap adapters selected by DP.
+        current = taps
+        for r, round_plan in enumerate(plan['rounds']):
+            reduced = [reduce_pair(current[i], current[j], r, pair)
+                       for pair, (i, j) in enumerate(round_plan['pairs'])]
+            reduced += [append(f'round_{r + 1}_carry_{i}', 'double', [current[i]])
+                        for i in round_plan['carry']]
+            current = reduced
+        selected = append('select', 'select', current, 1)
+        plane = math.prod(plan['output_shape'])
+        per_ct = slots // plane
+        rotated = append('pack_rotate', 'rotate', [selected],
+                         steps=[-(c % per_ct) * plane for c in range(channels)])
+        packed = append('pack_add', 'pack', [rotated], packed=True)
+        append('restore', 'restore', [packed], 1, packed=True, final=True)
+
+
 def set_level_costs(graph: LayerAbstractGraph):
     for node in graph.dag.nodes:
         if not isinstance(node, ComputeNode):
@@ -905,6 +1039,58 @@ def set_level_costs(graph: LayerAbstractGraph):
                             graph.dag.nodes[compute_node]['level_cost'] = 2
             else:
                 raise ValueError('Unsupported config.style')
+
+        elif hasattr(compute_node, 'maxpool_primitive'):
+            from inference.model_generator.layers.poly_maxpool_primitives import maxpool_primitive_level_cost
+            expected = maxpool_primitive_level_cost(compute_node.maxpool_primitive, compute_node.alpha)
+            if compute_node.level_cost != expected:
+                raise ValueError(f'Invalid MaxPool primitive cost; expected {expected}')
+            graph.dag.nodes[compute_node]['level_cost'] = compute_node.level_cost
+
+        elif compute_node.layer_type.startswith('maxpool2d_'):
+            # Lowered stages carry their own cost from maxpool_plan.  Do not
+            # collapse them back to the fused 31-level node before DP runs.
+            level_cost = int(
+                getattr(compute_node, 'level_cost', graph.dag.nodes[compute_node].get('level_cost', 0))
+            )
+            from inference.model_generator.layers.poly_maxpool_cost import get_maxpool_compare_cost
+            stage = compute_node.maxpool_stage
+            from training.model_compiler.maxpool_plan import parse_maxpool_split_stage
+            split = parse_maxpool_split_stage(stage)
+            if split is not None:
+                from training.nn_tools.fixed_maxpool_profiles import get_maxpool_profile
+                from inference.model_generator.layers.poly_base import PolyBase
+                degrees = get_maxpool_profile(getattr(compute_node, 'alpha', 7))['degrees']
+                expected_cost = 1 if split[1] == 'finish' else PolyBase.compute_stockmeyer_level_cost(degrees[split[1]])
+            elif stage.startswith('reduce_round_'):
+                expected_cost = get_maxpool_compare_cost(getattr(compute_node, 'alpha', 7))
+            elif stage in {'normalize_taps', 'repack', 'restore'}:
+                expected_cost = 1
+            else:
+                raise ValueError(f'Unknown MaxPool stage: {stage}')
+            if level_cost != expected_cost:
+                raise ValueError(f'Invalid MaxPool stage cost: {level_cost}; expected {expected_cost}')
+            graph.dag.nodes[compute_node]['level_cost'] = level_cost
+
+        elif compute_node.layer_type == 'maxpool2d':
+            kernel = list(compute_node.kernel_shape)
+            stride = list(compute_node.stride)
+            padding = list(compute_node.padding)
+
+            if kernel == [2, 2] and stride == [2, 2] and padding == [0, 0]:
+                level_cost = 19
+
+            elif kernel == [3, 3] and stride == [2, 2] and padding == [1, 1]:
+                level_cost = 31
+
+            else:
+                raise NotImplementedError(
+                    f"Unsupported PolyMaxPool2D: "
+                    f"kernel={kernel}, stride={stride}, padding={padding}"
+                )
+
+            graph.dag.nodes[compute_node]['level_cost'] = level_cost
+
 
         elif compute_node.layer_type in {'avgpool1d', 'avgpool2d'}:
             if any(preds[0].shape[i] > config.block_shape[i] for i in range(preds[0].dim)):
@@ -1562,7 +1748,7 @@ def _append_bert_softmax(graph: LayerAbstractGraph, base_id: str, scores: Featur
             [c * initial_denominator_scale ** (1.0 / max(1, delta_1)) for c in coefficients],
         ),
         f'{base_id}_softmax_exp_poly_out',
-        MatPolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(coefficients) - 1),
     )
 
     values = exp_poly
@@ -1901,7 +2087,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         x_scaled,
         _make_upper_poly(f'{base_id}_gelu_poly1', p1),
         f'{base_id}_gelu_f1',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
     )
     f1_scaled = _append_unary_compute(
         graph,
@@ -1915,7 +2101,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         f1_scaled,
         _make_upper_poly(f'{base_id}_gelu_poly2', p2),
         f'{base_id}_gelu_half_tanh',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p2) - 1),
     )
     half_tanh_scaled = _append_unary_compute(
         graph,
@@ -1929,7 +2115,7 @@ def _expand_custom_gelu(graph: LayerAbstractGraph, node: ComputeNode):
         half_tanh_scaled,
         _make_upper_poly(f'{base_id}_gelu_poly3', p3),
         f'{base_id}_gelu_refined',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p3) - 1),
     )
 
     gelu_node = ComputeNode(f'{base_id}_gelu_mult_ct', _pack_pcm_type('pcmpolymultct'), 1, 1)
@@ -1978,7 +2164,7 @@ def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
         x_scaled,
         _make_upper_poly(f'{base_id}_tanh_poly1', p1),
         f'{base_id}_tanh_f1',
-        MatPolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
+        PolyBase.compute_stockmeyer_level_cost(len(p1) - 1),
     )
     f1_scaled = _append_unary_compute(
         graph,
@@ -1990,7 +2176,7 @@ def _expand_custom_tanh(graph: LayerAbstractGraph, node: ComputeNode):
     tanh_node = _make_upper_poly(f'{base_id}_tanh_poly2', p2)
     graph.dag.add_node(
         tanh_node,
-        **_compute_attrs(MatPolyBase.compute_stockmeyer_level_cost(len(p2) - 1), tanh_node.layer_id),
+        **_compute_attrs(PolyBase.compute_stockmeyer_level_cost(len(p2) - 1), tanh_node.layer_id),
     )
     graph.dag.add_edge(f1_scaled, tanh_node)
     graph.dag.add_edge(tanh_node, out, **output_edge_attrs)
