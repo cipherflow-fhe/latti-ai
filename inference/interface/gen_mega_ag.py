@@ -83,15 +83,17 @@ def generate_low_level(
     output_dir=None,
     parameter_loading_mode=None,
     random_seed=None,
+    streaming=False,
 ):
     """Generate a task with the shared frontend/linker and actual key nodes."""
     previous_random = random.getstate()
     try:
         if random_seed is not None:
             random.seed(random_seed)
-        return _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading_mode)
+        return _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading_mode, streaming)
     finally:
         # Also reset failures that occur before process_custom_task's cleanup.
+        frontend_state.g_dag.close_stream()
         frontend_state.g_dag.clear()
         frontend_state.g_evk_node_dict.clear()
         frontend_state.g_param = None
@@ -99,7 +101,7 @@ def generate_low_level(
         random.setstate(previous_random)
 
 
-def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading_mode):
+def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading_mode, streaming):
     if deployment_mode not in ('client_encrypted_input', 'server_provisioned_runner'):
         raise ValueError(f'Unsupported deployment mode: {deployment_mode!r}')
     task_dir = os.path.abspath(task_dir)
@@ -180,6 +182,7 @@ def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading
                     parameter_mode='encrypted_offline',
                     deployment_mode='server_provisioned_runner',
                     parameter_loading_mode=parameter_loading_mode,
+                    streaming=streaming,
                     input_mode='plaintext',
                     output_dir=output_dir,
                 )
@@ -189,10 +192,12 @@ def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading
     if deployment_mode in ('client_encrypted_input', 'server_provisioned_runner'):
         # Export the actual graph's key requirements with the client task.
         # Browser binding can then reject missing keys before encryption.
-        with open(os.path.join(output_dir, 'mega_ag.json'), encoding='utf-8') as f:
-            graph = json.load(f)
+        graph_path = 'graph_key_data.json' if streaming else 'mega_ag.json'
+        with open(os.path.join(output_dir, graph_path), encoding='utf-8') as f:
+            data = json.load(f)
+        graph_data = data if streaming else data['data']
         requirements = {}
-        for name, datum in graph['data'].items():
+        for name, datum in graph_data.items():
             kind = datum.get('type')
             if kind not in ('rlk', 'glk', 'evk'):
                 continue

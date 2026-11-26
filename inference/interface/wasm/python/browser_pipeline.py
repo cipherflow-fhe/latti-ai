@@ -309,19 +309,55 @@ async def diagnose_ort(source_directory, model_path, inputs_manifest, output_dir
     )
 
 
-def compile_high_level(model_path, output_directory, deployment_mode, config_path='', split_manifest=None):
+def compile_high_level(
+    model_path,
+    output_directory,
+    deployment_mode,
+    config_path='',
+    split_manifest=None,
+    on_stage=None,
+    profile_memory=False,
+):
     from training.run_compile import compile_model
+    import time
+    import tracemalloc
 
-    task = compile_model(
-        model_path,
-        output_directory,
-        deployment_mode=deployment_mode,
-        config_path=config_path,
-        split_manifest=split_manifest,
-        temperature=0.0,
-        num_workers=1,
-        random_seed=0,
-    )
+    stages = []
+    current, started = None, None
+    tracing = profile_memory and not tracemalloc.is_tracing()
+    if tracing:
+        tracemalloc.start()
+
+    def stage(name):
+        nonlocal current, started
+        now = time.perf_counter()
+        if current is not None:
+            record = dict(phase=current, durationMs=(now - started) * 1000)
+            if profile_memory:
+                record['pythonCurrentBytes'], record['pythonPeakBytes'] = tracemalloc.get_traced_memory()
+            stages.append(record)
+            if on_stage is not None:
+                on_stage(json.dumps(record))
+        current, started = name, now
+        if profile_memory:
+            tracemalloc.reset_peak()
+
+    try:
+        task = compile_model(
+            model_path,
+            output_directory,
+            deployment_mode=deployment_mode,
+            config_path=config_path,
+            split_manifest=split_manifest,
+            temperature=0.0,
+            num_workers=1,
+            random_seed=0,
+            on_stage=stage,
+            stream_weights=True,
+        )
+    finally:
+        if tracing:
+            tracemalloc.stop()
     if any(name == 'torch' or name.startswith('torch.') for name in sys.modules):
         raise RuntimeError('Browser ONNX compilation imported torch')
     import platform
@@ -343,6 +379,7 @@ def compile_high_level(model_path, output_directory, deployment_mode, config_pat
                 'num_workers': 1,
                 'deployment_mode': deployment_mode,
                 'compile_config': json.loads(Path(config_path).read_text()) if config_path else {},
+                'stages': stages,
             },
             indent=2,
         )
@@ -383,11 +420,18 @@ def prepare_compile_source(source_directory, model_path, inputs_manifest, destin
 def generate_low_level(task_directory, deployment_mode):
     from inference.interface.gen_mega_ag import generate_low_level as generate
 
+    streaming = False
+    contract_path = Path(task_directory, 'input_contract.json')
+    if deployment_mode == 'server_provisioned_runner' and contract_path.exists():
+        contract = json.loads(contract_path.read_text())
+        split = json.loads(Path(contract['manifest']).read_text())
+        streaming = split['split']['prefix_count'] == 0
     return str(
         generate(
             task_directory,
             deployment_mode=deployment_mode,
             parameter_loading_mode='runtime_lazy' if deployment_mode == 'server_provisioned_runner' else None,
+            streaming=streaming,
             random_seed=0,
         )
     )

@@ -143,6 +143,7 @@ def gen_custom_task(
     output_dir=None,
     deployment_mode=None,
     parameter_loading_mode=None,
+    streaming=False,
 ):
     if parameter_mode is None:
         parameter_mode = 'plaintext_lazy' if lazy else 'plaintext_eager'
@@ -173,6 +174,8 @@ def gen_custom_task(
         block_shape = task_config_info['block_shape']
     except Exception:
         block_shape = [64, 64]
+    if streaming:
+        g_dag.start_stream(output_dir, Processor.GPU if use_gpu else Processor.CPU)
     config_info = read_config(os.path.join(task_path, 'nn_layers_ct_0.json'))
     if parameter_mode == 'encrypted_offline':
         if task_config_info.get('mat_pack_style') == 'par_diagonal_pack':
@@ -713,7 +716,11 @@ def gen_custom_task(
                     if shape_per_head[1] > block_size:
                         raise ValueError(f"parcpmm input '{input_fid}' per-head width exceeds matmul_block_size")
                     G = _par_group_count(block_size, n_heads, n)
-                    n_packed = math.ceil(shape_per_head[0] / block_size) * G
+                    feat_out = config_info['feature'][consumer['feature_output'][0]]
+                    cpmm = ParBlockColMajorCPMM(
+                        shape_per_head, (feat['shape'][1], feat_out['shape'][1]), block_size, n_heads, n
+                    )
+                    n_packed = cpmm.num_block_rows_A * G * (cpmm.K if cpmm.mode == 'REDUCE' else 1)
                 elif consumer_type == 'pdmtranspose':
                     shape = _pdm_transpose_shape(feat, input_fid, consumer_layer_id, consumer_type)
                     layer = ParLowerDiagTranspose(shape, n_heads, _head_dim(consumer_layer_id, consumer_type), n)
