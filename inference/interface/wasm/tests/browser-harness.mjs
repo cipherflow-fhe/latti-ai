@@ -14,7 +14,7 @@ export async function browserHarness(artifacts,mounts={}) {
       if(req.url==='/'){res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>WASM acceptance</title>');return;}
       if(req.url==='/favicon.ico'){res.writeHead(204).end();return;}
       if(req.method==='POST'&&/^\/artifact\/[A-Za-z0-9._-]+$/.test(req.url)) {
-        await pipeline(req,createWriteStream(path.join(artifacts,path.basename(req.url)),{mode:0o600}));res.end('saved');return;
+        await pipeline(req,createWriteStream(path.join(artifacts,path.basename(req.url)),{mode:0o600,flags:req.headers['x-latti-append']==='1'?'a':'w'}));res.end('saved');return;
       }
       const directories={'/dist/':runtime,'/artifact/':artifacts,...mounts};
       const prefix=Object.keys(directories).find(prefix=>req.url.startsWith(prefix));
@@ -26,7 +26,7 @@ export async function browserHarness(artifacts,mounts={}) {
       await pipeline(createReadStream(file),res);
     } catch(error) {if(!res.headersSent)res.writeHead(404);res.end();console.error('Test HTTP:',req.url,error.message);}
   });
-  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  await new Promise(resolve=>server.listen(Number(process.env.LATTI_BROWSER_PORT||0),'127.0.0.1',resolve));
   const context=await chromium.launchPersistentContext(path.join(artifacts,'browser-profile'),{
     ...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{}),headless:true,args:['--no-sandbox'],
   });

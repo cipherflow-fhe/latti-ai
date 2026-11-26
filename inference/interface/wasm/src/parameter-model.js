@@ -13,7 +13,11 @@ export async function openParameterModel(task,parameterDirectory,signal,onProgre
     closing=cleanupPythonWorkspace(jobId);return closing;
   };
   const abort=()=>{close().catch(()=>{});};
-  const timeout=setTimeout(()=>{fail(new Error('Parameter materializer timed out'));abort();},1800000);
+  let timeout;
+  const restartTimeout=()=>{
+    clearTimeout(timeout);
+    timeout=setTimeout(()=>{fail(new Error('Parameter materializer timed out'));abort();},1800000);
+  };
   signal.addEventListener('abort',abort,{once:true});
   if(signal.aborted)abort();
   worker.onerror=()=>fail(new Error('Parameter model Worker failed'));
@@ -25,12 +29,18 @@ export async function openParameterModel(task,parameterDirectory,signal,onProgre
   };
   const request=(type,options={})=>new Promise((resolve,reject)=>{
     if(closed){reject(new Error('Parameter materializer is closed'));return;}
+    restartTimeout();
     const requestId=++nextID;pending.set(requestId,{resolve,reject});
     try{worker.postMessage({type,...options,requestId,jobId,protocolVersion:BUILD_INFO.protocolVersion});}
     catch(error){pending.delete(requestId);reject(error);}
   });
   try {
     const metadata=await request('parameterPlan',{task,parameterDirectory});
-    return {metadata,value:(argument,flatIndex)=>request('parameterValue',{argument,flatIndex}),close};
+    return {metadata,async value(argument,flatIndex) {
+      const result=await request('parameterValue',{argument,flatIndex});
+      for(const [key,value]of Object.entries(result.runtimeMetrics))
+        metadata.runtimeMetrics[key]=Math.max(metadata.runtimeMetrics[key]||0,value);
+      return result.bytes;
+    },close};
   }catch(error){await cleanupAfter(error,[close]);throw error;}
 }

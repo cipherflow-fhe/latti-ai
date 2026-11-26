@@ -4,7 +4,7 @@
 
 The slot formulas follow DensePackedLayer, MultiplexedConv2DPackedLayer,
 PolyRelu0D/2D, MultScalarLayer and interleaved_seed.h. Cryptography belongs to
-Go/WASM; this module retains at most one H5 dataset and one slot vector.
+Go/WASM; this module reads bounded H5 ranges for one slot vector.
 """
 
 import json
@@ -105,8 +105,7 @@ class ParameterMaterializer:
                     raise ValueError('Unsupported parameter layer: ' + layer['type'])
                 depthwise = layer.get('groups') == layer.get('channel_input') == layer.get('channel_output')
                 if layer['type'] == 'conv2d' and (
-                    layer.get('is_big_size')
-                    or (layer['groups'] != 1 and not depthwise)
+                    (layer['groups'] != 1 and not depthwise)
                     or kind == 'mask'
                     or layer.get('upsample_factor_in', [1, 1]) != [1, 1]
                 ):
@@ -158,6 +157,7 @@ class ParameterMaterializer:
             raise ValueError('Task has no encrypted parameters')
         if sum(item['count'] for item in self.arguments.values()) > 16384:
             raise ValueError('Parameter index exceeds the validated 16384-ciphertext browser profile')
+        del self.signature
 
     def plan(self):
         return [
@@ -178,29 +178,31 @@ class ParameterMaterializer:
         layer = self.graph['layer'][item['layer_id']]
         feature = self.graph['feature'][layer['feature_input'][0]]
         path = layer.get('bias_path') if item['param_kind'] == 'bias' else layer['weight_path']
+        from .h5_parameter_values import H5ParameterValues
+
         with h5py.File(self.path) as weights:
-            values = np.asarray(weights[path], dtype=np.float64)
-        if layer['type'] in ('fc0', 'fc1'):
-            output = self.graph['feature'][layer['feature_output'][0]]
-            values = (
-                values.reshape(output['channel'], feature['channel'])
-                if item['param_kind'] == 'weight'
-                else values.reshape(-1)
-            )
-            result = self._dense(item, feature, values, flat_index)
-        elif layer['type'] == 'conv2d':
-            values = (
-                values.reshape(
-                    layer['channel_output'], layer['channel_input'] // layer['groups'], *layer['kernel_shape']
+            values = H5ParameterValues(weights[path])
+            if layer['type'] in ('fc0', 'fc1'):
+                output = self.graph['feature'][layer['feature_output'][0]]
+                values = (
+                    values.reshape(output['channel'], feature['channel'])
+                    if item['param_kind'] == 'weight'
+                    else values.reshape(-1)
                 )
-                if item['param_kind'] != 'bias'
-                else values.reshape(-1)
-            )
-            result = self._convolution(item, layer, feature, values, flat_index)
-        else:
-            if item['param_kind'] == 'poly_coeff':
-                values = values.reshape(layer['order'] + 1, feature['channel'])[item['coeff_idx']]
-            result = self._channel_values(item, feature, values.reshape(-1), flat_index)
+                result = self._dense(item, feature, values, flat_index)
+            elif layer['type'] == 'conv2d':
+                values = (
+                    values.reshape(
+                        layer['channel_output'], layer['channel_input'] // layer['groups'], *layer['kernel_shape']
+                    )
+                    if item['param_kind'] != 'bias'
+                    else values.reshape(-1)
+                )
+                result = self._convolution(item, layer, feature, values, flat_index)
+            else:
+                if item['param_kind'] == 'poly_coeff':
+                    values = values.reshape(layer['order'] + 1, feature['channel'])[item['coeff_idx']]
+                result = self._channel_values(item, feature, values.reshape(-1), flat_index)
         if result.shape != (item['slots'],) or not np.isfinite(result).all():
             raise ValueError('Invalid materialized parameter vector')
         return np.ascontiguousarray(result, dtype='<f8')
@@ -248,6 +250,9 @@ class ParameterMaterializer:
         slots, pack = item['slots'], feature['pack_num']
         bias = item['param_kind'] == 'bias'
         special = feature.get('special_info')
+        layout = item.get('layout')
+        if not special and layout and (layout.get('weight') or layout.get('bias')):
+            special = {'shape': layout['input_shape'], 'skip': layout['skip'], 'invalid_fill': layout['invalid_fill']}
         if not special:
             result = np.zeros(slots)
             if bias:
@@ -317,6 +322,8 @@ class ParameterMaterializer:
     def _convolution(self, item, layer, feature, values, index):
         slots, pack = item['slots'], feature['pack_num']
         shape, skip, stride = feature['shape'], feature['skip'], layer['stride']
+        if layer.get('is_big_size'):
+            return self._inverse_convolution(item, layer, feature, values, index)
         physical = np.multiply(shape, skip)
         block_size = int(np.prod(physical))
         blocks = math.ceil(pack / math.prod(skip))
@@ -394,6 +401,66 @@ class ParameterMaterializer:
                 )
                 source = generate(output, request, kernel, False)
                 result[select] = source[select]
+        return result
+
+    def _inverse_convolution(self, item, layer, feature, values, index):
+        from itertools import product
+
+        block_shape = self.config['block_shape']
+        positions = np.arange(item['slots'])
+        row, col = positions // block_shape[1], positions % block_shape[1]
+        valid = positions < math.prod(block_shape)
+        result = np.zeros(item['slots'])
+        if item['param_kind'] == 'bias':
+            result[valid] = values[index]
+            return result
+        depthwise = layer['groups'] != 1
+        if depthwise:
+            output, kernel_index = divmod(index, item['size'][1])
+            input_channel = 0
+        else:
+            output, rest = divmod(index, item['size'][1] * item['size'][2])
+            input_channel, kernel_index = divmod(rest, item['size'][2])
+        kernel = layer['kernel_shape']
+        stride = layer['stride']
+        shape = feature['shape']
+        if any(s // t < b for s, t, b in zip(shape, stride, block_shape)):
+            stride = [s // b for s, b in zip(shape, block_shape)]
+        output_step = [s // (b * t) for s, b, t in zip(shape, block_shape, stride)]
+        input_step = np.multiply(stride, output_step)
+        pad = [(k - 1) // 2 for k in kernel]
+
+        def kernel_position(index):
+            for r in product(*(range(n) for n in output_step)):
+                for segment in product(*(range(n) for n in stride)):
+                    if any(seg >= k for seg, k in zip(segment, kernel)):
+                        continue
+                    split = [(k + t - 1 - seg) // t for k, t, seg in zip(kernel, stride, segment)]
+                    for uv in product(*(range(n) for n in split)):
+                        if index == 0:
+                            original = np.multiply(uv, stride) + segment
+                            val = np.array(segment) - pad + np.multiply(stride, np.array(uv) + r)
+                            step = (val - val % input_step) // input_step
+                            return original, step
+                        index -= 1
+            raise ValueError('Inverse convolution kernel index out of bounds')
+
+        layout = item.get('layout')
+        if layout:
+            a, b = layout['stride']
+            count = math.prod(kernel) if layout['kind'] == 'canonical' else math.prod(kernel) * math.prod(output_step)
+            for sub in range(layout['group_size']):
+                request = kernel_index * layout['group_size'] + sub
+                if request >= count:
+                    break
+                original = divmod(request, kernel[1]) if layout['kind'] == 'canonical' else kernel_position(request)[0]
+                selected = valid & (row % a == sub // b) & (col % b == sub % b)
+                result[selected] = values[output, input_channel, original[0], original[1]]
+        else:
+            original, step = kernel_position(kernel_index)
+            selected = valid & (row + step[0] >= 0) & (row + step[0] < block_shape[0])
+            selected &= (col + step[1] >= 0) & (col + step[1] < block_shape[1])
+            result[selected] = values[output, input_channel, original[0], original[1]]
         return result
 
     def _depthwise(self, item, layer, feature, values, index, block, row, col, blocks):

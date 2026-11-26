@@ -35,11 +35,11 @@ async function fileAt(directory,name,create=false) {
   for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part,{create});
   return directory.getFileHandle(parts.at(-1),{create});
 }
-function progress(name) {
+function progress(name,extra={}) {
   phase=name;
   postMessage({protocolVersion:BUILD_INFO.protocolVersion,requestId:operation.requestId,jobId:operation.jobId,
     type:'progress',phase,bytes:'0',elapsedMs:performance.now()-operation.started,
-    wasmBytes:python?python._module.HEAPU8.buffer.byteLength:0,heapBytes:0,chunkBytes:CHUNK,inFlightChunks:1,final:false});
+    wasmBytes:python?python._module.HEAPU8.buffer.byteLength:0,heapBytes:0,chunkBytes:CHUNK,inFlightChunks:1,final:false,...extra});
 }
 async function fetchVerified(name,metadata) {
   const response=await fetch(new URL(name,resources));
@@ -126,8 +126,9 @@ async function importArtifact(artifact,kind) {
   let total=0;
   for(const [name,metadata]of Object.entries(manifest.files)) {
     const file=await(await fileAt(artifact.directory,name)).getFile();
-    total+=file.size;
-    if(file.size>512*1024*1024||total>2*1024*1024*1024)throw new Error('Model artifact exceeds the browser memory profile');
+    const streamedGraph=/\/(?:compiled_)?mega_ag\.json$|\/model_parameters\.h5$/.test(name);
+    if(!streamedGraph)total+=file.size;
+    if((!streamedGraph&&file.size>512*1024*1024)||total>2*1024*1024*1024)throw new Error('Model artifact exceeds the browser memory profile');
     if(file.size!==metadata.bytes)throw new Error(`Artifact hash mismatch: ${name}`);
     await copyIn(file,manifest.virtualRoot+'/'+name);
     if(await hashIn(manifest.virtualRoot+'/'+name)!==metadata.sha256)throw new Error(`Artifact hash mismatch: ${name}`);
@@ -196,7 +197,7 @@ async function execute(message) {
   if(message.type==='parameterValue') {
     await withGlobals({argument:message.argument,flat_index:message.flatIndex},
       "parameter_materializer.values(argument, flat_index).tofile('/tmp/parameter-values.bin')");
-    return python.FS.readFile('/tmp/parameter-values.bin');
+    return {bytes:python.FS.readFile('/tmp/parameter-values.bin'),runtimeMetrics:currentMetrics()};
   }
   if(message.type==='parameterPlan') {
     const manifest=await importArtifact(message.task,'task');
@@ -223,8 +224,8 @@ json.dumps(graph)
 `);
     return {plan,runtimeMetrics:runtimeMetrics(),config:python.FS.readFile(task+'/provisioner/task_config.json',{encoding:'utf8'}),
       parameters:python.FS.readFile(task+'/provisioner/ckks_parameter.json',{encoding:'utf8'}),
-      files:Object.fromEntries(['task_config.json','ckks_parameter.json','mega_ag.json','compiled_mega_ag.json',
-        'fhe_parameter.json','task_signature.json','key_requirements.json'].map(name=>[name,python.FS.readFile(task+'/runner/'+name)])),
+      files:Object.fromEntries(await Promise.all(['task_config.json','ckks_parameter.json','mega_ag.json','compiled_mega_ag.json',
+        'fhe_parameter.json','task_signature.json','key_requirements.json'].map(async name=>[name,await fileAt(message.task.directory,manifest.entry+'/runner/'+name)]))),
       publicGraph};
   }
   let root='/latti/jobs/'+message.jobId;python.FS.mkdirTree(root);
@@ -272,8 +273,9 @@ json.dumps(graph)
     }
     progress('compile-high-level');
     const task=await withGlobals({model_path:source,compile_output:root+'/compile/'+message.jobId,mode:message.deploymentMode,
-      config_path:config,split_manifest:splitManifest||null},
-    'pipeline.compile_high_level(model_path, compile_output, mode, config_path, split_manifest)');
+      config_path:config,split_manifest:splitManifest||null,profile_memory:message.profileMemory===true,
+      compile_progress:text=>{const {phase:step,...record}=JSON.parse(text);progress('high-'+step,record);}},
+    'pipeline.compile_high_level(model_path, compile_output, mode, config_path, split_manifest, compile_progress, profile_memory)');
     return exportArtifact(root,'task',task.slice(root.length+1),{deploymentMode:message.deploymentMode});
   }
   if(message.type==='runPrefix') {

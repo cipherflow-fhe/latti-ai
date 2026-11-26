@@ -26,7 +26,7 @@
 | 接口 | 用途 |
 | --- | --- |
 | `openBrowserModelTools()` | 创建模型工具，支持进度回调与超时设置。 |
-| `prepareSplit({source, ratio})` | 从 ONNX 和具名 CSV 切分模型，验收使用 `ratio: '0.9'`。 |
+| `prepareSplit({source, ratio})` | 从 ONNX 和具名 CSV 切分模型；`ratio: '0'` 不生成 prefix，suffix 保留完整原始 ONNX。 |
 | `runPrefix({split, inputsManifest})` | 为新样本生成边界输入和样本绑定信息。 |
 | `compileHighLevel({split, deploymentMode, compileConfig?})` | 编译高层任务；也可用 `source` 替代 `split`。 |
 | `generateLowLevel({task})` | 生成 MegaAG、签名及密钥需求。 |
@@ -35,6 +35,12 @@
 | `provisionRunner({task, parameterDirectory})` | 逐密文加密参数，生成公开 Runner 包。 |
 | `decryptOutputs({task, outputFile, run?})` | 校验并解密原生返回的全部输出。 |
 | `cancel(requestId?)` / `close()` | 取消当前操作或关闭会话。 |
+
+`ratio: '0'` 时，Runner 直接接收原始具名 CSV；后续编译、密钥生成/恢复、参数 provision 和输出解密接口不变。suffix 与原始 ONNX 及外部权重逐字节一致。完整大模型验收使用 `openBrowserModelTools({timeoutMs: 7200000})`；参数生成器的 30 分钟限制按单次请求刷新，持续进行的 provision 可以超过 30 分钟。
+
+High-level 编译在同一个 Worker 内先将权重外置，再仅对图元数据做 shape inference；卷积/矩阵权重按最多 1 MiB 的输出分片转换到 H5，完成后删除编译临时权重。`compileHighLevel({...options, profileMemory: true})` 可启用各子步骤的 Python 分配峰值测量，结果写入 `browser_compile.json` 的 `stages`，并通过 `high-*` progress 事件返回。该选项有计时开销；Python 分配峰值、WASM 容量与浏览器 RSS 是不同口径。
+
+Provision 按当前 slot 向量需要的索引读取 H5，每次最多读取 32768 个值；密文偏移索引和参数 manifest 随密文生成流式写入，Runner 文件 manifest 也逐项写入。参数签名、布局、密文容器和 native Runner 接口保持兼容。
 
 完整参数与返回类型见 `dist/index.d.ts`。模型产物返回 `{directory, manifest}` 文件句柄；可选 `outputDirectory` 指定输出父目录，操作会创建独立子目录。
 
@@ -108,11 +114,13 @@ try {
 
 ## 支持范围与验收
 
-已通过 cifar10、retina、BERT、YOLOv5、ViT、ImageNet 六任务在 `ratio='0.9'` 下的输入/参数两模式，共十二单元验收。全部输出最大绝对误差严格小于 `0.1`，连续客户端 RSS 峰值小于 4 GiB。本轮整流程峰值约 2.17 GiB；BERT split 约 1.24 GiB，较上一版下降约 66%。阶段重建会增加初始化耗时，小模型的处理时间可能变长。未切分完整 ONNX 的参数加密内存问题单独记录，不属于本次强制验收。
+已通过 cifar10、retina、BERT、YOLOv5、ViT、ImageNet 六任务在 `ratio='0.9'` 下的输入/参数两模式，共十二单元验收。全部输出最大绝对误差严格小于 `0.1`，连续客户端 RSS 峰值小于 4 GiB。本轮整流程峰值约 2.17 GiB；BERT split 约 1.24 GiB，较上一版下降约 66%。阶段重建会增加初始化耗时，小模型的处理时间可能变长。`ratio=0` 的完整原图参数加密使用磁盘分块低层编译、共享评估密钥和按需公开 mask；各阶段 WASM 内存需单独测量，ratio=0.9 的结果不能替代完整原图验收。
 
-CNN 使用 multiplexed 布局，支持已适配的 dense、非 big Conv2D（含 depthwise）与多项式参数；BERT/ViT 使用 FeatureMat、`par_block_col_major` PCM 和各自配置。当前不支持 big convolution 和 1D 参数布局，其他模型需符合现有编译器算子与结构限制。
+六任务 `ratio='0'` 的完整原图参数加密链路也已通过单样本全部输出验收，max_abs 均小于 `0.1`。high/low 编译与 provision WASM 峰值均不超过 `2.5 GiB`；最大 BERT high-level 线性内存约 `1.77 GiB`、renderer RSS 约 `2.434 GiB`。详细本机证据位于 `/tmp/latti-ratio0/acceptance-report.md` 与 `completion-audit.json`。
 
-资源预检上限：256 节点；initializer 合计 384 MiB、单个 32 MiB；源文件合计 512 MiB；单输入 `2^22` 元素；单 ORT tensor 32 MiB；产物单文件 512 MiB、合计 2 GiB；参数索引 16384 个密文。模型权重流式外置到 OPFS，执行节点时只读所需权重；子图提取只处理结构与权重引用。原图、提取及 prefix/suffix 验证之间持久化结果并重建 Worker，阶段指标写入产物 manifest。模型临时文件落 OPFS，操作结束清理临时池；已提交产物由调用方管理。默认模型操作超时 30 分钟。
+CNN 使用 multiplexed 布局，支持已适配的 dense、Conv2D（含 depthwise 和验收模型的大尺寸首层）与多项式参数；BERT/ViT 使用 FeatureMat、`par_block_col_major` PCM 和各自配置。当前不支持 1D 参数布局，其他模型需符合现有编译器算子与结构限制。
+
+资源预检上限：256 节点；initializer 合计 384 MiB、单个 32 MiB；源文件合计 512 MiB；单输入 `2^22` 元素；单 ORT tensor 32 MiB；普通产物单文件 512 MiB、合计 2 GiB（磁盘流式处理的图 JSON 与参数 H5 不计入此限额）；参数索引 16384 个密文。模型权重流式外置到 OPFS，执行节点时只读所需权重；子图提取只处理结构与权重引用。原图、提取及 prefix/suffix 验证之间持久化结果并重建 Worker，阶段指标写入产物 manifest。模型临时文件落 OPFS，操作结束清理临时池；已提交产物由调用方管理。默认模型操作超时 30 分钟。
 
 ## 开发与交付校验
 

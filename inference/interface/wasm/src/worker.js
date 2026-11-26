@@ -357,7 +357,7 @@ async function provisionRunner(options) {
     const encrypted=await destination.getDirectoryHandle('encrypted_model_parameters',{create:true});
     const publicFiles=[];
     for(const [name,bytes]of Object.entries(metadata.files)) {
-      const file=await destination.getFileHandle(safeName(name),{create:true});await writeFile(file,bytes);publicFiles.push([name,file]);
+      const file=await destination.getFileHandle(safeName(name),{create:true});await copyFile(bytes,file,check);publicFiles.push([name,file]);
     }
     const graph=await destination.getFileHandle('nn_layers_ct_0.json',{create:true});
     await writeFile(graph,metadata.publicGraph);publicFiles.push(['nn_layers_ct_0.json',graph]);
@@ -370,16 +370,23 @@ async function provisionRunner(options) {
     publicFiles.push(['encrypted_model_parameters/manifest.json',storeManifest]);
     const publicKeys=await keyDirectory.getDirectoryHandle('public'),evaluation=await destination.getFileHandle('eval_context.bin',{create:true});
     await copyFile(await publicKeys.getFileHandle('eval_context.bin'),evaluation,check);publicFiles.push(['eval_context.bin',evaluation]);
-    const files={};let index=0;
-    for(const [name,file]of publicFiles) {
-      const snapshot=await file.getFile(),hashWork=await work.getDirectoryHandle('hash-'+index++,{create:true});
-      const hash=await pump(core,'sha256',['',String(snapshot.size)],hashWork,{bytes:fileSource(file)},check,progress);
-      files[name]={bytes:String(snapshot.size),sha256:await(await hash.get('sha256').handle.getFile()).text()};
-    }
+    const stagedManifest=await work.getFileHandle('runner-manifest.part',{create:true});
+    const writer=await stagedManifest.createWritable();let index=0;
+    try {
+      const header=JSON.stringify({schema:'latti-ai.browser-runner.v1',state:'committed',
+        deploymentMode:'server_provisioned_runner',parameterLoadingMode:'runtime_lazy',profileId:profile.profileId,keyIdentity,
+        runtimeMetrics:metadata.runtimeMetrics});
+      await writer.write(header.slice(0,-1)+',"files":{');
+      for(const [name,file]of publicFiles) {
+        const snapshot=await file.getFile(),hashWork=await work.getDirectoryHandle('hash-'+index,{create:true});
+        const hash=await pump(core,'sha256',['',String(snapshot.size)],hashWork,{bytes:fileSource(file)},check,progress);
+        const entry={bytes:String(snapshot.size),sha256:await(await hash.get('sha256').handle.getFile()).text()};
+        await writer.write((index++?',':'')+JSON.stringify(name)+':'+JSON.stringify(entry));
+      }
+      await writer.write('}}\n');await writer.close();
+    }catch(error){await writer.abort().catch(()=>{});throw error;}
     const manifest=await destination.getFileHandle('manifest.json',{create:true});check();
-    await writeFile(manifest,JSON.stringify({schema:'latti-ai.browser-runner.v1',state:'committed',
-      deploymentMode:'server_provisioned_runner',parameterLoadingMode:'runtime_lazy',profileId:profile.profileId,keyIdentity,
-      runtimeMetrics:metadata.runtimeMetrics,files})+'\n');
+    await copyFile(stagedManifest,manifest,check);
     retained=true;return {directory:destination,manifest};
   }catch(error){failure=error;throw error;}finally {
     const actions=[];

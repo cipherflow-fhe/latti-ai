@@ -115,7 +115,7 @@ def oracle(args):
         for entry in split['original_inputs']
     ]
     model_kind = split.get('model_kind', 'standard')
-    prepared = prepare(model, root / 'split', entries, '0.9', model_kind=model_kind)
+    prepared = prepare(model, root / 'split', entries, split['split']['ratio_text'], model_kind=model_kind)
     checks = {}
     for key in ('split', 'security'):
         if split[key] != prepared[key]:
@@ -162,6 +162,7 @@ def oracle(args):
             deployment_mode=mode,
             random_seed=0,
             parameter_loading_mode='runtime_lazy' if mode == 'server_provisioned_runner' else None,
+            streaming=mode == 'server_provisioned_runner' and split['split']['prefix_count'] == 0,
         )
     (root / 'oracle.json').write_text(
         json.dumps({'provenance': 'isolated native oracle', 'checks': checks}, indent=2) + '\n'
@@ -220,6 +221,86 @@ def kernel_audit(args):
     )
 
 
+def graph_records(path):
+    """Read compiler JSON records without retaining the entire graph."""
+    decoder = json.JSONDecoder()
+    with path.open() as file:
+        buffer, offset = '', 0
+
+        def fill():
+            nonlocal buffer, offset
+            chunk = file.read(1024 * 1024)
+            buffer, offset = buffer[offset:] + chunk, 0
+            return bool(chunk)
+
+        def token(expected):
+            nonlocal offset
+            while True:
+                while offset < len(buffer) and buffer[offset].isspace():
+                    offset += 1
+                if offset < len(buffer):
+                    break
+                if not fill():
+                    raise ValueError('Truncated graph JSON')
+            if buffer[offset] != expected:
+                raise ValueError('Invalid graph JSON delimiter')
+            offset += 1
+
+        def value():
+            nonlocal offset
+            while True:
+                while offset < len(buffer) and buffer[offset].isspace():
+                    offset += 1
+                try:
+                    result, end = decoder.raw_decode(buffer, offset)
+                    offset = end
+                    return result
+                except json.JSONDecodeError:
+                    if not fill():
+                        raise
+
+        token('{')
+        for section in ('name', 'algorithm', 'inputs', 'outputs', 'data', 'compute'):
+            if value() != section:
+                raise ValueError('Unexpected streamed graph section')
+            token(':')
+            if section not in ('data', 'compute'):
+                yield section, value()
+            else:
+                token('{')
+                first = True
+                while True:
+                    while offset >= len(buffer) or buffer[offset].isspace():
+                        if offset < len(buffer):
+                            offset += 1
+                        elif not fill():
+                            raise ValueError('Truncated graph section')
+                    if buffer[offset] == '}':
+                        offset += 1
+                        break
+                    if not first:
+                        token(',')
+                    key = value()
+                    token(':')
+                    yield section, key, value()
+                    first = False
+            token('}' if section == 'compute' else ',')
+        if buffer[offset:].strip() or file.read().strip():
+            raise ValueError('Trailing graph JSON')
+
+
+def compare_streamed_graphs(main, reference):
+    digest = hashlib.sha256()
+    counts = Counter()
+    for index, (a, b) in enumerate(zip(graph_records(main), graph_records(reference), strict=True)):
+        a, b = normalize(list(a)), normalize(list(b))
+        if a != b:
+            raise ValueError(f'Browser/native graph record differs at {index}: {a[:2]} vs {b[:2]}')
+        digest.update(json.dumps(a, sort_keys=True, separators=(',', ':')).encode())
+        counts[a[0]] += 1
+    return dict(sha256=digest.hexdigest(), records=dict(counts))
+
+
 def verify_task(args):
     root = args.browser.resolve()
     metadata = artifact(root)
@@ -234,11 +315,17 @@ def verify_task(args):
         if main != reference:
             raise ValueError('Browser/native compiler artifact differs: ' + filename)
         checks[filename] = True
-    main_graph = json.loads((task / role / 'mega_ag.json').read_text())
-    reference_graph = json.loads((native / role / 'mega_ag.json').read_text())
-    if graph_fingerprint(main_graph) != graph_fingerprint(reference_graph):
-        raise ValueError('Browser/native MegaAG interface/topology differs')
-    checks['mega_ag.json'] = True
+    if (task / role / 'graph_key_data.json').exists():
+        checks['mega_ag.json'] = compare_streamed_graphs(task / role / 'mega_ag.json', native / role / 'mega_ag.json')
+        checks['compiled_mega_ag.json'] = compare_streamed_graphs(
+            task / role / 'compiled_mega_ag.json', native / role / 'compiled_mega_ag.json'
+        )
+    else:
+        main_graph = json.loads((task / role / 'mega_ag.json').read_text())
+        reference_graph = json.loads((native / role / 'mega_ag.json').read_text())
+        if graph_fingerprint(main_graph) != graph_fingerprint(reference_graph):
+            raise ValueError('Browser/native MegaAG interface/topology differs')
+        checks['mega_ag.json'] = True
     datasets = {}
     with (
         h5py.File(task / 'server/model_parameters.h5') as main,

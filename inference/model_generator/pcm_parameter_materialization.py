@@ -120,6 +120,13 @@ def matrix_argument(signature, graph, config, parameters, weights):
 
 
 def matrix_values(item, graph, config, path):
+    with h5py.File(path) as weights:
+        return _matrix_values(item, graph, config, weights)
+
+
+def _matrix_values(item, graph, config, weights):
+    from .h5_parameter_values import H5ParameterValues
+
     layer = graph['layer'][item['layer_id']]
     feature = graph['feature'][layer['feature_input'][0]]
     generator = item['generator']
@@ -138,8 +145,7 @@ def matrix_values(item, graph, config, path):
     valid = (head < heads) & (row < rows) & (col < columns_per_head)
     values = None
     if item['_parameter_path'] is not None:
-        with h5py.File(path) as weights:
-            values = np.asarray(weights[item['_parameter_path']], dtype=np.float64)
+        values = H5ParameterValues(weights[item['_parameter_path']])
     result = np.zeros(slots)
     if op == 'InputZero':
         return result
@@ -194,10 +200,6 @@ def matrix_values(item, graph, config, path):
         values = values.reshape(layer.get('order', 4) + 1, -1)[degree]
         if op == 'ParBlockColMajorPolyActRNPoly' and degree != 0:
             valid = (head < heads) & (col < columns_per_head)
-    elif op == 'ParBlockColMajorLNAffine':
-        if generator['pt_idx'] == 0:
-            params = config.get('layernorm_param', {})
-            values = values * layer.get('inv_std', params.get('inv_std', 1 / params.get('var_std_bound', 4.0)))
     elif op == 'ParBlockColMajorAddPt':
         values = values.reshape(feature['shape'])
         selected = valid & (global_col < values.shape[1])
@@ -206,4 +208,7 @@ def matrix_values(item, graph, config, path):
     values = values.reshape(-1)
     valid &= global_col < values.size
     result[valid] = values[global_col[valid]]
+    if op == 'ParBlockColMajorLNAffine' and generator['pt_idx'] == 0:
+        params = config.get('layernorm_param', {})
+        result *= layer.get('inv_std', params.get('inv_std', 1 / params.get('var_std_bound', 4.0)))
     return result

@@ -47,6 +47,8 @@ export interface BrowserModelTools {
   runPrefix(options: {split: ArtifactDirectory; inputsManifest: FileSource; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
   compileHighLevel(options: ({source: ModelSources; split?: never} | {split: ArtifactDirectory; source?: never}) & {
     deploymentMode: DeploymentMode; compileConfig?: FileSource; outputDirectory?: FileSystemDirectoryHandle;
+    /** Record Python allocation peaks per high-level compilation step. */
+    profileMemory?: boolean;
   }): Promise<ArtifactDirectory>;
   generateLowLevel(options: {task: ArtifactDirectory; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
   cancel(requestId?: number): Promise<{accepted: boolean}>;

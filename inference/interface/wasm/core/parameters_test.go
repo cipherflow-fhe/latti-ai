@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"math"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/cipherflow-fhe/lattigo/schemes/ckks"
@@ -25,6 +26,9 @@ func TestProvisionStreamsSignatureLevelsScalesAndNativeContainers(t *testing.T) 
 		{"id": "weight", "type": "ct", "size": []int{2}, "count": 2, "slots": slots, "level": 1, "scale": float64(client.Keys.Params.Q()[1])},
 		{"id": "bias", "type": "ct", "size": []int{1}, "count": 1, "slots": slots, "level": 0, "scale": client.Keys.Params.DefaultScale().Float64()},
 	}
+	// Force manifest chunks to interleave with ciphertext outputs. Public
+	// signature metadata must survive without building a complete index in RAM.
+	plan[0]["layout_note"] = strings.Repeat("x", 70000)
 	rawPlan, _ := json.Marshal(plan)
 	stream, err := client.StartProvision(rawPlan)
 	if err != nil {
@@ -34,6 +38,7 @@ func TestProvisionStreamsSignatureLevelsScalesAndNativeContainers(t *testing.T) 
 	outputs := map[string]*bytes.Buffer{}
 	event := streamEvent(t, stream, nil)
 	reads := 0
+	firstOutput := ""
 	for event.Type != "done" {
 		switch event.Type {
 		case "need-input":
@@ -51,6 +56,9 @@ func TestProvisionStreamsSignatureLevelsScalesAndNativeContainers(t *testing.T) 
 			}
 			continue
 		case "begin-output":
+			if firstOutput == "" {
+				firstOutput = event.OutputID
+			}
 			outputs[event.OutputID] = new(bytes.Buffer)
 		case "write-chunk":
 			if len(event.Data) > 4*1024*1024 {
@@ -65,6 +73,9 @@ func TestProvisionStreamsSignatureLevelsScalesAndNativeContainers(t *testing.T) 
 	}
 	if reads != 3 {
 		t.Fatal("wrong parameter flat count")
+	}
+	if firstOutput != "parameter-manifest" {
+		t.Fatal("manifest was not streamed alongside parameters")
 	}
 	var manifest struct {
 		Format    string `json:"format"`

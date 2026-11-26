@@ -32,6 +32,7 @@ func StartSHA256(size uint64) *OutputStream {
 
 type parameterArgument struct {
 	ID    string  `json:"id"`
+	Type  string  `json:"type"`
 	Size  []int   `json:"size"`
 	Count int     `json:"count"`
 	Slots int     `json:"slots"`
@@ -47,7 +48,7 @@ func (c *Client) StartProvision(plan []byte) (*OutputStream, error) {
 		return nil, errors.New("parameter mode and setup/restore required")
 	}
 	var arguments []parameterArgument
-	var metadata []map[string]json.RawMessage
+	var metadata []json.RawMessage
 	if err := json.Unmarshal(plan, &arguments); err != nil {
 		return nil, err
 	}
@@ -59,7 +60,7 @@ func (c *Client) StartProvision(plan []byte) (*OutputStream, error) {
 	}
 	names := map[string]bool{}
 	total := 0
-	for index, arg := range arguments {
+	for _, arg := range arguments {
 		if arg.ID == "" || names[arg.ID] || arg.Count < 1 || product(arg.Size) != arg.Count ||
 			arg.Slots != c.Keys.Params.MaxSlots() || arg.Slots*8 > clientcontext.MaxChunkBytes ||
 			arg.Level < 0 || arg.Level > c.Keys.Params.MaxLevel() ||
@@ -70,98 +71,124 @@ func (c *Client) StartProvision(plan []byte) (*OutputStream, error) {
 		if total > 16384 {
 			return nil, errors.New("parameter index exceeds the validated browser profile")
 		}
-		if string(metadata[index]["type"]) != `"ct"` {
+		if arg.Type != "ct" {
 			return nil, errors.New("parameter signature must declare a ciphertext")
 		}
 		names[arg.ID] = true
 	}
 	return startOutput(func(stream *OutputStream) error {
-		manifest := map[string]any{"format": "latti-ai.encrypted-parameter-store.v2"}
-		entries := map[string]any{}
-		manifest["arguments"] = entries
-		for index, arg := range arguments {
-			elements := make([]map[string]uint64, 0, arg.Count)
-			maxError, maxCiphertextBytes := 0.0, uint64(0)
-			outputID := "parameter-" + strconv.Itoa(index)
-			err := stream.output(outputID, func(sink clientcontext.Sink) (uint64, error) {
-				out := bufio.NewWriterSize(sink, 64*1024)
-				if err := binary.Write(out, binary.LittleEndian, uint64(arg.Count)); err != nil {
-					return 0, err
-				}
-				offset := uint64(8)
-				for flat := 0; flat < arg.Count; flat++ {
-					if err := stream.ctx.Err(); err != nil {
-						return 0, err
-					}
-					source := &inputSource{stream: stream, id: fmt.Sprintf("parameter:%d:%d", index, flat), size: uint64(arg.Slots * 8)}
-					raw, err := source.readAt(0, arg.Slots*8)
-					if err != nil {
-						return 0, err
-					}
-					vector := make([]float64, arg.Slots)
-					for i := range vector {
-						value := math.Float64frombits(binary.LittleEndian.Uint64(raw[i*8:]))
-						if math.IsNaN(value) || math.IsInf(value, 0) {
-							return 0, errors.New("nonfinite parameter value")
-						}
-						vector[i] = value
-					}
-					pt := ckks.NewPlaintext(c.Keys.Params, arg.Level)
-					pt.Scale = rlwe.NewScale(arg.Scale)
-					if err := c.encoder.Encode(vector, pt); err != nil {
-						return 0, err
-					}
-					ciphertext, err := c.encryptor.EncryptNew(pt)
-					if err != nil {
-						return 0, err
-					}
-					decoded := make([]float64, arg.Slots)
-					if err := c.encoder.Decode(c.decryptor.DecryptNew(ciphertext), decoded); err != nil {
-						return 0, err
-					}
-					for i, value := range decoded {
-						error := math.Abs(value - vector[i])
-						if math.IsNaN(error) || math.IsInf(error, 0) || error >= 1e-5 {
-							return 0, errors.New("parameter encoding roundtrip exceeds 1e-5")
-						}
-						maxError = max(maxError, error)
-					}
-					length := uint64(ciphertext.BinarySize())
-					maxCiphertextBytes = max(maxCiphertextBytes, length)
-					if err := binary.Write(out, binary.LittleEndian, length); err != nil {
-						return 0, err
-					}
-					written, err := ciphertext.WriteTo(out)
-					if err != nil || uint64(written) != length {
-						return 0, errors.New("parameter ciphertext serialization failed")
-					}
-					elements = append(elements, map[string]uint64{"offset": offset + 8, "length": length})
-					offset += 8 + length
-					// Finish disk acknowledgement before producing another ciphertext.
-					if err := out.Flush(); err != nil {
-						return 0, err
-					}
-				}
-				return offset, out.Flush()
-			})
-			if err != nil {
-				return err
-			}
-			entry := map[string]any{}
-			for key, value := range metadata[index] {
-				entry[key] = value
-			}
-			entry["file"], entry["elements"] = outputID+".bin", elements
-			entry["verified_count"], entry["encoding_max_abs_error"] = arg.Count, maxError
-			entry["max_ciphertext_bytes"] = maxCiphertextBytes
-			entries[arg.ID] = entry
-		}
-		return stream.output("parameter-manifest", func(sink clientcontext.Sink) (uint64, error) {
-			// uint64 offsets are serialized here and never parsed/stringified in JS.
-			if err := json.NewEncoder(sink).Encode(manifest); err != nil {
+		return stream.output("parameter-manifest", func(manifestSink clientcontext.Sink) (uint64, error) {
+			manifest := bufio.NewWriterSize(manifestSink, 64*1024)
+			if _, err := manifest.WriteString(`{"format":"latti-ai.encrypted-parameter-store.v2","arguments":{`); err != nil {
 				return 0, err
 			}
-			return sink.(*outputSink).pos, nil
+			for index, arg := range arguments {
+				entry := map[string]json.RawMessage{}
+				if err := json.Unmarshal(metadata[index], &entry); err != nil {
+					return 0, err
+				}
+				for _, key := range []string{"file", "elements", "verified_count", "encoding_max_abs_error", "max_ciphertext_bytes"} {
+					delete(entry, key)
+				}
+				raw, err := json.Marshal(entry)
+				if err != nil {
+					return 0, err
+				}
+				id, _ := json.Marshal(arg.ID)
+				if index > 0 {
+					if err := manifest.WriteByte(','); err != nil {
+						return 0, err
+					}
+				}
+				if _, err := fmt.Fprintf(manifest, "%s:%s,\"elements\":[", id, raw[:len(raw)-1]); err != nil {
+					return 0, err
+				}
+				maxError, maxCiphertextBytes := 0.0, uint64(0)
+				outputID := "parameter-" + strconv.Itoa(index)
+				err = stream.output(outputID, func(sink clientcontext.Sink) (uint64, error) {
+					out := bufio.NewWriterSize(sink, 64*1024)
+					if err := binary.Write(out, binary.LittleEndian, uint64(arg.Count)); err != nil {
+						return 0, err
+					}
+					offset := uint64(8)
+					for flat := 0; flat < arg.Count; flat++ {
+						if err := stream.ctx.Err(); err != nil {
+							return 0, err
+						}
+						source := &inputSource{stream: stream, id: fmt.Sprintf("parameter:%d:%d", index, flat), size: uint64(arg.Slots * 8)}
+						raw, err := source.readAt(0, arg.Slots*8)
+						if err != nil {
+							return 0, err
+						}
+						vector := make([]float64, arg.Slots)
+						for i := range vector {
+							value := math.Float64frombits(binary.LittleEndian.Uint64(raw[i*8:]))
+							if math.IsNaN(value) || math.IsInf(value, 0) {
+								return 0, errors.New("nonfinite parameter value")
+							}
+							vector[i] = value
+						}
+						pt := ckks.NewPlaintext(c.Keys.Params, arg.Level)
+						pt.Scale = rlwe.NewScale(arg.Scale)
+						if err := c.encoder.Encode(vector, pt); err != nil {
+							return 0, err
+						}
+						ciphertext, err := c.encryptor.EncryptNew(pt)
+						if err != nil {
+							return 0, err
+						}
+						decoded := make([]float64, arg.Slots)
+						if err := c.encoder.Decode(c.decryptor.DecryptNew(ciphertext), decoded); err != nil {
+							return 0, err
+						}
+						for i, value := range decoded {
+							error := math.Abs(value - vector[i])
+							if math.IsNaN(error) || math.IsInf(error, 0) || error >= 1e-5 {
+								return 0, errors.New("parameter encoding roundtrip exceeds 1e-5")
+							}
+							maxError = max(maxError, error)
+						}
+						length := uint64(ciphertext.BinarySize())
+						maxCiphertextBytes = max(maxCiphertextBytes, length)
+						if err := binary.Write(out, binary.LittleEndian, length); err != nil {
+							return 0, err
+						}
+						written, err := ciphertext.WriteTo(out)
+						if err != nil || uint64(written) != length {
+							return 0, errors.New("parameter ciphertext serialization failed")
+						}
+						// Persist each index entry alongside its ciphertext; retain no index slice.
+						if flat > 0 {
+							if err := manifest.WriteByte(','); err != nil {
+								return 0, err
+							}
+						}
+						if _, err := fmt.Fprintf(manifest, `{"offset":%d,"length":%d}`, offset+8, length); err != nil {
+							return 0, err
+						}
+						offset += 8 + length
+						// Finish disk acknowledgement before producing another ciphertext.
+						if err := out.Flush(); err != nil {
+							return 0, err
+						}
+					}
+					return offset, out.Flush()
+				})
+				if err != nil {
+					return 0, err
+				}
+				file, _ := json.Marshal(outputID + ".bin")
+				if _, err := fmt.Fprintf(manifest, `],"file":%s,"verified_count":%d,"encoding_max_abs_error":%g,"max_ciphertext_bytes":%d}`, file, arg.Count, maxError, maxCiphertextBytes); err != nil {
+					return 0, err
+				}
+			}
+			if _, err := manifest.WriteString("}}\n"); err != nil {
+				return 0, err
+			}
+			if err := manifest.Flush(); err != nil {
+				return 0, err
+			}
+			return manifestSink.(*outputSink).pos, nil
 		})
 	}), nil
 }

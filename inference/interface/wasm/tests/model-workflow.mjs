@@ -9,7 +9,7 @@ import {sampleAndBindingRegressions,outputFramingRegressions} from './model-regr
 
 const packageRoot=path.resolve(import.meta.dirname,'..'),repo=path.resolve(packageRoot,'../../..');
 const root=path.resolve(process.env.LATTI_MODEL_ACCEPTANCE_ROOT||'/tmp/latti-browser-model-acceptance/final');
-const options={models:'retina',modes:'parameter'};
+const options={models:'retina',modes:'parameter',ratio:'0.9'};
 for(let i=2;i<process.argv.length;i+=2) {
   const key=process.argv[i].replace(/^--/,'');
   if(!Object.hasOwn(options,key)||!process.argv[i+1])throw new Error('Usage: --models cifar10,retina,bert,yolov5,vit,imagenet --modes input,parameter');
@@ -17,6 +17,7 @@ for(let i=2;i<process.argv.length;i+=2) {
 }
 const models=options.models.split(','),modes=options.modes.split(',');
 if(models.some(name=>!['cifar10','retina','bert','yolov5','vit','imagenet'].includes(name))||modes.some(name=>!['input','parameter'].includes(name)))throw new Error('Unknown model/mode diagnostic selection');
+const memoryLimit=Number(options.ratio)===0?2684354560:4294967296;
 const timeout=Number(process.env.LATTI_MODEL_TIMEOUT_MS||1800000);
 if(!Number.isSafeInteger(timeout)||timeout<=0)throw new Error('Invalid finite model timeout');
 const python=process.env.LATTI_MODEL_NATIVE_PYTHON||'python3';
@@ -93,7 +94,7 @@ try {
     sources[model]={...fixture,files};
   }
   await json(path.join(root,'source-manifest.json'),{models:sources,compileConfig:{file:'training/config/storage_aware_config.json',sha256:await hash(path.join(repo,'training/config/storage_aware_config.json'))}});
-  const build=JSON.parse(await readFile(path.join(packageRoot,'dist/manifest.json'),'utf8'));
+  const build=JSON.parse(await readFile(path.join(process.env.LATTI_RUNTIME_DIRECTORY||path.join(packageRoot,'dist'),'manifest.json'),'utf8'));
   await json(path.join(root,'environment.json'),{createdAt:new Date().toISOString(),os:{platform:os.platform(),release:os.release(),architecture:os.arch()},
     node:process.version,build,backend,device,nativeRunner:runner,nativeRunnerSHA256:await hash(runner),
     nativePython:execFileSync(python,['-c','import sys,onnx,onnxruntime,numpy,scipy,h5py; print(dict(python=sys.version,onnx=onnx.__version__,ort=onnxruntime.__version__,numpy=numpy.__version__,scipy=scipy.__version__,h5py=h5py.__version__))'],{encoding:'utf8'}).trim(),
@@ -108,7 +109,15 @@ try {
     globalThis.sources={};globalThis.splits={};globalThis.tasks={};
     globalThis.fileAt=async(directory,name,create=false)=>{const parts=name.split('/');for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part,{create});return directory.getFileHandle(parts.at(-1),{create});};
     globalThis.dirAt=async(directory,name)=>{for(const part of name.split('/'))directory=await directory.getDirectoryHandle(part);return directory;};
-    globalThis.transfer=async handle=>{const name=crypto.randomUUID()+'.bin';const response=await fetch('/artifact/'+name,{method:'POST',body:await handle.getFile()});if(!response.ok)throw new Error('Artifact transfer failed');return name;};
+    globalThis.transfer=async handle=>{
+      const name=crypto.randomUUID()+'.bin',file=await handle.getFile(),chunk=64*1024*1024;
+      for(let at=0;at<file.size;at+=chunk) {
+        const response=await fetch('/artifact/'+name,{method:'POST',headers:{'X-Latti-Append':at?'1':'0'},body:file.slice(at,at+chunk)});
+        if(!response.ok)throw new Error('Artifact transfer failed');
+      }
+      if(!file.size)await fetch('/artifact/'+name,{method:'POST',body:file});
+      return name;
+    };
     globalThis.exportArtifact=async artifact=>{
       const manifestFile=await artifact.manifest.getFile(),manifest=await manifestFile.text(),metadata=JSON.parse(manifest),transfers=[];
       for(const name of Object.keys(metadata.files))transfers.push([name,await transfer(await fileAt(artifact.directory,name))]);
@@ -127,9 +136,9 @@ try {
       const manifest=await directory.getFileHandle('inputs.json',{create:true}),writer=await manifest.createWritable();await writer.write(JSON.stringify({inputs:fixture.inputs,model_kind:fixture.modelKind||'standard'}));await writer.close();
       sources[model]={directory,modelPath:fixture.model,inputsManifest:manifest};
     },{model,fixture:fixtures[model]}));
-    await stage(model+'/split',async()=>saveArtifact(await harness.page.evaluate(async model=>{
-      splits[model]=await modelTools.prepareSplit({source:sources[model],ratio:'0.9'});return exportArtifact(splits[model]);
-    },model),path.join(modelRoot,'split')));
+    await stage(model+'/split',async()=>saveArtifact(await harness.page.evaluate(async ({model,ratio})=>{
+      splits[model]=await modelTools.prepareSplit({source:sources[model],ratio});return exportArtifact(splits[model]);
+    },{model,ratio:options.ratio}),path.join(modelRoot,'split')));
     await stage(model+'/oracle',()=>nativeCheck('oracle',['--browser',path.join(modelRoot,'split'),'--output',path.join(root,'oracle',model),'--modes',modes.map(fullMode).join(',')],path.join(root,'oracle',model,'native.log')));
     await stage(model+'/kernel-audit',async()=>{
       const result=await harness.page.evaluate(async model=>{
@@ -245,7 +254,7 @@ try {
       record.status='complete';record.comparison=JSON.parse(await readFile(path.join(unit,'comparison.json'),'utf8'));
     }
   }
-  if(models.includes('cifar10')&&models.includes('retina'))await stage('state-isolation/cifar10-repeat',async()=>{
+  if(options.ratio==='0.9'&&models.includes('cifar10')&&models.includes('retina'))await stage('state-isolation/cifar10-repeat',async()=>{
     const result=await harness.page.evaluate(async()=>{
       const repeated=await modelTools.prepareSplit({source:sources.cifar10,ratio:'0.9'});
       if(await repeated.directory.isSameEntry(splits.cifar10.directory))throw new Error('Repeated split overwrote committed directory');
@@ -274,10 +283,11 @@ try {
     if(summary.terminals?.duplicates.length){summary.status='failed';summary.unfinished.push({stage:'protocol',error:'Duplicate Worker terminal response'});process.exitCode=1;}
     await harness.close();
     const memory={...harness.rss,phases:harness.phaseMetrics,rendererPeakBytes:harness.rss.rendererPeakKiB*1024,
-      marginBytes:4294967296-harness.rss.rendererPeakKiB*1024,
+      marginBytes:memoryLimit-harness.rss.rendererPeakKiB*1024,
+      limitBytes:memoryLimit,
       accounting:'Renderer RSS sums include Workers and WASM. JS/linear-memory capacities are diagnostics and are not added to RSS.'};
     await json(path.join(root,'memory.json'),memory);
-    if(!(memory.rendererPeakBytes<4294967296)){summary.status='failed';summary.unfinished.push({stage:'memory',error:'Renderer RSS must be strictly below 4 GiB'});process.exitCode=1;}
+    if(!(memory.rendererPeakBytes<memoryLimit)){summary.status='failed';summary.unfinished.push({stage:'memory',error:`Renderer RSS must be strictly below ${memoryLimit/2**30} GiB`});process.exitCode=1;}
   }
   await json(path.join(root,'summary.json'),summary);
 }
