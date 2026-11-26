@@ -46,6 +46,23 @@ class OnnxSplitTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'count differs'):
                 validate_signature_size({'id': 'input', 'size': [1]}, packing, contract)
 
+    def test_vit_full_patch_input_has_four_matrix_block_columns(self):
+        contract = {
+            'mat_pack_style': 'par_block_col_major',
+            'matmul_block_size': 64,
+            'n_heads': 3,
+            'ckks': {'param0': {'n_slots': 32768}},
+        }
+        packing = {
+            'data_type': 'feature_mat',
+            'shape': [197, 768],
+            'head_shape': [197, 64],
+            'ckks_parameter_id': 'param0',
+        }
+        validate_signature_size({'id': 'input', 'size': [16]}, packing, contract)
+        with self.assertRaisesRegex(ValueError, 'count differs'):
+            validate_signature_size({'id': 'input', 'size': [4]}, packing, contract)
+
     def test_residual_multiple_outputs_prefix_inputs_static_and_external_data(self):
         constant = numpy_helper.from_array(np.ones((1, 4), dtype=np.float32), 'constant')
         source = model(
@@ -223,9 +240,38 @@ class OnnxSplitTest(unittest.TestCase):
             [value('v9')],
         )
         self.assertEqual(split_graph(ten, '0.9')['prefix_count'], 9)
-        for ratio in ('0', '1', '-1', 'nan', 'Infinity', '0.01'):
+        for ratio in ('1', '-1', 'nan', 'Infinity', '0.01'):
             with self.subTest(ratio=ratio), self.assertRaises(ValueError):
                 split_graph(ten, ratio)
+
+    def test_zero_ratio_keeps_original_model_and_inputs(self):
+        source = model(
+            [helper.make_node('Add', ['x', 'w'], ['a']), helper.make_node('Add', ['a', 'x'], ['out'])],
+            [value('x')],
+            [value('out')],
+            [numpy_helper.from_array(np.ones((1, 4), dtype=np.float32), 'w')],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            onnx.save_model(
+                source, root / 'source.onnx', save_as_external_data=True, location='weights.data', size_threshold=0
+            )
+            np.savetxt(root / 'x.csv', [[1, 2, 3, 4]], delimiter=',')
+            manifest = prepare(
+                root / 'source.onnx',
+                root / 'split',
+                [{'name': 'x', 'csv': 'x.csv', 'axes': ['N', 'F']}],
+                '0',
+                base_dir=root,
+            )
+            self.assertIsNone(manifest['models']['prefix'])
+            self.assertFalse((root / 'split/prefix.onnx').exists())
+            self.assertEqual((root / 'source.onnx').read_bytes(), (root / 'split/suffix.onnx').read_bytes())
+            self.assertEqual((root / 'weights.data').read_bytes(), (root / 'split/weights.data').read_bytes())
+            self.assertEqual(manifest['validation']['actual_node_counts'], {'prefix': 0, 'suffix': 2})
+            self.assertEqual([entry['name'] for entry in manifest['inputs']], ['x'])
+            self.assertEqual(manifest['validation']['split_max_abs'], {'out': 0.0})
+            load_manifest(root / 'split/split_manifest.json')
 
     def test_input_shape_dtype_and_initializer_binding(self):
         source = model(

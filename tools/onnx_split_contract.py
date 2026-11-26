@@ -177,6 +177,8 @@ def validate_signature_size(signature, packing, contract):
         capacity = slots // (block * block)
         groups = 1 if capacity >= padded_heads else (heads if capacity == 1 else padded_heads // capacity)
         count = math.prod(math.ceil(dim / block) for dim in packing['head_shape']) * groups
+        if packing.get('shape'):
+            count *= math.ceil(packing['shape'][1] / (packing['head_shape'][1] * heads))
     else:
         count = math.ceil(packing['channel'] / packing['pack_num'])
         if packing['dim'] == 2:

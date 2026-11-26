@@ -8,6 +8,7 @@ import copy
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import time
@@ -54,8 +55,8 @@ def split_graph(model, ratio_text):
         ratio = Decimal(ratio_text)
     except InvalidOperation as exc:
         raise ValueError('Invalid decimal split ratio') from exc
-    if not ratio.is_finite() or not 0 < ratio < 1:
-        raise ValueError('Split ratio must be finite and strictly between 0 and 1')
+    if not ratio.is_finite() or not 0 <= ratio < 1:
+        raise ValueError('Split ratio must be finite and in [0, 1)')
     if model.graph.sparse_initializer or model.graph.quantization_annotation:
         raise ValueError('ONNX extraction does not support sparse initializers or quantization annotations')
     for node in model.graph.node:
@@ -82,7 +83,7 @@ def split_graph(model, ratio_text):
         raise ValueError('ONNX node dependencies contain a cycle') from exc
     compute = [i for i in topo if model.graph.node[i].op_type != 'Constant']
     count = int(ratio * len(compute))
-    if not 1 <= count < len(compute):
+    if not (ratio == 0 and compute) and not 1 <= count < len(compute):
         raise ValueError('Split ratio produces an empty prefix or suffix')
     prefix, suffix = set(compute[:count]), set(compute[count:])
     positions = {i: position for position, i in enumerate(topo)}
@@ -96,7 +97,7 @@ def split_graph(model, ratio_text):
 
     prefix_inputs = [name for name in inputs if name in consumed(prefix)]
     forwarded = [name for name in inputs if name in consumed(suffix)]
-    if forwarded:
+    if forwarded and ratio != 0:
         raise ValueError(
             'Unsafe split: suffix directly consumes original graph inputs '
             f'{forwarded}; every dynamic suffix input must be produced by the prefix'
@@ -134,6 +135,9 @@ def split_graph(model, ratio_text):
         else:
             raise ValueError(f'Cannot route original output {name}')
         routes.append({'name': name, 'route': route})
+    if ratio == 0:
+        crossing = inputs
+        forwarded = []
     prefix_outputs = list(dict.fromkeys(crossing + [r['name'] for r in routes if r['route'] == 'prefix']))
     suffix_outputs = [r['name'] for r in routes if r['route'] == 'suffix']
     if not suffix_outputs:
@@ -396,7 +400,7 @@ def prepare_steps(
             'base_dir': str(graph_path.parent),
         }
     np.savez(output_dir / 'original_full_onnx_outputs.npz', **original)
-    observed = {name: reference[name] for name in plan['prefix_outputs']}
+    observed = {name: feeds[name] if plan['prefix_count'] == 0 else reference[name] for name in plan['prefix_outputs']}
     # Custom ops often lack shape inference: supply measured interfaces, not guessed rank.
     known = {value.name: value for value in prepared.graph.value_info}
     for name, array in reference.items():
@@ -412,7 +416,18 @@ def prepare_steps(
     metadata['latti.model_kind'] = model_kind
     helper.set_model_props(prepared, metadata)
     prefix_path, suffix_path = output_dir / 'prefix.onnx', output_dir / 'suffix.onnx'
-    if working_model is not None:
+    if plan['prefix_count'] == 0:
+        # Keep the original ONNX bytes and external-data names unchanged.
+        files = source_files if source_files is not None else model_files(onnx_path)
+        shutil.copyfile(onnx_path, suffix_path)
+        for entry in files[1:]:
+            relative = Path(entry['path']).relative_to(onnx_path.parent)
+            destination = output_dir / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(entry['path'], destination)
+        prefix_model = None
+        suffix_model = onnx.load(graph_path, load_external_data=working_model is None)
+    elif working_model is not None:
         from onnx_external_weights import save_references
 
         if checkpoints is None or not (Path(checkpoints) / 'extract.json').exists():
@@ -471,7 +486,7 @@ def prepare_steps(
     actual_counts = {}
     for label, extracted in [('prefix', prefix_model), ('suffix', suffix_model)]:
         indices = []
-        for node in extracted.graph.node:
+        for node in extracted.graph.node if extracted is not None else []:
             if node.op_type == 'Constant':
                 continue
             index = plan['producer'][next(name for name in node.output if name)][0]
@@ -479,14 +494,17 @@ def prepare_steps(
                 raise ValueError(f'Extracted {label} includes a node from the other partition')
             indices.append(index)
         actual_counts[label] = len(indices)
-    prefix_result = yield {
-        'stage': 'prefix',
-        'base_dir': str(prefix_path.parent),
-        'model': prefix_model,
-        'feeds': {name: feeds[name] for name in plan['prefix_inputs']},
-        'outputs': None,
-        'model_kind': model_kind,
-    }
+    if prefix_model is None:
+        prefix_result = feeds
+    else:
+        prefix_result = yield {
+            'stage': 'prefix',
+            'base_dir': str(prefix_path.parent),
+            'model': prefix_model,
+            'feeds': {name: feeds[name] for name in plan['prefix_inputs']},
+            'outputs': None,
+            'model_kind': model_kind,
+        }
     prefix_errors = compare_arrays(observed, prefix_result, 'prefix equivalence')
     suffix_feeds = {}
     inputs = []
@@ -503,7 +521,7 @@ def prepare_steps(
             'name': name,
             'id': f'boundary_{index:03d}',
             'consumers': consumers,
-            'source': 'prefix',
+            'source': 'prefix' if prefix_model is not None else 'original',
             **tensor_semantics(model, plan, entries, boundary_hints or {}, name, array, model_kind),
         }
         if name in plan['producer']:
@@ -554,7 +572,7 @@ def prepare_steps(
             'node_count': plan['node_count'],
             'prefix_count': plan['prefix_count'],
             'topology': 'networkx_lexicographical_original_index',
-            'suffix_input_policy': 'prefix_outputs_only_v1',
+            'suffix_input_policy': 'prefix_outputs_only_v1' if prefix_model is not None else 'original_inputs_v1',
             'nodes': [
                 {
                     'original_index': i,
@@ -568,12 +586,15 @@ def prepare_steps(
                 for position, i in enumerate(plan['topo'])
             ],
         },
-        'models': {'prefix': prefix_path.name, 'suffix': suffix_path.name},
-        'model_files': {'prefix': model_files(prefix_path), 'suffix': model_files(suffix_path)},
+        'models': {'prefix': prefix_path.name if prefix_model is not None else None, 'suffix': suffix_path.name},
+        'model_files': {
+            'prefix': model_files(prefix_path) if prefix_model is not None else [],
+            'suffix': model_files(suffix_path),
+        },
         'model_kind': model_kind,
         'security': {
-            'suffix_input_policy': 'prefix_outputs_only_v1',
-            'original_input_bypass': 'rejected',
+            'suffix_input_policy': 'prefix_outputs_only_v1' if prefix_model is not None else 'original_inputs_v1',
+            'original_input_bypass': 'rejected' if prefix_model is not None else 'full_model',
         },
         'original_inputs': list(entries.values()),
         'inputs': inputs,
