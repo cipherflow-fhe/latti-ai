@@ -173,6 +173,8 @@ def export_feature_mat_h5_from_onnx(
 
 def _audit_pcm_parameter_sources(layers, values):
     """Check public recipes against final exported values on the private side."""
+    from .onnx_h5 import H5Values
+
     audit = []
     for layer_id, layer in layers.items():
         for key, source in pcm_parameter_sources(layer).items():
@@ -188,7 +190,7 @@ def _audit_pcm_parameter_sources(layers, values):
                 if key == 'bias_pt' or (layer.get('type') == 'pcmaffine' and key == 'pt:pt_idx=1')
                 else None
             ) or layer.get('weight_path')
-            data = values.get(path)
+            data = values.get(path) if source['visibility'] == 'public' or not isinstance(values, H5Values) else None
             if source['visibility'] == 'public':
                 attrs = dict(op_class='ParBlockColMajorParameterAudit', type=key)
                 # Use the same recipe hash/version validation as task generation.
@@ -209,7 +211,9 @@ def _audit_pcm_parameter_sources(layers, values):
                 if data is None or not np.array_equal(data, expected):
                     raise ValueError(f'{layer_id}: public recipe differs from exported {key}')
                 item['recipe_verified'] = True
-            if data is not None:
+            if isinstance(values, H5Values) and path in values:
+                item['value_sha256'] = values.value_hash(path)
+            elif data is not None:
                 item['value_sha256'] = hashlib.sha256(np.asarray(data, dtype='<f8').tobytes()).hexdigest()
             audit.append(item)
     return audit
@@ -299,11 +303,35 @@ def _export_parcpmm(
     else:
         expected_shape = (int(fin['shape'][1]), int(fout['shape'][1]))
 
-    weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
-    if layer.get('type') == 'parcpmm' and layer.get('weight_transposed', False):
-        weight = weight.T
-    weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
-    _put(out, weight_path, weight, layer_key)
+    from .onnx_h5 import H5Values, InitializerValues
+
+    if isinstance(out, H5Values) and isinstance(onnx_weights, InitializerValues):
+        source_path, columns, multipliers = weight_path, None, []
+        qkv_source, part = _qkv_source(weight_path, '.weight')
+        if qkv_source in onnx_weights and part in ('q', 'k', 'v'):
+            source_path = qkv_source
+            width = onnx_weights.tensors[source_path].dims[1] // 3
+            offset = ('q', 'k', 'v').index(part) * width
+            columns = (offset, offset + width)
+            if part == 'q':
+                multipliers.append(1.0 / math.sqrt(_layer_head_dim(layer, features)))
+        if layer.get('weight_multiplier') is not None:
+            multipliers.append(float(layer['weight_multiplier']))
+        out.write_initializer(
+            weight_path,
+            onnx_weights,
+            source_path,
+            expected_shape,
+            transpose=layer.get('type') == 'parcpmm' and layer.get('weight_transposed', False),
+            columns=columns,
+            multipliers=multipliers,
+        )
+    else:
+        weight = _resolve_parcpmm_weight(weight_path, layer, features, onnx_weights)
+        if layer.get('type') == 'parcpmm' and layer.get('weight_transposed', False):
+            weight = weight.T
+        weight = _reshape_checked(weight, expected_shape, layer_key, weight_path)
+        _put(out, weight_path, weight, layer_key)
 
     bias_path = layer.get('bias_path', '')
     if bias_path:

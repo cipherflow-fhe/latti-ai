@@ -124,7 +124,7 @@ def write_matrix_output_selections(onnx_path: Path, task_dir: Path) -> None:
     from model_export.operations import format_id
 
     selected = set()
-    model = onnx.load(onnx_path)
+    model = onnx.load(onnx_path, load_external_data=False)
     tokenwise = {'Linear', 'CustomTanh', 'CustomGELU', 'CustomLayerNorm', 'PolyActRN'}
     for node in model.graph.node:
         attrs = {a.name: helper.get_attribute_value(a) for a in node.attribute}
@@ -315,6 +315,8 @@ def compile_model(
     set_btp_scale=None,
     runner_output_dir=None,
     random_seed=None,
+    on_stage=None,
+    stream_weights=False,
 ):
     """Shared ONNX/JSON compilation entry; failures propagate to the caller."""
     if deployment_mode not in DEPLOYMENT_MODES:
@@ -341,6 +343,8 @@ def compile_model(
                 temperature=temperature,
                 set_btp_scale=set_btp_scale,
                 runner_output_dir=runner_output_dir,
+                on_stage=on_stage,
+                stream_weights=stream_weights,
             )
         )
     finally:
@@ -351,6 +355,8 @@ def compile_model(
 
 
 def _compile(args):
+    stage = getattr(args, 'on_stage', None) or (lambda name: None)
+    stage('metadata')
     input_path = Path(args.input)
     if not input_path.exists():
         raise FileNotFoundError(input_path)
@@ -375,12 +381,20 @@ def _compile(args):
     mat_pack_style = compile_config.get('mat_pack_style', '')
     if args.deployment_mode == 'server_provisioned_runner' and mat_pack_style == 'par_diagonal_pack':
         raise ValueError('PDM encrypted parameters are unsupported; use par_block_col_major (PCM)')
-    model_type = infer_model_type(input_path)
+    split_manifest = None
     if args.split_manifest:
         from tools.onnx_split_contract import load_manifest
 
         split_manifest = load_manifest(args.split_manifest, input_path, mat_pack_style)
-        model_type = 'bert' if split_manifest['model_kind'] == 'bert' else ''
+    if is_onnx and getattr(args, 'stream_weights', False):
+        from tools.onnx_external_weights import externalize
+
+        stage('weight-externalize')
+        input_path = externalize(input_path, output_dir / 'compile-source/model.onnx')
+    stage('model-type')
+    model_type = (
+        ('bert' if split_manifest['model_kind'] == 'bert' else '') if split_manifest else infer_model_type(input_path)
+    )
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
     set_btp_scale = args.set_btp_scale
     if set_btp_scale is None:
@@ -402,6 +416,7 @@ def _compile(args):
                 onnx_style,
                 mat_pack_style=mat_pack_style,
                 model_type=model_type,
+                on_stage=stage,
             )
             log.info('[ONNX→JSON] Done: %s → %s (style=%s)', input_path, pt_json_path, onnx_style)
         except Exception as e:
@@ -424,6 +439,7 @@ def _compile(args):
     )
     print(f'[Compile] Running {args.num_experiments} experiments with {args.num_workers} workers\n')
 
+    stage('graph-compile')
     run_pipeline(
         num_experiments=args.num_experiments,
         input_file_path=pt_json_path,
@@ -460,6 +476,11 @@ def _compile(args):
         split_suffix=args.split_manifest is not None,
         # enable_score_cache=False
     )
+    # Graph nodes contain cycles; release the finished search before H5 conversion.
+    import gc
+
+    stage('graph-release')
+    gc.collect()
 
     print(f'\n[Compile] Success! Output: {output_dir}')
 
@@ -478,6 +499,7 @@ def _compile(args):
 
     if onnx_path is not None and task_dir.exists():
         if feature_mat:
+            stage('output-selections')
             write_matrix_output_selections(onnx_path, task_dir)
         json_path = task_dir / 'server' / 'nn_layers_ct_0.json'
         h5_path = task_dir / 'server' / 'model_parameters.h5'
@@ -486,6 +508,7 @@ def _compile(args):
             print(f'[H5 Export] JSON: {json_path}')
             print(f'[H5 Export] H5:   {h5_path}')
             try:
+                stage('h5-export')
                 export_h5_from_onnx(
                     onnx_path=str(onnx_path),
                     json_path=str(json_path),
@@ -504,6 +527,7 @@ def _compile(args):
             raise FileNotFoundError(f'H5 export requires compiled CT graph: {json_path}')
 
     if args.deployment_mode == 'server_provisioned_runner' and task_dir.exists():
+        stage('role-layout')
         runner_output_dir = Path(args.runner_output_dir) if args.runner_output_dir else None
         write_server_provisioned_runner_layout(task_dir, runner_output_dir)
         runner_dir = runner_output_dir if runner_output_dir is not None else task_dir / 'runner'
@@ -513,10 +537,15 @@ def _compile(args):
         print('[Deployment] Runner bundle config excludes secret_key.bin and model_parameters.h5.')
 
     if args.split_manifest:
+        stage('split-contract')
         from tools.onnx_split_contract import write_contract
 
         write_contract(args.split_manifest, task_dir)
 
+    if is_onnx and getattr(args, 'stream_weights', False):
+        stage('weight-source-release')
+        shutil.rmtree(output_dir / 'compile-source')
+    stage('complete')
     return output_dir / 'task'
 
 

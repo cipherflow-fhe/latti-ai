@@ -64,8 +64,6 @@ class ConvComputeNode(ComputeNode):
 
     @staticmethod
     def from_onnx_node(x: NodeProto, features_nodes, style, graph: GraphProto) -> 'ConvComputeNode':
-        from onnx import numpy_helper
-
         weight_path = x.input[1]
         if len(x.input) >= 3:
             bias_path = x.input[2]
@@ -92,7 +90,7 @@ class ConvComputeNode(ComputeNode):
         pads = attrs['pads']
         dilations = attrs['dilations']
 
-        weight_shape = numpy_helper.to_array(weight_tensor).shape
+        weight_shape = tuple(weight_tensor.dims)
         out_channels = weight_shape[0]
         in_channels = weight_shape[1] * groups
         spatial_dims = len(weight_shape) - 2  # 1 for Conv1d, 2 for Conv2d

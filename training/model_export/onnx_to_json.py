@@ -17,6 +17,7 @@
 
 import json
 import logging
+from pathlib import Path
 
 import onnx
 from onnx import numpy_helper
@@ -358,6 +359,7 @@ def onnx_to_json(
     style: str,
     mat_pack_style: str = '',
     model_type: str = '',
+    on_stage=None,
 ):
     """Convert an ONNX model file to the JSON format for encrypted inference.
 
@@ -372,8 +374,12 @@ def onnx_to_json(
         raise ValueError(f'Unsupported mat_pack_style: {mat_pack_style!r}. Expected one of {sorted(MAT_PACK_STYLES)}')
     feature_mat = mat_pack_style in ('par_block_col_major', 'par_diagonal_pack')
 
-    onnx_model = onnx.load(onnx_filename)
+    stage = on_stage or (lambda name: None)
+    stage('onnx-load')
+    onnx_model = onnx.load(onnx_filename, load_external_data=False)
+    stage('onnx-simplify')
     simplify_onnx_model(onnx_model)
+    stage('shape-inference')
     onnx_model = shape_inference.infer_shapes(onnx_model)
 
     graph = onnx_model.graph
@@ -386,12 +392,23 @@ def onnx_to_json(
     features_nodes = gen_data_nodes(value_infos, feature_mat=feature_mat)
     compute_nodes: dict[str, ComputeNode] = {}
 
-    constant_nodes = {
-        format_id(init.name): [numpy_helper.to_array(init), numpy_helper.to_array(init)] for init in graph.initializer
-    }
+    stage('initializer-arrays')
+    # Only shape/Mul constants need numerical values; weights need names/shapes.
+    value_constants = {name for node in graph.node if node.op_type in ('Reshape', 'Mul') for name in node.input}
+    constant_nodes = {}
+    data = None
+    for init in graph.initializer:
+        data = (
+            numpy_helper.to_array(init, base_dir=str(Path(onnx_filename).parent))
+            if init.name in value_constants
+            else None
+        )
+        constant_nodes[format_id(init.name)] = [data, data]
+    del data
     weight_shapes = {init.name: list(init.dims) for init in graph.initializer}
     initializer_names = {init.name for init in graph.initializer}
 
+    stage('graph-conversion')
     for n in graph.node:
         name = format_id(n.output[0])
         if n.op_type in ('Unsqueeze', 'Cast'):

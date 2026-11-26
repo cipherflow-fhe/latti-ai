@@ -499,7 +499,6 @@ def export_h5_from_onnx(
     import numpy as np
     import h5py
     import onnx
-    from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_activation
 
     # ------------------------------------------------------------------ #
     # 1. Load ONNX weights                                                #
@@ -666,29 +665,21 @@ def export_h5_from_onnx(
                     log.warning('layer weight not in ONNX: %s', wp)
                     continue
 
-                w = onnx_weights[wp].copy()
-                b = onnx_weights[bp].copy() if bp and bp in onnx_weights else np.zeros(w.shape[0])
-
+                divisors = []
                 for apath, atype in zip(absorb_paths, absorb_types):
-                    if atype == 'polyact':
-                        if apath not in polyact_info:
-                            log.warning('absorb_path not in polyact_info: %s', apath)
-                            continue
+                    if atype == 'polyact' and apath in polyact_info:
                         pinfo = polyact_info[apath]
-                        s = pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps']
-                        w = w / s.reshape(-1, *([1] * (w.ndim - 1)))
-                        b = b / s
-                        if verbose:
-                            log.info('Layer (absorb %s): %s  <- %s', atype, wp, apath)
-                    else:
-                        log.warning('unknown absorb_type "%s" for %s', atype, wp)
-
-                if not absorb_paths and verbose:
-                    log.info('Layer (no absorb):        %s', wp)
-
-                out[wp] = w
+                        divisors.append(pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps'])
+                shape = tuple(onnx_weights.tensors[wp].dims)
+                out.write_initializer(wp, onnx_weights, wp, shape, divisors=divisors)
                 if bp:
-                    out[bp] = b
+                    if bp in onnx_weights:
+                        out.write_initializer(
+                            bp, onnx_weights, bp, tuple(onnx_weights.tensors[bp].dims), divisors=divisors
+                        )
+                    else:
+                        out[bp] = np.zeros(shape[0])
+                continue
 
             elif ltype == 'parcpmm':
                 wp = layer.get('weight_path', '')
@@ -729,6 +720,8 @@ def export_h5_from_onnx(
                 if 'coefficients' in pinfo:
                     out[wp] = pinfo['coefficients'].flatten()
                     continue
+                from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_activation
+
                 hermite_coeffs = get_hermite_coeffs_for_activation(pinfo['activation_name'], pinfo['degree'])
                 s = pinfo['running_max'] / pinfo['upper_bound'] + pinfo['eps']
                 # Conv absorbed 1/s, so polyact receives x' = x/s and must output s*poly(x').
@@ -756,6 +749,8 @@ def export_h5_from_onnx(
                 pinfo = pcmpoly_node_attrs[layer_key]
                 feat_in = json_data['feature'][layer['feature_input'][0]]
                 n_cols = int(feat_in['shape'][1])
+                from .eval_fn_hat_for_aespa import get_hermite_coeffs_for_activation
+
                 hermite_coeffs = get_hermite_coeffs_for_activation(pinfo['activation_name'], pinfo['degree'])
                 coeffs = _compute_poly_coeffs(np.ones(n_cols), 1.0, 0.0, hermite_coeffs)
                 out[wp] = coeffs.flatten()
