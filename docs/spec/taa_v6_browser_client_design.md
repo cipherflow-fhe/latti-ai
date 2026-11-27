@@ -42,7 +42,7 @@ profile ID 由规范化实际参数及键计划派生，用于定位和快速检
 ```ts
 type ArtifactRef = {
   artifactId: string;
-  role: 'public-eval' | 'private-full' | 'ciphertext' | 'plaintext';
+  role: 'public-encryption' | 'public-eval' | 'private-full' | 'ciphertext' | 'plaintext';
   file: FileSystemFileHandle;
   bytes: string; // uint64 decimal
 };
@@ -154,3 +154,10 @@ keyDirectory 的最终 full/eval 按同样的双文件规则流式复制到用�
 - 真实 Worker/OPFS 中 keygen、encrypt、decrypt 均使用 chunk/need-input/write-at；单在途块，main 只收小型消息/handle，无全 Feature/ZIP 的 ArrayBuffer 回退。
 - 注入 404、错误 MIME/runtime 退出、消息反序列化失败、取消、close 竞争、配额/close/patch 失败、多 tab 冲突；全部 pending 有终态，无 committed 半成品，旧产物可读。
 - 分别记录 JS/WASM/可测 RSS、最大单 ciphertext/key 工作区、OPFS 临时/最终占用；目录模式和 ZIP 模式分别测量，不以一个替代另一个。
+
+
+## 原图批量默认验收更新（2026-11-27）
+
+默认 Retina split=0.9 从十份原始图像/临床指标经可信 preprocess.js 生成 CSV，独立 runPrefix 逐样本串行执行并记录完整 case/hash 绑定。参数模式默认输入与参数均用模型方公钥加密。exportPublicContext/importPublicContext 仅传递参数与 PK，导入清除旧 SK/解密器；数据方不取得评估密钥或私钥。
+
+模型方一次生成密钥、独立计时 provision；数据方 encryptBatch 生成输入密文 ZIP，native GPU runtime_lazy 串行处理并按 case 保存结果，模型方 decryptBatch 后调用 postprocess.js 计算 accuracy/specificity/sensitivity/AUC。uploadProcessingScripts 保存可信脚本到授权静态资源目录；脚本审核及远端发布由集成项目负责。具体 schema、权限、交付回放及验收范围以 wasm_onnx_split_compile_design.md 第 10 节为准。

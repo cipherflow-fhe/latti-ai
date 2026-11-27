@@ -183,3 +183,10 @@ server file import 做空文件、尺寸/分配范围、短读与当前 v6 格�
 6. 在真实 wasm32 上尽早测最大单键与 encoder 工作区。若超线性内存上限，记录为未满足门槛并针对 v6 算法实现优化；不能缩小参数、删键或擅自启用旧压缩来宣称完成。
 7. 代码审查与生成轨迹核对第 2.1 节接口表：逐键路径直接调用现有 v6 单键接口，BTP ring-swap 仅允许既有成对返回；当前键完成写入确认后才生成下一键。确认未重写单键算法、未引入旧分支兼容 wrapper、未通过批量生成后逐键导出来冒充流式生成。
 8. 固定同一 SK 与完整 profile，分别覆盖 CI 默认 PN15Default 和显式 standard profile：重生成 PK 后加密可由原 SK 解密；不依赖 PK 重生成 RLK/GaloisKey 后完成相应运算；重生成完整配套 BTP 键后处理原密文。restore 单独验证原 PK 字节/标识保持不变；不把随机化密钥的字节相等作为验收条件。
+
+
+## 仅公钥数据方上下文（2026-11-27）
+
+新增 `Context.WritePublic` / `RestorePublicFrom` 与浏览器 `exportPublicContext` / `importPublicContext`，复用 CKKSCTX1 的参数、PK 与无评估键 envelope，采用流式 I/O。公钥导入按可信 profile 检查精确大小、参数、键维度、两项 eval 标志为 false 及 EOF，拒绝 full/eval 与附加数据；Context.SecretKey 必须为 nil。full 导出必须显式持有 SK。
+
+浏览器在公钥导入开始即清除旧 SK、PK、encryptor、decryptor，成功后只构建 PK encryptor；失败后也不能保留旧解密能力。导入公钥与模型方公钥 identity 相同，数据方可以批量加密 prefix 输出，无法解密或运行需要私钥自校验的参数 provision。新参数模式输入和参数均由同一模型方公钥加密，评估上下文只交给 Runner，full/SK 只保留模型方。profile 内的键计划描述不表示公钥文件携带评估键。

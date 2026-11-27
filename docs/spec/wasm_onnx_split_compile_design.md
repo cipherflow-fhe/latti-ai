@@ -63,7 +63,8 @@ H5 按 layer/dataset 导出，控制全量 initializer float64 字典、output �
 | 接口 | 参数与结果 |
 | --- | --- |
 | `prepareSplit` | `ModelSources`、十进制字符串 `ratio`，返回 split `ArtifactDirectory` |
-| `runPrefix` | 已准备的 `split`、新 `inputsManifest`，返回该样本 crossing/manifest 目录 |
+| `exportPrefix` | 已验证的 `split`、可选输出父目录；流式导出独立 prefix 图、必要权重和公共接口，不包含 suffix、原模型或样本 |
+| `runPrefix` | 独立 `prefix`、数据方 `inputDirectory` 和 `inputsManifest`；复用逐节点按需权重读取，返回 crossing/公开输出和样本绑定目录，不接受完整 split |
 | `compileHighLevel` | 二选一 `source: ModelSources` 或 `split: ArtifactDirectory`，加 `deploymentMode`、可选 `compileConfig: FileSource`，返回 task 目录 |
 | `generateLowLevel` | `task: ArtifactDirectory`，返回具备 MegaAG/signature/requirements 的任务目录 |
 | `cancel` / `close` | 可选 requestId 的 cancel 返回 `{accepted: boolean}`，close 结束会话，均为 Promise |
@@ -95,7 +96,7 @@ Provisioner 按实际 signature、layer、kind、layout/generator 编码 conv/de
 | 模式 | native 只执行的接线 |
 | --- | --- |
 | 输入加密 | 浏览器 `task/server`、公开 eval context、`{feature_id: ciphertext_file}`→`InferenceServer::import_eval_context_file/load_model/evaluate`→原始输出密文文件或 named bundle |
-| 参数加密 | 浏览器 Runner bundle、具名明文 crossing→`InferenceRunner::load/evaluate_plaintext_input`（`runtime_lazy`）→`output.ct` |
+| 参数加密 | 浏览器 Runner bundle、公钥加密的 crossing→`InferenceRunner::load/evaluate_inputs`（GPU `runtime_lazy`）→逐样本结果密文目录/ZIP |
 
 必要时补窄范围 C++/Python binding adapter，记录修改。现有 `examples/inference.cpp` 输入模式内含 native setup/encrypt/decrypt，主链须改用只执行 Server 的入口。参数 example 可复用，但主链不得用 native provision/decrypt 替代浏览器。CPU/GPU 均可，优先复用既有 GPU lazy 环境并记录 backend、设备、构建、lazy mode、日志与 native 独立峰值。测试 HTTP 仅供静态资源和产物传输，隔离 oracle 需标记来源。
 
@@ -249,3 +250,26 @@ BERT split RSS 下降约 66.3%，Pyodide 最大容量由 3076128768 bytes 降至
 四项实现对应 `tools/onnx_external_weights.py`、共享 `prepare_steps` 的权重引用路径、模型 API 的私有检查点/Worker 续接、按节点的权重 feed 与生命周期释放。小型 shape/control 常量保留或物化为有界常量，使 Reshape 等节点可在分配前推断 shape；float64 采用 ORT 标准内核，未降低精度。
 
 详细资源与前后对比见 `resource-audit.json`、`memory-comparison.json`；失败回归在相邻的 `on-demand-final-v2-failures/`。交付包和完成审计生成于相邻 `/tmp` 目录。完整原始 ONNX 参数加密的既有内存问题仍为非阻塞项。
+
+
+## 10. 原图批量默认链路与仅公钥交接（2026-11-27）
+
+本节更新默认开发/交付场景。历史六模型单样本记录保持其原有范围，不能替代本节十样本验收。
+
+默认原始输入为 Retina `demo_10/dataset` 的十份眼底、disk、lesion 图像和原始 XLSX 指标。可信 `preprocess.js` 生成三个输入目录及 `inputs.json.samples[]`；label 仅供后处理，不进入 prefix/suffix。ONNX batch 维为 N=1，批次逐样本串行调度，不合并成 N=10 大张量。首样本用于 split=0.9 的接口/明文等价检查；suffix high/low-level 只编译一次。
+
+1. 模型方一次 `setup()` 生成同一 SK/PK 对及评估上下文。密钥生成和参数加密分别计时，后续复用。
+2. `exportPublicContext()` 输出裸 CKKSCTX1 公共参数/PK envelope，两项 evaluation-key present 标志均为 false，不含 full/SK 外层容器。`importPublicContext()` 按可信 profile 校验长度、参数、键维度、EOF；拒绝 full、eval、截断及尾随内容。导入开始即清除原 SK、decryptor 和旧 PK，失败不恢复私钥能力。公钥导入后只能加密，不能解密或执行要求私钥自校验的参数 provision。
+3. 模型方 `exportPrefix()` 生成独立 prefix；数据方只取得该产物、公共任务配置/输入 contract、公钥 context。`runPrefix()` 不接受完整 split。权重按当前节点 offset/length 读取，使用原有执行器，逐样本落盘。
+4. `latti-ai.prefix-run.v2` 保存 split/prefix SHA-256、完整 case 集合、逐样本 manifest SHA-256 和耗时。每个 `run/cases/<case_id>/` 保存 crossing CSV 和公开路由。旧单样本 inputs manifest 与根 sample_manifest.json 保留兼容。
+5. 新参数模式默认 `input_mode=client_ciphertext`、`parameter_mode=encrypted_offline`。输入/参数均用同一个模型方 PK 加密；`encryptBatch({mode:'server',inputDirectories,run})` 验证精确样本集合、shape/dtype/representation 和 crossing 内容 hash，串行生成输入密文 ZIP。显式 plaintext 历史任务仍可执行，但不计为本节验收。
+6. native `evaluate_browser_task --batch-manifest ... --output-dir ... --gpu` 复用 Runner，按 manifest 顺序串行执行 ciphertext 输入与 encrypted parameters 的 GPU runtime_lazy 图；完整 case/输入路径预检后逐样本保存 `<case_id>.result.bin`，最后提交 batch manifest。结果 ZIP 只含约定的样本结果密文。
+7. 模型方 `decryptBatch()` 校验输入批次的 profile/keyIdentity 和完整输出 case 集合，串行解密。可信 `postprocess.js` 依据 filename 与 label 对齐，计算 accuracy、specificity、sensitivity 和 AUC；ties 按平均秩计 AUC，单类时对应指标为 null。
+
+`uploadProcessingScripts({directory,preprocessFile,postprocessFile})` 向操作方授权的静态资源目录写 JS 和 SHA-256 manifest，不自动执行。脚本视为可信操作方代码，远程鉴权/发布复用集成项目的后端；不让任意访客上传脚本后获得站点执行权限。
+
+开发默认 `npm run test:model-workflow` / `test:batch`，从原图跑完整 WASM 主链及 native GPU；`test:delivery` 使用同一批量网页流程，仅以已绑定的真实 native 密文 ZIP 替代 FHE 执行。对照原始完整 ONNX 比较十样本全部输出，最大绝对误差严格小于 0.1；独立 Python 预处理 oracle 与浏览器 CSV 逐元素比对。报告记录阶段耗时、renderer RSS 与 native RSS/GPU 显存峰值，以及 case/模型/配置/参数/密钥身份/结果绑定。
+
+交付必须包含独立 WASM ZIP、完整原 ONNX、原图/指标/标签、生成的批量 CSV、独立 pre/post JS、真实 GPU 批量结果密文、配套演示密钥及逐样本 crossing hash。页面重新执行预处理、split、编译、prefix、公钥导入/批量加密、参数 provision、批量解密和后处理；回放不证明新生成的参数 bundle 被 native 执行。生产数据方只能取得 prefix/公共 metadata/仅公钥 context，不能取得汇集双方测试材料的整个交付包。
+
+验收产物在 /tmp，空间不足时只删除已有通过记录的旧产物；报告另存 latti-ai-reports，交付 ZIP 在 taa-delivery，工作区仅保留代码和规范。

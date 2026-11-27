@@ -1,20 +1,21 @@
 # Server-Provisioned Runner 部署模式
 
-本文档说明 `server_provisioned_runner` 部署模式的角色分工、产物目录、安全边界和基本使用流程。该模式的目标是让 server 侧离线加密模型参数，Runner 现场读取明文输入并执行同态计算，最后由 server 侧解密 Runner 返回的密文结果。
+本文档说明 `server_provisioned_runner` 部署模式的角色分工、产物目录、安全边界和基本使用流程。该模式的目标是让 server 侧离线加密模型参数，数据方使用模型方公钥加密输入，Runner 读取输入密文并执行同态计算，最后由 server 侧解密 Runner 返回的密文结果。
 
 ## 角色分工
 
 - `Provisioner`：server 侧离线准备者，持有明文模型参数和 secret key，负责生成 eval context、按 use-site level 加密模型参数，并导出可搬运的 Runner bundle。
-- `Runner`：现场执行者，只持有 eval context、MegaAG、task signature 和加密后的模型参数。Runner 读取明文输入，输出密文结果，不持有 secret key。
+- `Runner`：现场执行者，只持有 eval context、MegaAG、task signature 和加密后的模型参数。Runner 默认读取数据方加密的输入，输出密文结果，不持有 secret key。
 - `Decryptor`：server 侧解密者，持有 secret key，负责解密 Runner 返回的密文输出。
 
 默认的 `client_encrypted_input` 模式不变；`server_provisioned_runner` 是新增的部署模式，不改变旧 quick start 和旧 API 的默认语义。
 
 ## 安全边界
 
-`server_provisioned_runner` 模式只保护模型参数和输出密文不被 Runner 解密，不保护 Runner 现场输入。
+新编译的 `server_provisioned_runner` 默认 `input_mode=client_ciphertext`，输入和参数均用模型方同一公钥加密。历史显式 `plaintext` 任务保留兼容。
 
-- Runner 可以看到输入明文，因为该模式假设输入隐私不是目标。
+- 数据方只收到 `public_context.bin`（参数、PK，无评估密钥/SK），可加密 prefix 输出，不能解密。浏览器通过 `exportPublicContext()` / `importPublicContext()` 交接。
+- Runner 默认无法看到输入明文。模型方持有 SK，能够解密返回结果。
 - Runner bundle 不应包含 `secret_key.bin`、`secret_context.bin`、`model_parameters.h5` 或其他明文模型参数 dump。
 - Runner 持有 eval context，包括 relin key、rotation/galois key 和 bootstrapping 所需公钥材料；这些公钥只用于同态计算，不能解密参数密文或输出密文。
 - Runner 可读取加密后的模型参数并执行 `PT * CT`、`CT * CT` 等计算，但不能解密参数或结果。
@@ -62,7 +63,7 @@ runs/cifar10/task/
 ```json
 {
   "deployment_mode": "server_provisioned_runner",
-  "input_mode": "plaintext",
+  "input_mode": "client_ciphertext",
   "parameter_mode": "encrypted_offline",
   "parameter_loading_mode": "runtime_lazy",
   "decryptor": "provisioner",
@@ -149,7 +150,7 @@ python inference/interface/gen_mega_ag.py \
   --gpu
 ```
 
-Runner 读取明文 CSV 输入，将输入编码为 plaintext/ringt argument，执行 MegaAG，并把输出密文序列化到 `--output-cipher`。在 `eager` 模式下，Runner 启动计算前整包反序列化 offline encrypted parameters；在 `runtime_lazy` 模式下，计算图运行到参数 use-site 时才通过 `load_encrypted_param_ct` 节点按元素读取并反序列化所需密文。depthwise 和 inverse 的 `call_param_ct()` 路径同样使用该公共加载节点；公开 seed mask 由 Runner 的 `encode_pt` executor 生成，不需要为每个 `call_param_ct*()` 增加 custom compute。
+Runner 默认读取 Feature 输入密文，执行 CT × CT 参数图，并把输出密文序列化到 `--output-cipher`。历史显式 plaintext 任务仍读取 CSV 并编码 plaintext/ringt；下方旧单样本 CSV 命令只适用于该兼容模式，新任务应先在数据方使用模型方公钥加密输入。在 `eager` 模式下，Runner 启动计算前整包反序列化 offline encrypted parameters；在 `runtime_lazy` 模式下，计算图运行到参数 use-site 时才通过 `load_encrypted_param_ct` 节点按元素读取并反序列化所需密文。depthwise 和 inverse 的 `call_param_ct()` 路径同样使用该公共加载节点；公开 seed mask 由 Runner 的 `encode_pt` executor 生成，不需要为每个 `call_param_ct*()` 增加 custom compute。
 
 GPU 运行需要先用 `-DINFERENCE_SDK_ENABLE_GPU=ON` 构建，并在运行命令中显式传入 `--gpu`；CPU 运行时省略 `--gpu`。多输入任务可以使用 `--input name=path` 形式显式绑定输入名。
 
@@ -274,3 +275,10 @@ seed 恢复前的参数密文也必须位于相应 residual Q 链内。
 在参数 payload 和 BTP/运行代价之间取得了可观察的折中。若存储成本优先可提高到
 `2.0` 或更高，但应重新验收 refresh 数量和 GPU 延迟；若延迟优先，使用 `0` 或较小
 权重。不同硬件、序列化版本或模型应重新校准后再比较 weight。
+
+
+## 原图十样本批量默认验收
+
+浏览器默认从 Retina 原图/原始临床指标经 preprocess.js 生成批量 CSV，独立 runPrefix 按需读取权重并串行推理，公钥 encryptBatch 生成输入密文 ZIP。native `evaluate_browser_task --mode server_provisioned_runner --gpu --task-dir RUNNER --batch-manifest batch.json --output-dir NEW_DIRECTORY` 复用 runner 串行处理，参数加载为 GPU runtime_lazy，逐样本写 `<case_id>.result.bin` 并最后提交 batch_manifest.json。batch.json 格式为 `{"samples":[{"case_id":"case-a","inputs":{"feature_id":"case-a__feature_id.ct"}}]}`，输入路径相对该 manifest。
+
+返回 ZIP 只放样本结果密文，模型方 `decryptBatch()` 验证全部 case 集合后串行解密，再调用 postprocess.js 计算 accuracy/specificity/sensitivity/AUC。新默认开发与交付流程、仅公钥能力和密文回放限制见 [WASM README](../../inference/interface/wasm/README.md)。
