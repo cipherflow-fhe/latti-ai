@@ -44,6 +44,8 @@ public:
     InferenceRunner& operator=(InferenceRunner&&) = default;
 
     void load();
+    std::map<std::string, Bytes> evaluate_inputs(const std::map<std::string, std::string>& input_files,
+                                                 ls::ProgressCallback progress_cb = nullptr);
     std::map<std::string, Bytes> evaluate_plaintext_input(const std::map<std::string, std::string>& input_csvs,
                                                           ls::ProgressCallback progress_cb = nullptr);
 

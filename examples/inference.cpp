@@ -68,8 +68,7 @@ int main(int argc, char* argv[]) try {
     if (task_dir.empty() || input_args.empty()) {
         cerr << "Usage: " << argv[0] << " --task-dir <path> --input [name=]<path> [--input ...] [--gpu] [--verify]"
              << " [--deployment-mode client_encrypted_input|server_provisioned_runner]"
-             << " [--output-cipher <path>] [--output-csv <path>]"
-             << endl;
+             << " [--output-cipher <path>] [--output-csv <path>]" << endl;
         return 1;
     }
     if (deployment_mode != "client_encrypted_input" && deployment_mode != "server_provisioned_runner") {
@@ -104,7 +103,7 @@ int main(int argc, char* argv[]) try {
         try {
             InferenceRunner runner(task_dir, use_gpu, 0);
             runner.load();
-            auto encrypted_outputs = runner.evaluate_plaintext_input(input_csvs);
+            auto encrypted_outputs = runner.evaluate_inputs(input_csvs);
             write_named_bytes_bundle(output_cipher, encrypted_outputs);
             cout << "Runner ciphertext output written to " << output_cipher << endl;
         } catch (const exception& e) {
@@ -182,7 +181,8 @@ int main(int argc, char* argv[]) try {
         csv << "output,index,value\n" << setprecision(numeric_limits<double>::max_digits10);
         for (const auto& [name, result] : results) {
             string escaped_name;
-            for (char c : name) escaped_name += c == '"' ? "\"\"" : string(1, c);
+            for (char c : name)
+                escaped_name += c == '"' ? "\"\"" : string(1, c);
             for (size_t i = 0; i < result.output.size(); ++i) {
                 csv << '"' << escaped_name << "\"," << i << ',' << result.output[i] << '\n';
             }

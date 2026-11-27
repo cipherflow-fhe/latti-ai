@@ -115,9 +115,8 @@ fhe::CkksParameter InferenceProvisioner::make_parameter() const {
     const int log_n = static_cast<int>(std::log2(entry.at("poly_modulus_degree").get<uint32_t>()));
     const auto q = entry.at("q").get<std::vector<uint64_t>>();
     const auto p = entry.at("p").get<std::vector<uint64_t>>();
-    return fhe::CkksParameter::create_custom_parameter(
-        log_n, entry.at("log_default_scale").get<int>(), q, p,
-        static_cast<fhe::RingType>(entry.value("ring_type", 1)));
+    return fhe::CkksParameter::create_custom_parameter(log_n, entry.at("log_default_scale").get<int>(), q, p,
+                                                       static_cast<fhe::RingType>(entry.value("ring_type", 1)));
 }
 
 void InferenceProvisioner::setup_or_load_keys() {
@@ -133,13 +132,14 @@ void InferenceProvisioner::setup_or_load_keys() {
     const auto full_context_path = provisioner_dir_ / "full_context.bin";
     if (std::filesystem::exists(full_context_path) && std::filesystem::exists(eval_context_path)) {
         std::cout << "[Provisioner] Restoring streaming client keys..." << std::endl;
-        context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::restore_client_context(
-            make_parameter(), read_binary_file(full_context_path), use_btp));
+        context_ = std::make_unique<fhe::CkksContext>(
+            fhe::CkksContext::restore_client_context(make_parameter(), read_binary_file(full_context_path), use_btp));
         return;
     }
     if (std::filesystem::exists(eval_context_path) && std::filesystem::exists(secret_key_path)) {
         std::cout << "[Provisioner] Loading existing server-owned CKKS keys..." << std::endl;
-        context_ = std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(read_binary_file(eval_context_path)));
+        context_ =
+            std::make_unique<fhe::CkksContext>(fhe::CkksContext::deserialize(read_binary_file(eval_context_path)));
         context_->set_secret_key(fhe::SecretKey::deserialize(read_binary_file(secret_key_path)));
         return;
     }
@@ -155,7 +155,7 @@ void InferenceProvisioner::setup_or_load_keys() {
 void InferenceProvisioner::copy_private_and_runner_configs(const std::filesystem::path& runner_dir) const {
     json provisioner_config = task_config_;
     provisioner_config["deployment_mode"] = "server_provisioned_runner";
-    provisioner_config["input_mode"] = "plaintext";
+    provisioner_config["input_mode"] = task_config_.value("input_mode", std::string("client_ciphertext"));
     provisioner_config["parameter_mode"] = "encrypted_offline";
     provisioner_config["decryptor"] = "provisioner";
     provisioner_config["deployment_role"] = "provisioner";
@@ -168,7 +168,7 @@ void InferenceProvisioner::copy_private_and_runner_configs(const std::filesystem
                              read_json((runner_dir / "task_config.json").string()) :
                              task_config_;
     runner_config["deployment_mode"] = "server_provisioned_runner";
-    runner_config["input_mode"] = "plaintext";
+    runner_config["input_mode"] = provisioner_config["input_mode"];
     runner_config["parameter_mode"] = "encrypted_offline";
     runner_config["decryptor"] = "provisioner";
     runner_config["deployment_role"] = "runner";
@@ -185,19 +185,24 @@ void InferenceProvisioner::copy_private_and_runner_configs(const std::filesystem
         // Keep geometry and explicit public recipes. Private coefficients and
         // source paths are only needed by the Provisioner encoders.
         const std::set<std::string> public_fields = {
-            "type", "feature_input", "feature_output", "K", "k", "order", "degree",
-            "weight_shape", "head_shape", "to_expand", "level_cost", "pcm_seed_layout",
-            "parameter_sources", "epsilon", "eps", "level", "n_levels", "is_transposed"};
+            "type",       "feature_input",   "feature_output",    "K",          "k",
+            "order",      "degree",          "weight_shape",      "head_shape", "to_expand",
+            "level_cost", "pcm_seed_layout", "parameter_sources", "epsilon",    "eps",
+            "level",      "n_levels",        "is_transposed"};
         for (auto& item : graph["layer"].items()) {
             auto& layer = item.value();
             const auto type = layer.at("type").get<std::string>();
-            if (type.rfind("pcm", 0) != 0 && type.rfind("par", 0) != 0) continue;
+            if (type.rfind("pcm", 0) != 0 && type.rfind("par", 0) != 0)
+                continue;
             for (auto it = layer.begin(); it != layer.end();) {
-                if (!public_fields.count(it.key())) it = layer.erase(it);
-                else ++it;
+                if (!public_fields.count(it.key()))
+                    it = layer.erase(it);
+                else
+                    ++it;
             }
             if (layer.contains("parameter_sources"))
-                for (auto& source : layer["parameter_sources"].items()) source.value().erase("source_refs");
+                for (auto& source : layer["parameter_sources"].items())
+                    source.value().erase("source_refs");
         }
     }
     write_json_file(runner_dir / "nn_layers_ct_0.json", graph);
@@ -314,28 +319,31 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
             const auto& generator = sig.at("generator");
             if (generator.at("op_class") == "InputZero") {
                 ringt = fhe_api::encode_ringt(context, std::vector<double>(context.parameter().max_slots(), 0.0),
-                                             context.parameter().default_scale());
+                                              context.parameter().default_scale());
             } else {
                 ringt = generate_matrix_parameter(context, &init.get_layer<Layer>(info.layer_id), generator);
             }
         } else if (starts_with(arg_id, "dense")) {
             auto& layer = init.get_layer<DensePackedLayer>(info.layer_id);
             const bool tile_seed = layer_cfg.contains("dense_seed_tiles") &&
-                layer_cfg.at("dense_seed_tiles").at(is_weight ? "weight" : "bias").get<bool>();
+                                   layer_cfg.at("dense_seed_tiles").at(is_weight ? "weight" : "bias").get<bool>();
             if (tile_seed) {
                 const auto& layout = layer_cfg.at("dense_seed_tiles");
                 const auto duo = [&layout](const char* key) {
                     return Duo{layout.at(key).at(0).get<uint32_t>(), layout.at(key).at(1).get<uint32_t>()};
                 };
                 layer.validate_tile_geometry(duo("input_shape"), duo("skip"), duo("invalid_fill"),
-                    layout.at("slots").get<uint32_t>(), duo("weight_shape"), layout.at("use_site_level").get<int>());
+                                             layout.at("slots").get<uint32_t>(), duo("weight_shape"),
+                                             layout.at("use_site_level").get<int>());
                 const uint64_t group = layout.at("group_size").get<uint64_t>();
                 if (!group || group != prod(duo("tile_grid")) || duo("tile_grid") != duo("invalid_fill"))
                     throw std::runtime_error("[Provisioner] invalid dense tile group");
                 const auto original = duo("weight_shape");
                 const uint64_t expected = div_ceil(uint64_t(original[0]) * (is_weight ? original[1] : 1), group);
-                const auto expected_shape = is_weight ? std::vector<uint64_t>{1, expected} : std::vector<uint64_t>{expected};
-                if (shape != expected_shape || encrypt_level != layout.at("use_site_level").get<int>() + (is_weight ? 1 : 0))
+                const auto expected_shape =
+                    is_weight ? std::vector<uint64_t>{1, expected} : std::vector<uint64_t>{expected};
+                if (shape != expected_shape ||
+                    encrypt_level != layout.at("use_site_level").get<int>() + (is_weight ? 1 : 0))
                     throw std::runtime_error("[Provisioner] dense tile shape or level mismatch: " + arg_id);
                 ringt = layer.generate_tile_seed(context, flat_idx, is_bias);
             } else if (is_weight) {
@@ -386,14 +394,19 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                             if (shape[0] != n_out_channel || shape[1] != layer.weight_.get_shape()[1] ||
                                 shape[2] != layer.seed_weight_kernel_count())
                                 throw std::runtime_error("[Provisioner] inverse seed shape mismatch: " + arg_id);
-                            if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                            if (encrypt_level !=
+                                init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>())
+                                        .at("level")
+                                        .get<int>() +
+                                    layer.seed_weight_level_cost())
                                 throw std::runtime_error("[Provisioner] inverse seed level mismatch: " + arg_id);
                             const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
                             const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                             const int weight_idx = static_cast<int>(flat_idx % shape[2]);
-                            ringt = layer.use_seed_weight_pack()
-                                        ? layer.generate_weight_pt_for_seed_indices(context, out_idx, in_idx, weight_idx)
-                                        : layer.generate_weight_pt_for_indices(context, out_idx, in_idx, weight_idx);
+                            ringt =
+                                layer.use_seed_weight_pack() ?
+                                    layer.generate_weight_pt_for_seed_indices(context, out_idx, in_idx, weight_idx) :
+                                    layer.generate_weight_pt_for_indices(context, out_idx, in_idx, weight_idx);
                         } else {
                             if (!is_bias || shape.size() != 1) {
                                 throw std::runtime_error("[Provisioner] inverse conv bias signature must be rank 1: " +
@@ -409,14 +422,20 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                                     "[Provisioner] inverse depthwise conv weight signature must be rank 2: " + arg_id);
                             }
                             if (shape[0] != n_out_channel || shape[1] != layer.seed_weight_kernel_count())
-                                throw std::runtime_error("[Provisioner] inverse depthwise seed shape mismatch: " + arg_id);
-                            if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
-                                throw std::runtime_error("[Provisioner] inverse depthwise seed level mismatch: " + arg_id);
+                                throw std::runtime_error("[Provisioner] inverse depthwise seed shape mismatch: " +
+                                                         arg_id);
+                            if (encrypt_level !=
+                                init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>())
+                                        .at("level")
+                                        .get<int>() +
+                                    layer.seed_weight_level_cost())
+                                throw std::runtime_error("[Provisioner] inverse depthwise seed level mismatch: " +
+                                                         arg_id);
                             const int out_idx = static_cast<int>(flat_idx / shape[1]);
                             const int weight_idx = static_cast<int>(flat_idx % shape[1]);
-                            ringt = layer.use_seed_weight_pack()
-                                        ? layer.generate_weight_pt_for_seed_indices(context, out_idx, weight_idx)
-                                        : layer.generate_weight_pt_for_indices(context, out_idx, weight_idx);
+                            ringt = layer.use_seed_weight_pack() ?
+                                        layer.generate_weight_pt_for_seed_indices(context, out_idx, weight_idx) :
+                                        layer.generate_weight_pt_for_indices(context, out_idx, weight_idx);
                         } else {
                             if (!is_bias || shape.size() != 1) {
                                 throw std::runtime_error(
@@ -435,14 +454,18 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                         if (layer.joint_seed_weights() &&
                             (shape[0] != 1 || shape[1] != layer.seed_weight_count() || shape[2] != 1))
                             throw std::runtime_error("[Provisioner] multiplexed joint seed shape mismatch: " + arg_id);
-                        if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                        if (encrypt_level !=
+                            init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>())
+                                    .at("level")
+                                    .get<int>() +
+                                layer.seed_weight_level_cost())
                             throw std::runtime_error("[Provisioner] multiplexed seed level mismatch: " + arg_id);
                         const int out_idx = static_cast<int>(flat_idx / (shape[1] * shape[2]));
                         const int in_idx = static_cast<int>((flat_idx / shape[2]) % shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[2]);
-                        ringt = layer.use_seed_weight_pack()
-                                    ? layer.generate_weight_pt_for_seed_indices(context, out_idx, in_idx, kernel_idx)
-                                    : layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
+                        ringt = layer.use_seed_weight_pack() ?
+                                    layer.generate_weight_pt_for_seed_indices(context, out_idx, in_idx, kernel_idx) :
+                                    layer.generate_weight_pt_for_indices(context, out_idx, in_idx, kernel_idx);
                     } else if (is_bias) {
                         if (!is_bias || shape.size() != 1) {
                             throw std::runtime_error("[Provisioner] multiplexed conv bias signature must be rank 1: " +
@@ -468,13 +491,17 @@ std::vector<fhe::CkksCiphertext> InferenceProvisioner::encrypt_parameter_argumen
                         if (layer.joint_seed_weights() && (shape[0] != 1 || shape[1] != layer.seed_weight_count())) {
                             throw std::runtime_error("[Provisioner] depthwise joint seed shape mismatch: " + arg_id);
                         }
-                        if (encrypt_level != init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>()).at("level").get<int>() + layer.seed_weight_level_cost())
+                        if (encrypt_level !=
+                            init.json_features.at(layer_cfg.at("feature_input").at(0).get<std::string>())
+                                    .at("level")
+                                    .get<int>() +
+                                layer.seed_weight_level_cost())
                             throw std::runtime_error("[Provisioner] depthwise seed level mismatch: " + arg_id);
                         const int ct_idx = static_cast<int>(flat_idx / shape[1]);
                         const int kernel_idx = static_cast<int>(flat_idx % shape[1]);
-                        ringt = layer.use_seed_weight_pack()
-                                    ? layer.generate_weight_pt_for_seed_indices(context, ct_idx, kernel_idx)
-                                    : layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
+                        ringt = layer.use_seed_weight_pack() ?
+                                    layer.generate_weight_pt_for_seed_indices(context, ct_idx, kernel_idx) :
+                                    layer.generate_weight_pt_for_indices(context, ct_idx, kernel_idx);
                     } else if (is_bias) {
                         if (!is_bias || shape.size() != 1) {
                             throw std::runtime_error(
@@ -698,12 +725,11 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
             try {
                 const auto& sig = parameter_sigs[first + i];
                 batch[i] = encrypt_parameter_argument(sig.at("id").get<std::string>(), sig, ctx, init);
-            } catch (...) {
-                errors[i] = std::current_exception();
-            }
+            } catch (...) { errors[i] = std::current_exception(); }
         });
         for (size_t i = 0; i < batch_size; ++i) {
-            if (errors[i]) std::rethrow_exception(errors[i]);
+            if (errors[i])
+                std::rethrow_exception(errors[i]);
             const auto& sig = parameter_sigs[first + i];
             const std::string arg_id = sig.at("id").get<std::string>();
             if (sig.at("type").get<std::string>() != "ct") {
@@ -718,13 +744,15 @@ void InferenceProvisioner::export_runner_bundle(const std::string& runner_dir_ar
             const auto layout = parameter_layout_metadata(graph, info.layer_id, sig);
             if (sig.contains("layout") && nlohmann::json(sig.at("layout")) != nlohmann::json(layout))
                 throw std::runtime_error("[Provisioner] parameter layout mismatch: " + arg_id);
-            if (!layout.is_null()) manifest["arguments"][arg_id]["layout"] = layout;
+            if (!layout.is_null())
+                manifest["arguments"][arg_id]["layout"] = layout;
             const auto& layer_cfg = init.json_layers.at(info.layer_id);
             if (starts_with(arg_id, "dense") && layer_cfg.contains("dense_seed_tiles")) {
                 const auto& layout = layer_cfg.at("dense_seed_tiles");
                 if (layout.at(info.param_kind).get<bool>()) {
                     auto& entry = manifest["arguments"][arg_id];
-                    entry["use_site_level"] = layout.at("use_site_level").get<int>() - (info.param_kind == "bias" ? 1 : 0);
+                    entry["use_site_level"] =
+                        layout.at("use_site_level").get<int>() - (info.param_kind == "bias" ? 1 : 0);
                 }
             }
             if (info.param_kind == "poly_coeff" && layer_cfg.contains("poly_seed_layout")) {

@@ -164,7 +164,7 @@ def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading
                 runner_config.update(
                     {
                         'deployment_mode': 'server_provisioned_runner',
-                        'input_mode': 'plaintext',
+                        'input_mode': server_config.get('input_mode', 'client_ciphertext'),
                         'parameter_mode': 'encrypted_offline',
                         'parameter_loading_mode': parameter_loading_mode,
                         'decryptor': 'provisioner',
@@ -183,7 +183,7 @@ def _generate_low_level(task_dir, deployment_mode, output_dir, parameter_loading
                     deployment_mode='server_provisioned_runner',
                     parameter_loading_mode=parameter_loading_mode,
                     streaming=streaming,
-                    input_mode='plaintext',
+                    input_mode='plaintext' if server_config.get('input_mode') == 'plaintext' else 'ciphertext',
                     output_dir=output_dir,
                 )
             else:

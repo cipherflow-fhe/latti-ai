@@ -61,7 +61,7 @@ def deployment_metadata(deployment_mode: str) -> dict[str, str]:
     if deployment_mode == 'server_provisioned_runner':
         return {
             'deployment_mode': 'server_provisioned_runner',
-            'input_mode': 'plaintext',
+            'input_mode': 'client_ciphertext',
             'parameter_mode': 'encrypted_offline',
             'decryptor': 'provisioner',
         }

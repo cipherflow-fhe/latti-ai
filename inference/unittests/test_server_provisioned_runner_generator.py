@@ -53,6 +53,62 @@ def _data_with_missing_source(mega_ag):
 
 
 class TestServerProvisionedRunnerGenerator(unittest.TestCase):
+    def test_parameter_mode_defaults_to_ciphertext_input_and_ct_times_ct(self):
+        from training.run_compile import deployment_metadata
+
+        self.assertEqual(deployment_metadata('server_provisioned_runner')['input_mode'], 'client_ciphertext')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            features = {'input': _feature(4), 'output': _feature(3)}
+            graph = dict(
+                feature=features,
+                input_feature=['input'],
+                output_feature=['output'],
+                layer={
+                    'scalar': dict(
+                        type='mult_scalar',
+                        feature_input=['input'],
+                        feature_output=['output'],
+                        channel_input=1,
+                        channel_output=1,
+                        path='scalar.weight',
+                    )
+                },
+            )
+            config = dict(
+                task_type='fhe',
+                task_num=1,
+                pack_style='multiplexed',
+                block_shape=[1, 1],
+                task_input_id=['input'],
+                task_output_id=['output'],
+                task_input_param={'input': features['input']},
+                task_output_param={'output': features['output']},
+                use_btp=False,
+                **deployment_metadata('server_provisioned_runner'),
+            )
+            (root / 'nn_layers_ct_0.json').write_text(json.dumps(graph))
+            (root / 'task_config.json').write_text(json.dumps(config))
+            gen_custom_task(
+                str(root),
+                param_name='PN13Default',
+                style='multiplexed',
+                parameter_mode='encrypted_offline',
+                deployment_mode='server_provisioned_runner',
+                parameter_loading_mode='runtime_lazy',
+            )
+            signature = json.loads((root / 'task_signature.json').read_text())
+            inputs = [arg for arg in signature['online'] if arg['id'] == 'input']
+            self.assertEqual(inputs[0]['type'], 'ct')
+            graph = json.loads((root / 'mega_ag.json').read_text())
+            self.assertEqual(_data_with_missing_source(graph), [])
+            self.assertTrue(
+                any(
+                    op['type'] == 'mult' and all(graph['data'][str(i)]['type'] == 'ct' for i in op['inputs'])
+                    for op in graph['compute'].values()
+                )
+            )
+
     def test_single_matrix_input_can_start_with_drop_level_in_both_modes(self):
         for encrypted_parameters in (False, True):
             with self.subTest(encrypted_parameters=encrypted_parameters), tempfile.TemporaryDirectory() as tmp:
