@@ -24,3 +24,5 @@ export async function preprocessDirectory({inputDirectory,task,check=()=>{}}) {
   }
   return {count:String(cases.length),inputDirectories};
 }
+
+export {preprocess_batch} from './raw-preprocess.js';
