@@ -41,7 +41,13 @@ def main():
         def translate_path(self, path):
             path = super().translate_path(path)
             resolved = Path(path).resolve()
-            if resolved in (root / 'index.html', root / 'retina-check.mjs'):
+            if resolved in (
+                root / 'index.html',
+                root / 'workflow-check.mjs',
+                root / 'batch-workflow.mjs',
+                root / 'processing/preprocess.js',
+                root / 'processing/postprocess.js',
+            ):
                 return str(resolved)
             if resolved.is_relative_to(runtime.resolve()):
                 return str(resolved)

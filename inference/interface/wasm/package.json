@@ -21,12 +21,16 @@
     "test:browser": "node tests/browser.mjs",
     "test:pregeneration": "bash tests/pregeneration.sh",
     "test:workflow": "bash tests/workflow.sh",
-    "test:model-workflow": "bash tests/model-workflow.sh",
+    "test:model-workflow": "node tests/raw-batch.mjs",
     "test:retina-delivery": "node tests/retina-delivery.mjs",
+    "test:delivery": "node tests/retina-delivery.mjs",
+    "test:prefix": "node tests/prefix.mjs",
     "test:model-failures": "node tests/model-failures.mjs",
     "test:model-numerics": "node tests/model-numerics.mjs",
     "test:python-workspace": "node tests/python-workspace.mjs",
-    "pretest": "node build-info.mjs"
+    "pretest": "node build-info.mjs",
+    "test:legacy-model-workflow": "bash tests/model-workflow.sh",
+    "test:batch": "node tests/raw-batch.mjs"
   },
   "devDependencies": {
     "playwright-core": "1.56.1"

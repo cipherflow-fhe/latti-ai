@@ -22,7 +22,7 @@ try {
     const files=Array.from(document.getElementById('fixture-upload').files);
     for(const file of files) {
       const name=file.webkitRelativePath.split('/').slice(1).join('/');
-      if(name!=='delivery-manifest.json'&&!name.startsWith('retina/')&&!name.startsWith('fixture/')&&!name.startsWith('handoff/'))continue;
+      if(name==='WASM-0.2.0.zip'||name.startsWith('runtime/'))continue;
       let target=directory;const parts=name.split('/');
       for(const part of parts.slice(0,-1))target=await target.getDirectoryHandle(part,{create:true});
       const writer=await(await target.getFileHandle(parts.at(-1),{create:true})).createWritable();
@@ -36,13 +36,23 @@ try {
   await harness.page.click('#run');
   await harness.page.waitForFunction(()=>document.getElementById('status').textContent.startsWith('校验'),{},{timeout:1800000});
   const result=await harness.page.evaluate(async()=>{
-    if(!globalThis.retinaCheckResult?.report)throw new Error(document.getElementById('status').textContent);
-    const {report,bundle}=retinaCheckResult;
-    const directory=await bundle.directory.getDirectoryHandle('encrypted_model_parameters');
-    const parameters=JSON.parse(await(await(await directory.getFileHandle('manifest.json')).getFile()).text());
+    if(!globalThis.deliveryCheckResult?.report)throw new Error(document.getElementById('status').textContent);
+    const {report,bundle,prefix,prefixRun,inputBatch}=deliveryCheckResult;
+    const prefixMetadata=JSON.parse(await(await prefix.manifest.getFile()).text());
+    const files=Object.keys(prefixMetadata.files);
+    if(prefixMetadata.kind!=='prefix'||files.some(name=>!/^(model\.onnx|compact\.onnx\.data|prefix\.json)$/.test(name)))throw new Error('Independent prefix includes private files');
+    const runMetadata=JSON.parse(await(await prefixRun.manifest.getFile()).text());
+    let directory=prefixRun.directory;const parts=runMetadata.entry.split('/');
+    for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(part);
+    const binding=JSON.parse(await(await(await directory.getFileHandle(parts.at(-1))).getFile()).text());
+    if(binding.count!==10||binding.weightLoading!=='on_demand'||!(binding.weightReads.reads>0))throw new Error('Batch prefix coverage/weight reads differ');
+    if(Object.keys(runMetadata.files).some(name=>!name.startsWith('run/')))throw new Error('Prefix results include private inputs/models');
+    const parameters=JSON.parse(await(await(await(await bundle.directory.getDirectoryHandle('encrypted_model_parameters')).getFileHandle('manifest.json')).getFile()).text());
     const argumentsList=Object.values(parameters.arguments),ciphertexts=argumentsList.reduce((sum,arg)=>sum+arg.count,0);
-    if(ciphertexts!==1055||argumentsList.some(arg=>arg.verified_count!==arg.count||!(arg.encoding_max_abs_error<1e-5)))throw new Error('retina 参数密文覆盖或自解密检查失败');
-    return {...report,ciphertexts,allParameterSlotsVerified:true,dataProviderPrefix:{durationMs:retinaCheckResult.prefixRun.durationMs,outputs:retinaCheckResult.prefixRun.outputs.map(x=>({name:x.name,featureId:x.feature_id,count:x.values.length}))}};
+    if(!ciphertexts||argumentsList.some(arg=>arg.verified_count!==arg.count||!(arg.encoding_max_abs_error<1e-5)))throw new Error('Encrypted parameter slot verification failed');
+    const batch=JSON.parse(await(await inputBatch.manifest.getFile()).text());
+    if(batch.keyIdentity!==report.keyIdentity||report.count!==10||report.samples.length!==10)throw new Error('Batch identity/coverage differs');
+    return {...report,ciphertexts,allParameterSlotsVerified:true,dataProviderPrefix:{files,weightReads:binding.weightReads,batchCount:binding.count}};
   });
   const expected=JSON.parse(await readFile(path.join(delivery,'delivery-manifest.json'),'utf8'));
   if(result.status!=='passed'||result.keyIdentity!==expected.keyIdentity||result.maxAbsError>=0.1)throw new Error('Replay report rejected');
