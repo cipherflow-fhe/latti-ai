@@ -195,7 +195,7 @@ async function setup() {
   } finally {await cleanupAfter(failure,[()=>job.cleanup()]);}
 }
 
-async function openRun(run,contract) {
+async function openRun(run,contract,caseId) {
   const manifestFile=await run.manifest.getFile();
   if(manifestFile.size>1024*1024)throw new Error('Run manifest exceeds metadata budget');
   const manifest=JSON.parse(await manifestFile.text());
@@ -212,8 +212,10 @@ async function openRun(run,contract) {
   };
   const binding=JSON.parse(await(await get(manifest.entry)).text());
   if(binding.split_manifest_sha256!==contract.manifest_sha256)throw new Error('Run is bound to a different split');
-  const samplePath=manifest.entry.slice(0,manifest.entry.lastIndexOf('/')+1)+binding.sample_manifest;
-  if(manifest.files[samplePath]?.sha256!==binding.sample_manifest_sha256)throw new Error('Run sample manifest binding differs');
+  const selected=caseId===undefined?{manifest:binding.sample_manifest,manifest_sha256:binding.sample_manifest_sha256}:binding.samples?.find(sample=>sample.case_id===caseId);
+  if(!selected?.manifest)throw new Error('Run sample is missing');
+  const samplePath=manifest.entry.slice(0,manifest.entry.lastIndexOf('/')+1)+selected.manifest;
+  if(manifest.files[samplePath]?.sha256!==selected.manifest_sha256)throw new Error('Run sample manifest binding differs');
   const sample=JSON.parse(await(await get(samplePath)).text());
   return {sample,samplePath,get};
 }
@@ -226,7 +228,7 @@ async function transform(encrypting,options,work) {
     if(!entry)throw new Error('Input feature is absent from split contract');
     let expected=entry.sha256;
     if(options.run) {
-      const {sample}=await openRun(options.run,inputContract);
+      const {sample}=await openRun(options.run,inputContract,options.caseId);
       const actual=sample.inputs.find(input=>input.name===entry.name);
       if(!actual||JSON.stringify(actual.shape)!==JSON.stringify(entry.shape)||actual.dtype!==entry.dtype||actual.representation!==entry.representation)throw new Error('Run crossing interface differs');
       expected=actual.sha256;
@@ -337,7 +339,7 @@ async function provisionRunner(options) {
     check();
     const {metadata}=producer,plan=JSON.parse(metadata.plan);
     core('bind-task',metadata.config,metadata.parameters);task=JSON.parse(metadata.config);
-    destination=options.outputDirectory?await options.outputDirectory.getDirectoryHandle(active.jobId,{create:true}):await job.directory.getDirectoryHandle('runner',{create:true});
+    destination=options.outputDirectory?await options.outputDirectory.getDirectoryHandle(active.jobId,{create:true}):await job.directory.getDirectoryHandle('output',{create:true});
     const work=await job.directory.getDirectoryHandle('work',{create:true});
     const sources=new Proxy({}, {get(_,id) {
       const match=typeof id==='string'&&/^parameter:(\d+):(\d+)$/.exec(id);
@@ -409,7 +411,16 @@ async function preflightServer(options) {
     if(cases&&(cases.size!==byCase.size||[...cases.keys()].some(key=>byCase.get(key)?.id!==cases.get(key).id))) throw new Error('Input directories contain different case IDs');
     cases??=byCase;maps.set(name,byCase);
   }
-  return {names:expected,maps,cases:[...cases.values()].map(value=>value.id).sort()};
+  const ids=[...cases.values()].map(value=>value.id).sort();
+  if(options.run&&inputContract) {
+    const metadata=JSON.parse(await(await options.run.manifest.getFile()).text());
+    let directory=options.run.directory;const parts=metadata.entry.split('/');
+    for(const part of parts.slice(0,-1))directory=await directory.getDirectoryHandle(safeName(part));
+    const binding=JSON.parse(await read(directory,safeName(parts.at(-1))));
+    const bound=binding.samples?.map(sample=>sample.case_id).sort();
+    if(JSON.stringify(bound)!==JSON.stringify(ids))throw new Error('Run and encryption batch case sets differ');
+  }
+  return {names:expected,maps,cases:ids};
 }
 
 async function expectedCases(batch) {
@@ -417,7 +428,7 @@ async function expectedCases(batch) {
   const metadata=await batch.manifest.getFile();
   if(metadata.size>1024*1024) throw new Error('METADATA_BUDGET_EXCEEDED');
   const manifest=JSON.parse(await metadata.text());
-  if(manifest.state!=='committed'||manifest.profileId!==profile.profileId) throw new Error('Invalid input batch manifest');
+  if(manifest.state!=='committed'||manifest.profileId!==profile.profileId||manifest.keyIdentity!==keyIdentity) throw new Error('Invalid input batch manifest');
   const cases=new Set(),file=await(await batch.directory.getFileHandle(safeName(manifest.entries))).getFile();
   const reader=file.stream().pipeThrough(new TextDecoderStream('utf-8',{fatal:true})).getReader();let partial='',bytes=0;
   try {
@@ -465,7 +476,7 @@ async function batch(encrypting,options) {
         for(const id of preflight.cases) for(const inputName of preflight.names) {
           active.entry=id+' / '+inputName;
           check();const source=preflight.maps.get(inputName).get(id.normalize('NFC').toLowerCase()).file;
-          const converted=await transform(true,{inputName,inputFile:source},work);
+          const converted=await transform(true,{inputName,inputFile:source,run:options.run,caseId:id},work);
           const name=preflight.names.length===1?id+'.ct':id+'__'+inputName+'.ct';
           yield {name,source:fileSource(converted.file)};
           await writer.write(JSON.stringify({case_id:id,inputName,path:name})+'\n');count++;
@@ -503,7 +514,7 @@ async function batch(encrypting,options) {
       }
     }
     await writer.close();writer=null;check();
-    const manifest=await commit(output,archive?[archive]:[],profile.profileId,{entries:'entries.jsonl',count:String(count)});
+    const manifest=await commit(output,archive?[archive]:[],profile.profileId,{entries:'entries.jsonl',count:String(count),keyIdentity});
     retained=true;
     return {directory:output,manifest,count:String(count),...(archive?{archive}:{})};
   } catch(error) {failure=error;throw error;} finally {
@@ -579,6 +590,31 @@ async function operate(type,options) {
     keyReady=true;
     return {profileId:profile.profileId,keyIdentity};
   }
+  if(type==='exportPublicContext'||type==='importPublicContext') {
+    const importing=type==='importPublicContext';
+    if(!importing&&!keyReady)throw new Error('Public key required');
+    const job=await jobDirectory(active.jobId);let failure,retained=false;
+    try {
+      if(importing) {
+        keyReady=false;keyIdentity=undefined;
+        const file=await fileOf(options.inputFile);
+        if(file.size>64*1024*1024)throw new Error('Public context exceeds profile bound');
+        await pump(core,'import-public',['',String(file.size)],job.directory,{public:fileSource(file)},check,progress);
+        keyIdentity=core('key-identity').data;keyReady=true;
+        return {profileId:profile.profileId,keyIdentity};
+      }
+      const outputs=await pump(core,'export-public',[],job.directory,{},check,progress);
+      const directory=options.outputDirectory?await options.outputDirectory.getDirectoryHandle(active.jobId,{create:true}):await job.directory.getDirectoryHandle('output',{create:true});
+      const file=await directory.getFileHandle('public_context.bin',{create:true});
+      await copyFile(outputs.get('public').handle,file,check);
+      const ref=await artifact(directory,file.name,'public-encryption',file,profile.profileId);
+      ref.sha256=await hashFile(file,job.directory,'hash-public');
+      const manifest=await commit(directory,[ref],profile.profileId,{keyIdentity});
+      retained=true;return {...ref,manifest};
+    } catch(error){failure=error;throw error;} finally {
+      await cleanupAfter(failure,retained&&!options.outputDirectory?['public.part','hash-public'].map(name=>()=>job.directory.removeEntry(name,{recursive:true})): [()=>job.cleanup()]);
+    }
+  }
   if(type==='close') {core('close');keyReady=false;task=undefined;return;}
   if(type==='provisionRunner') {
     if(!keyReady)throw new Error('Client keys must be setup or restored');
@@ -591,7 +627,7 @@ async function operate(type,options) {
   throw new Error('Unknown command');
 }
 
-const commands=new Set(['open','bindTask','setup','restore','encrypt','decrypt','decryptOutputs','provisionRunner','encryptBatch','decryptBatch','close']);
+const commands=new Set(['open','bindTask','setup','restore','exportPublicContext','importPublicContext','encrypt','decrypt','decryptOutputs','provisionRunner','encryptBatch','decryptBatch','close']);
 onmessage=({data})=>{
   if(!data||data.protocolVersion!==PROTOCOL_VERSION||!Number.isSafeInteger(data.requestId)||data.requestId<=0||typeof data.jobId!=='string'||typeof data.type!=='string') {
     send('error',data?.requestId||0,data?.jobId||sessionJobId,{code:'PROTOCOL_ERROR',phase:'protocol',message:'Invalid protocol v2 envelope',retryable:false});return;

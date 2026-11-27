@@ -66,6 +66,8 @@ export async function openBrowserClient({clientDirectory,keyDirectory,profile,on
   const client = {
     setup: () => request('setup'),
     restore: () => request('restore'),
+    exportPublicContext: options => request('exportPublicContext',options),
+    importPublicContext: options => request('importPublicContext',options),
     encrypt: options => request('encrypt',options),
     decrypt: options => request('decrypt',options),
     decryptOutputs: options => request('decryptOutputs',options),
@@ -83,4 +85,29 @@ export async function openBrowserClient({clientDirectory,keyDirectory,profile,on
     },
   };
   return client;
+}
+
+/** Save operator-supplied processing modules in a selected static resource directory.
+ * Modules are executable code: the caller reviews them before importing their URL.
+ */
+export async function uploadProcessingScripts({directory,preprocessFile,postprocessFile}) {
+  if(directory?.kind!=='directory')throw new Error('Select the static resource directory');
+  const modules=[['preprocess.js',preprocessFile],['postprocess.js',postprocessFile]],files={};
+  // Validate both files before publishing either.
+  const sources=await Promise.all(modules.map(async([name,source])=>{
+    const file=source?.kind==='file'?await source.getFile():source;
+    if(!file||!file.name?.endsWith('.js')||file.size===0||file.size>1024*1024)throw new Error('Select a JavaScript module up to 1 MiB');
+    const bytes=await file.arrayBuffer();
+    const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
+    return {name,bytes,sha256};
+  }));
+  for(const {name,bytes,sha256}of sources) {
+    const handle=await directory.getFileHandle(name,{create:true}),writer=await handle.createWritable();
+    try{await writer.write(bytes);await writer.close();}catch(error){await writer.abort().catch(()=>{});throw error;}
+    files[name]={bytes:bytes.byteLength,sha256};
+  }
+  const manifest=await directory.getFileHandle('processing-manifest.json',{create:true}),writer=await manifest.createWritable();
+  try{await writer.write(JSON.stringify({schema:'latti-ai.processing-scripts.v1',files},null,2)+'\n');await writer.close();}
+  catch(error){await writer.abort().catch(()=>{});throw error;}
+  return {directory,manifest};
 }

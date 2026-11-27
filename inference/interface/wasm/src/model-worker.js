@@ -173,11 +173,11 @@ async function ortRun(text) {
     await session?.release();runtime='pyodide';
   }
 }
-async function exportArtifact(root,kind,entry,extra={}) {
+async function exportArtifact(root,kind,entry,extra={},directory=root) {
   progress('persist');
   workspace.flush();
-  const names=JSON.parse(await withGlobals({artifact_root:root},`
-json.dumps(sorted(str(p.relative_to(artifact_root)) for p in Path(artifact_root).rglob('*') if p.is_file()))
+  const names=JSON.parse(await withGlobals({artifact_root:root,export_directory:directory},`
+json.dumps(sorted(str(p.relative_to(artifact_root)) for p in Path(export_directory).rglob('*') if p.is_file()))
 `));
   const files={};
   for(const name of names) {
@@ -278,31 +278,40 @@ json.dumps(graph)
     'pipeline.compile_high_level(model_path, compile_output, mode, config_path, split_manifest, compile_progress, profile_memory)');
     return exportArtifact(root,'task',task.slice(root.length+1),{deploymentMode:message.deploymentMode});
   }
+  if(message.type==='exportPrefix') {
+    const manifest=await importArtifact(message.split,'split');
+    progress('export-prefix');
+    await withGlobals({split_manifest:manifest.virtualRoot+'/'+manifest.entry,prefix_output:root},
+      'pipeline.export_prefix(split_manifest, prefix_output)');
+    return exportArtifact(root,'prefix','prefix.json');
+  }
   if(message.type==='runPrefix') {
-    let info;
-    if(!message.resume) {
-      const manifest=await importArtifact(message.split,'split');root=manifest.virtualRoot;
-      const sample=root+'/samples/'+message.jobId,inputDirectory=sample+'/inputs';
-      if((await fileOf(message.inputsManifest)).size>1024*1024)throw new Error('Run input manifest exceeds metadata budget');
-      await copyIn(message.inputsManifest,inputDirectory+'/inputs.json');
-      const inputs=JSON.parse(python.FS.readFile(inputDirectory+'/inputs.json',{encoding:'utf8'}));
+    if(message.split||!message.prefix)throw new Error('runPrefix requires an independent prefix artifact, not a split');
+    const manifest=await importArtifact(message.prefix,'prefix');
+    const inputDirectory=root+'/inputs';
+    if((await fileOf(message.inputsManifest)).size>1024*1024)throw new Error('Run input manifest exceeds metadata budget');
+    await copyIn(message.inputsManifest,inputDirectory+'/inputs.json');
+    const inputs=JSON.parse(python.FS.readFile(inputDirectory+'/inputs.json',{encoding:'utf8'}));
+    const samples=inputs.samples||[{inputs:inputs.inputs}];
+    if(!Array.isArray(samples)||!samples.length)throw new Error('Prefix input manifest is empty');
+    const copied=new Set();
+    for(const sample of samples) {
+      if(!Array.isArray(sample.inputs)||!sample.inputs.length)throw new Error('Invalid prefix input manifest');
       let sampleBytes=0;
-      for(const entry of inputs.inputs) {
-        const file=await(await fileAt(message.split.directory,entry.csv)).getFile();sampleBytes+=file.size;
+      for(const entry of sample.inputs) {
+        if(!entry||typeof entry.csv!=='string')throw new Error('Invalid prefix input manifest entry');
+        const file=await(await fileAt(message.inputDirectory,relative(entry.csv))).getFile();sampleBytes+=file.size;
         if(sampleBytes>128*1024*1024)throw new Error('Sample files exceed the validated 128 MiB browser profile');
+        if(copied.has(entry.csv))continue;
+        copied.add(entry.csv);
         await copyIn(file,inputDirectory+'/'+relative(entry.csv));
       }
-      await withGlobals({split_manifest:root+'/'+manifest.entry,inputs_directory:inputDirectory,
-        inputs_manifest:inputDirectory+'/inputs.json',run_output:sample+'/run',state_root:sample},
-        'pipeline.begin_run(split_manifest, inputs_directory, inputs_manifest, run_output, state_root)');
-      info={root,sample,entry:manifest.entry};
-      python.FS.writeFile('/latti/jobs/'+message.jobId+'/run-state.json',JSON.stringify(info));
-      return checkpoint('externalize');
     }
-    info=JSON.parse(python.FS.readFile('/latti/jobs/'+message.jobId+'/run-state.json',{encoding:'utf8'}));root=info.root;
-    const step=JSON.parse(await withGlobals({state_root:info.sample,ort_run:ortRun},'await pipeline.split_step(state_root, ort_run)'));
-    if(!step.complete)return checkpoint(step.phase);
-    return exportArtifact(root,'run',info.sample.slice(root.length+1)+'/run/run_manifest.json',{splitManifest:info.entry});
+    progress('run-prefix');
+    await withGlobals({prefix_manifest:manifest.virtualRoot+'/'+manifest.entry,inputs_directory:inputDirectory,
+      inputs_manifest:inputDirectory+'/inputs.json',run_output:root+'/run',ort_run:ortRun},
+      'await pipeline.run_exported_prefix(prefix_manifest, inputs_directory, inputs_manifest, run_output, ort_run)');
+    return exportArtifact(root,'run','run/run_manifest.json',{},root+'/run');
   }
   if(message.type==='generateLowLevel') {
     const manifest=await importArtifact(message.task,'task');

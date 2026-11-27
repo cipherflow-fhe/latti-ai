@@ -155,6 +155,8 @@ func (w *outputSink) Patch(offset uint64, data []byte) error {
 func (s *OutputStream) output(id string, write func(clientcontext.Sink) (uint64, error)) error {
 	role, format := "ciphertext", "native-feature-v6"
 	switch id {
+	case "public":
+		role, format = "public-encryption", "CKKSCTX1-public"
 	case "eval":
 		role, format = "public-eval", "CKKSCTX1"
 	case "full":

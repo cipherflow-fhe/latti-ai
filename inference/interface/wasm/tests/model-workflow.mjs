@@ -235,7 +235,20 @@ try {
         });
         await stage(key+'/parameter-check',()=>nativeCheck('verify-bundle',['--browser',path.join(unit,'task'),'--bundle',path.join(unit,'bundle'),'--output',path.join(unit,'parameter-check.json')],path.join(unit,'parameter-check.log')));
         nativeArgs.push('--task-dir',path.join(unit,'bundle'));
-        for(const input of contract.inputs)nativeArgs.push('--input',input.feature_id+'='+path.join(unit,'task',input.csv.slice(metadata.virtualRoot.length+1)));
+        const encrypted=await stage(key+'/encrypt-parameter-mode-inputs',()=>harness.page.evaluate(async key=>{
+          const metadata=JSON.parse(await(await tasks[key].manifest.getFile()).text());
+          const contract=JSON.parse(await(await(await fileAt(tasks[key].directory,metadata.entry+'/input_contract.json')).getFile()).text());
+          const files=[];
+          for(const input of contract.inputs) {
+            const file=await fileAt(tasks[key].directory,input.csv.slice(metadata.virtualRoot.length+1));
+            const encrypted=await client.encrypt({inputName:input.feature_id,inputFile:file});
+            files.push([input.feature_id,await transfer(encrypted.file)]);
+          }
+          return files;
+        },key));
+        for(const [index,[id,transfer]]of encrypted.entries()) {
+          const file=path.join(unit,'input-'+index+'.ct');await rename(path.join(root,transfer),file);nativeArgs.push('--input',id+'='+file);
+        }
       }
       await stage(key+'/native',()=>run('/usr/bin/time',['-v','-o',path.join(unit,'native-memory.txt'),runner,...nativeArgs],path.join(unit,'native.log')));
       await stage(key+'/output-framing-regressions',async()=>json(path.join(unit,'output-framing-regressions.json'),

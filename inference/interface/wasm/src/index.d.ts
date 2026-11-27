@@ -13,7 +13,7 @@ export interface Progress {
 }
 export interface ArtifactRef {
   artifactId: string;
-  role: 'public-eval' | 'private-full' | 'ciphertext' | 'plaintext';
+  role: 'public-encryption' | 'public-eval' | 'private-full' | 'ciphertext' | 'plaintext';
   file: FileSystemFileHandle;
   bytes: string;
   profileId: string;
@@ -44,7 +44,10 @@ export interface ModelSources {
 export type DeploymentMode = 'client_encrypted_input' | 'server_provisioned_runner';
 export interface BrowserModelTools {
   prepareSplit(options: {source: ModelSources; ratio: string; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
-  runPrefix(options: {split: ArtifactDirectory; inputsManifest: FileSource; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
+  /** Export only the independent prefix graph, required weights and public interfaces. */
+  exportPrefix(options: {split: ArtifactDirectory; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
+  /** Execute an independent prefix, reading only each node's required weights. */
+  runPrefix(options: {prefix: ArtifactDirectory; inputDirectory: FileSystemDirectoryHandle; inputsManifest: FileSource; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
   compileHighLevel(options: ({source: ModelSources; split?: never} | {split: ArtifactDirectory; source?: never}) & {
     deploymentMode: DeploymentMode; compileConfig?: FileSource; outputDirectory?: FileSystemDirectoryHandle;
     /** Record Python allocation peaks per high-level compilation step. */
@@ -64,6 +67,7 @@ export interface EncryptOptions {
   outputDirectory?: FileSystemDirectoryHandle;
   /** Bind new crossing CSVs to a runPrefix result for an existing split task. */
   run?: ArtifactDirectory;
+  caseId?: string;
 }
 export interface DecryptOptions {
   outputName: string;
@@ -73,13 +77,15 @@ export interface DecryptOptions {
 export interface BrowserClient {
   setup(): Promise<{evalContext: ArtifactRef; fullContext: ArtifactRef; manifest: FileSystemFileHandle; profileId: string; keyIdentity: string}>;
   restore(): Promise<{profileId: string; keyIdentity: string}>;
+  exportPublicContext(options?: {outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactRef>;
+  importPublicContext(options: {inputFile: FileSource}): Promise<{profileId: string; keyIdentity: string}>;
   bindTask(clientDirectory: FileSystemDirectoryHandle): Promise<{profileId: string}>;
   encrypt(options: EncryptOptions): Promise<ArtifactRef>;
   decrypt(options: DecryptOptions): Promise<ArtifactRef>;
   decryptOutputs(options: {task: ArtifactDirectory; outputFile: FileSource; run?: ArtifactDirectory; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
   provisionRunner(options: {task: ArtifactDirectory; parameterDirectory: FileSystemDirectoryHandle; outputDirectory?: FileSystemDirectoryHandle}): Promise<ArtifactDirectory>;
   encryptBatch(options: {inputName: string; inputDirectory: FileSystemDirectoryHandle; outputDirectory?: FileSystemDirectoryHandle}): Promise<BatchResult>;
-  encryptBatch(options: {mode: 'server'; inputDirectories: Record<string, FileSystemDirectoryHandle>; outputDirectory?: FileSystemDirectoryHandle; forceZip64?: boolean}): Promise<BatchResult>;
+  encryptBatch(options: {mode: 'server'; inputDirectories: Record<string, FileSystemDirectoryHandle>; run?: ArtifactDirectory; outputDirectory?: FileSystemDirectoryHandle; forceZip64?: boolean}): Promise<BatchResult>;
   decryptBatch(options: {outputName: string; inputDirectory: FileSystemDirectoryHandle; outputDirectory?: FileSystemDirectoryHandle}): Promise<BatchResult>;
   decryptBatch(options: {mode: 'server'; outputName: string; inputFile: FileSource; inputBatch: BatchResult; outputDirectory?: FileSystemDirectoryHandle}): Promise<BatchResult>;
   /** Omit requestId to cancel the currently active operation. */
@@ -95,3 +101,8 @@ export function openBrowserClient(options: {
   onProgress?: (progress: Progress) => void;
   onArtifact?: (artifact: ArtifactRef) => void;
 }): Promise<BrowserClient>;
+export function uploadProcessingScripts(options: {
+  directory: FileSystemDirectoryHandle;
+  preprocessFile: FileSource;
+  postprocessFile: FileSource;
+}): Promise<ArtifactDirectory>;

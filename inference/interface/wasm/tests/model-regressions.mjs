@@ -49,7 +49,8 @@ export async function sampleAndBindingRegressions(key) {
   const changed=sample.replace(/[-+0-9.eE]+/,value=>String(Number(value)+0.01));
   if(changed===sample)throw new Error('New sample did not change');
   await write(split.directory,'new-sample.csv',changed);
-  const run=await modelTools.runPrefix({split,inputsManifest:new File([JSON.stringify({inputs:[{name:'input',csv:'new-sample.csv',shape:[1,3,32,32],axes:['N','C','H','W']}]})],'inputs.json')});
+  const prefix=await modelTools.exportPrefix({split});
+  const run=await modelTools.runPrefix({prefix,inputDirectory:split.directory,inputsManifest:new File([JSON.stringify({inputs:[{name:'input',csv:'new-sample.csv',shape:[1,3,32,32],axes:['N','C','H','W']}]})],'inputs.json')});
   const runMetadata=JSON.parse(await(await run.manifest.getFile()).text()),binding=JSON.parse(await(await(await fileAt(run.directory,runMetadata.entry)).getFile()).text());
   const samplePath=runMetadata.entry.slice(0,runMetadata.entry.lastIndexOf('/')+1)+binding.sample_manifest;
   const prepared=JSON.parse(await(await(await fileAt(run.directory,samplePath)).getFile()).text());
@@ -83,7 +84,7 @@ export async function newSampleOutputRoutes() {
   const digest=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
   await write(split.directory,'new.csv',Array.from({length:512},(_,i)=>(i+1)/512).join('\n'));
   const tools=await api.openBrowserModelTools();let run;
-  try{run=await tools.runPrefix({split,inputsManifest:new File([JSON.stringify({inputs:[{name:'input',csv:'new.csv',shape:[1,512],axes:['N','F']}]})],'inputs.json')});}finally{await tools.close();}
+  try{const prefix=await tools.exportPrefix({split});run=await tools.runPrefix({prefix,inputDirectory:split.directory,inputsManifest:new File([JSON.stringify({inputs:[{name:'input',csv:'new.csv',shape:[1,512],axes:['N','F']}]})],'inputs.json')});}finally{await tools.close();}
   const runMetadata=JSON.parse(await(await run.manifest.getFile()).text()),binding=JSON.parse(await(await(await get(run.directory,runMetadata.entry)).getFile()).text());
   const samplePath=runMetadata.entry.slice(0,runMetadata.entry.lastIndexOf('/')+1)+binding.sample_manifest;
   const sample=JSON.parse(await(await(await get(run.directory,samplePath)).getFile()).text());
@@ -100,8 +101,8 @@ export async function newSampleOutputRoutes() {
   const client=await api.openBrowserClient({clientDirectory:role,keyDirectory:await opfs.getDirectoryHandle('routing-echo-keys',{create:true})});
   try {
     await client.setup();
-    const suffix=sample.output_routes.find(route=>route.route==='suffix');
-    const source=await get(run.directory,samplePath.slice(0,samplePath.lastIndexOf('/')+1)+suffix.plaintext.csv);
+    const expectedSuffix=Array.from({length:512},(_,i)=>((i+1)/512+1)**2);
+    const source=new File([expectedSuffix.join(',')],'suffix.csv');
     const encrypted=await client.encrypt({inputName:'input',inputFile:source}),wire=await encrypted.file.getFile();
     const u64=value=>{const bytes=new Uint8Array(8);new DataView(bytes.buffer).setBigUint64(0,BigInt(value),true);return bytes;};
     const string=value=>{const bytes=new TextEncoder().encode(value);return [u64(bytes.length),bytes];};
@@ -111,7 +112,7 @@ export async function newSampleOutputRoutes() {
     for(const output of outputs) {
       const actual=(await(await(await get(result.directory,output.file)).getFile()).text()).trim().split(/[\s,]+/).map(Number);
       const route=sample.output_routes.find(route=>route.name===output.name);
-      const expected=(await(await(await get(run.directory,samplePath.slice(0,samplePath.lastIndexOf('/')+1)+route.plaintext.csv)).getFile()).text()).trim().split(/[\s,]+/).map(Number);
+      const expected=route.route==='suffix'?expectedSuffix:(await(await(await get(run.directory,samplePath.slice(0,samplePath.lastIndexOf('/')+1)+route.plaintext.csv)).getFile()).text()).trim().split(/[\s,]+/).map(Number);
       if(actual.length!==expected.length)throw new Error('Route count differs');
       for(let i=0;i<actual.length;i++)maxError=Math.max(maxError,Math.abs(actual[i]-expected[i]));
     }

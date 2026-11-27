@@ -28,3 +28,18 @@ test('native DOMException retains its identity and quota error when cleanup fail
   assert.equal(original.cleanupFailed,true);
   assert.match(original.message,/^disk full; cleanup: directory locked$/);
 });
+
+test('a committed default output survives a subsequent client startup; incomplete jobs are removed',async()=>{
+  const {cleanupOrphanJobs}=await import('../src/io.js');
+  const original=globalThis.navigator,removed=[];
+  const job=(name,state)=>({name,kind:'directory',getDirectoryHandle:async name=>{
+    if(name!=='output')throw Object.assign(new Error('missing'),{name:'NotFoundError'});
+    return {getFileHandle:async()=>({getFile:async()=>new File([JSON.stringify({state,schema:'latti-ai.browser-runner.v1'})],'manifest.json')})};
+  }});
+  Object.defineProperty(globalThis,'navigator',{configurable:true,value:{storage:{getDirectory:async()=>({getDirectoryHandle:async()=>({
+    async *values(){yield job('runner-bundle','committed');yield job('interrupted','pending');},
+    removeEntry:async name=>removed.push(name),
+  })})}}});
+  try{await cleanupOrphanJobs();assert.deepEqual(removed,['interrupted']);}
+  finally{Object.defineProperty(globalThis,'navigator',{configurable:true,value:original});}
+});

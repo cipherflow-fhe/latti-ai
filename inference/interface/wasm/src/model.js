@@ -74,6 +74,7 @@ export async function openBrowserModelTools({onProgress,timeoutMs=1800000}={}) {
   };
   return {
     prepareSplit: options=>request('prepareSplit',options),
+    exportPrefix: options=>request('exportPrefix',options),
     runPrefix: options=>request('runPrefix',options),
     compileHighLevel: options=>request('compileHighLevel',options),
     generateLowLevel: options=>request('generateLowLevel',options),

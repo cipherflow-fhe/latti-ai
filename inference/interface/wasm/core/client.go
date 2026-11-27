@@ -160,7 +160,7 @@ func (task Task) validateMode() error {
 			return errors.New("inconsistent client_encrypted_input mode metadata")
 		}
 	case "server_provisioned_runner":
-		if task.InputMode != "plaintext" || task.ParameterMode != "encrypted_offline" || task.Decryptor != "provisioner" {
+		if (task.InputMode != "plaintext" && task.InputMode != "client_ciphertext") || task.ParameterMode != "encrypted_offline" || task.Decryptor != "provisioner" {
 			return errors.New("inconsistent server_provisioned_runner mode metadata")
 		}
 	default:
@@ -187,6 +187,7 @@ func (c *Client) BindTask(task, params []byte) error {
 
 func (c *Client) initCrypto() {
 	c.encoder = ckks.NewEncoder(c.Keys.Params)
+	c.encryptor, c.decryptor = nil, nil
 	if c.Keys.PK != nil {
 		c.encryptor = ckks.NewEncryptor(c.Keys.Params, c.Keys.PK)
 	}
@@ -281,6 +282,33 @@ func (c *Client) StartRestore(size uint64) *OutputStream {
 		}
 		c.context = ctx
 		c.Keys.SK, c.Keys.PK = ctx.SecretKey, ctx.PublicKey
+		c.initCrypto()
+		return nil
+	})
+}
+
+// StartExportPublic never regenerates keys or includes evaluation/secret keys.
+func (c *Client) StartExportPublic() (*OutputStream, error) {
+	if c.context == nil || c.Keys.PK == nil {
+		return nil, errors.New("public key required")
+	}
+	ctx := c.context
+	return startOutput(func(s *OutputStream) error { return s.output("public", ctx.WritePublic) }), nil
+}
+
+func (c *Client) StartImportPublic(size uint64) *OutputStream {
+	// Revoke previous secret capabilities even if import fails.
+	c.context = nil
+	c.Keys.SK, c.Keys.PK = nil, nil
+	c.initCrypto()
+	return startOutput(func(s *OutputStream) error {
+		source := &inputSource{stream: s, id: "public", size: size}
+		ctx, err := clientcontext.RestorePublicFrom(source, size, c.Keys.Params, c.plan)
+		if err != nil {
+			return err
+		}
+		c.context = ctx
+		c.Keys.PK = ctx.PublicKey
 		c.initCrypto()
 		return nil
 	})

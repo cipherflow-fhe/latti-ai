@@ -78,6 +78,8 @@ func call(_ js.Value, args []js.Value) (result any) {
 			return map[string]any{"error": "client not initialized"}
 		}
 		switch args[1].String() {
+		case "export-public":
+			stream, err = client.StartExportPublic()
 		case "setup":
 			stream, err = client.StartSetup()
 		case "provision":
@@ -88,11 +90,13 @@ func call(_ js.Value, args []js.Value) (result any) {
 			if err == nil {
 				stream = core.StartSHA256(size)
 			}
-		case "encrypt", "decrypt", "restore":
+		case "encrypt", "decrypt", "restore", "import-public":
 			var size uint64
 			size, err = strconv.ParseUint(args[3].String(), 10, 64)
 			if err == nil {
-				if args[1].String() == "restore" {
+				if args[1].String() == "import-public" {
+					stream = client.StartImportPublic(size)
+				} else if args[1].String() == "restore" {
 					stream = client.StartRestore(size)
 				} else if args[1].String() == "encrypt" {
 					stream, err = client.StartEncrypt(args[2].String(), size)
